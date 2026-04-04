@@ -1,0 +1,916 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jean Conciergerie Airbnb | Lille</title>
+    <style>
+        :root {
+            --khaki: #6B6B47;
+            --khaki-light: #8B8B6B;
+            --khaki-dark: #4A4A32;
+            --khaki-pale: #D4D4B0;
+            --khaki-muted: #A3A380;
+            --white: #FFFFFF;
+            --off-white: #F8F7F4;
+            --text-dark: #2C2C1E;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: var(--text-dark);
+            background-color: var(--white);
+            line-height: 1.6;
+        }
+
+        /* Navigation */
+        nav {
+            position: fixed;
+            top: 0;
+            width: 100%;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            z-index: 1000;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--khaki-pale);
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--khaki-dark);
+            text-decoration: none;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+
+        .logo span {
+            color: var(--khaki-muted);
+            font-weight: 300;
+        }
+
+        .nav-links {
+            display: flex;
+            list-style: none;
+            gap: 2rem;
+        }
+
+        .nav-links a {
+            text-decoration: none;
+            color: var(--khaki-dark);
+            font-size: 0.9rem;
+            font-weight: 500;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            transition: color 0.3s;
+        }
+
+        .nav-links a:hover {
+            color: var(--khaki-light);
+        }
+
+        .menu-toggle {
+            display: none;
+            background: none;
+            border: none;
+            cursor: pointer;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .menu-toggle span {
+            display: block;
+            width: 25px;
+            height: 2px;
+            background: var(--khaki-dark);
+            transition: 0.3s;
+        }
+
+        /* Hero Section */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, var(--khaki-dark) 0%, var(--khaki) 50%, var(--khaki-light) 100%);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.05'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+        }
+
+        .hero-content {
+            text-align: center;
+            color: var(--white);
+            position: relative;
+            z-index: 1;
+            padding: 2rem;
+            max-width: 800px;
+        }
+
+        .hero-subtitle {
+            font-size: 1rem;
+            letter-spacing: 6px;
+            text-transform: uppercase;
+            margin-bottom: 1.5rem;
+            opacity: 0.8;
+            font-weight: 300;
+        }
+
+        .hero h1 {
+            font-size: 4rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            letter-spacing: 3px;
+        }
+
+        .hero-location {
+            font-size: 1.2rem;
+            letter-spacing: 4px;
+            text-transform: uppercase;
+            margin-bottom: 2rem;
+            opacity: 0.7;
+            font-weight: 300;
+        }
+
+        .hero p {
+            font-size: 1.2rem;
+            max-width: 600px;
+            margin: 0 auto 2.5rem;
+            opacity: 0.9;
+            line-height: 1.8;
+            font-weight: 300;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 1rem 2.5rem;
+            text-decoration: none;
+            font-size: 0.9rem;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+        }
+
+        .btn-primary {
+            background: var(--white);
+            color: var(--khaki-dark);
+        }
+
+        .btn-primary:hover {
+            background: var(--off-white);
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        }
+
+        .btn-outline {
+            background: transparent;
+            color: var(--khaki-dark);
+            border: 2px solid var(--khaki-dark);
+        }
+
+        .btn-outline:hover {
+            background: var(--khaki-dark);
+            color: var(--white);
+        }
+
+        .scroll-indicator {
+            position: absolute;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1;
+        }
+
+        .scroll-indicator span {
+            display: block;
+            width: 20px;
+            height: 20px;
+            border-right: 2px solid rgba(255, 255, 255, 0.5);
+            border-bottom: 2px solid rgba(255, 255, 255, 0.5);
+            transform: rotate(45deg);
+            animation: scroll-bounce 2s infinite;
+        }
+
+        @keyframes scroll-bounce {
+            0%, 100% { transform: rotate(45deg) translate(0, 0); opacity: 0.5; }
+            50% { transform: rotate(45deg) translate(5px, 5px); opacity: 1; }
+        }
+
+        /* Section Styles */
+        section {
+            padding: 6rem 2rem;
+        }
+
+        .section-header {
+            text-align: center;
+            margin-bottom: 4rem;
+        }
+
+        .section-header h2 {
+            font-size: 2.5rem;
+            color: var(--khaki-dark);
+            margin-bottom: 1rem;
+            font-weight: 700;
+            letter-spacing: 2px;
+        }
+
+        .section-header p {
+            color: var(--khaki-muted);
+            font-size: 1.1rem;
+            max-width: 600px;
+            margin: 0 auto;
+            font-weight: 300;
+        }
+
+        .section-line {
+            width: 60px;
+            height: 2px;
+            background: var(--khaki-muted);
+            margin: 1.5rem auto;
+        }
+
+        /* About Section */
+        .about {
+            background: var(--off-white);
+        }
+
+        .about-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4rem;
+            max-width: 1100px;
+            margin: 0 auto;
+            align-items: center;
+        }
+
+        .about-image {
+            width: 100%;
+            height: 450px;
+            background: linear-gradient(135deg, var(--khaki) 0%, var(--khaki-light) 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .about-image::after {
+            content: '';
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            right: -20px;
+            bottom: -20px;
+            border: 2px solid var(--khaki-pale);
+            z-index: 0;
+        }
+
+        .about-initials {
+            font-size: 6rem;
+            color: rgba(255, 255, 255, 0.3);
+            font-weight: 700;
+            letter-spacing: 10px;
+            z-index: 1;
+        }
+
+        .about-text h3 {
+            font-size: 1.8rem;
+            color: var(--khaki-dark);
+            margin-bottom: 1.5rem;
+            font-weight: 600;
+        }
+
+        .about-text p {
+            color: var(--khaki);
+            margin-bottom: 1.5rem;
+            font-weight: 300;
+            line-height: 1.8;
+        }
+
+        .about-stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+
+        .stat {
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--khaki-dark);
+        }
+
+        .stat-label {
+            font-size: 0.8rem;
+            color: var(--khaki-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* Services Section */
+        .services {
+            background: var(--white);
+        }
+
+        .services-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 2rem;
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+
+        .service-card {
+            padding: 2.5rem 2rem;
+            text-align: center;
+            border: 1px solid var(--khaki-pale);
+            transition: all 0.3s ease;
+            position: relative;
+            background: var(--white);
+        }
+
+        .service-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(107, 107, 71, 0.1);
+            border-color: var(--khaki-muted);
+        }
+
+        .service-icon {
+            font-size: 2.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .service-card h3 {
+            font-size: 1.2rem;
+            color: var(--khaki-dark);
+            margin-bottom: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 600;
+        }
+
+        .service-card p {
+            color: var(--khaki-muted);
+            font-size: 0.95rem;
+            line-height: 1.7;
+            font-weight: 300;
+        }
+
+        /* Why Section */
+        .why {
+            background: var(--khaki-dark);
+            color: var(--white);
+        }
+
+        .why .section-header h2 {
+            color: var(--white);
+        }
+
+        .why .section-header p {
+            color: var(--khaki-pale);
+        }
+
+        .why .section-line {
+            background: var(--khaki-pale);
+        }
+
+        .why-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 2rem;
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+
+        .why-item {
+            text-align: center;
+            padding: 2rem 1rem;
+        }
+
+        .why-number {
+            font-size: 3rem;
+            font-weight: 700;
+            color: var(--khaki-pale);
+            opacity: 0.4;
+            margin-bottom: 1rem;
+        }
+
+        .why-item h3 {
+            font-size: 1.1rem;
+            margin-bottom: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 600;
+        }
+
+        .why-item p {
+            color: var(--khaki-pale);
+            font-size: 0.9rem;
+            font-weight: 300;
+            line-height: 1.7;
+        }
+
+        /* Testimonials */
+        .testimonials {
+            background: var(--off-white);
+        }
+
+        .testimonials-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 2rem;
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+
+        .testimonial-card {
+            background: var(--white);
+            padding: 2.5rem;
+            border: 1px solid var(--khaki-pale);
+            position: relative;
+        }
+
+        .testimonial-quote {
+            font-size: 3rem;
+            color: var(--khaki-pale);
+            line-height: 1;
+            margin-bottom: 1rem;
+        }
+
+        .testimonial-card p {
+            color: var(--khaki);
+            font-style: italic;
+            font-weight: 300;
+            line-height: 1.8;
+            margin-bottom: 1.5rem;
+        }
+
+        .testimonial-author {
+            font-weight: 600;
+            color: var(--khaki-dark);
+            font-style: normal;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .testimonial-role {
+            color: var(--khaki-muted);
+            font-size: 0.8rem;
+            font-weight: 300;
+        }
+
+        /* Contact Section */
+        .contact {
+            background: var(--white);
+        }
+
+        .contact-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4rem;
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+
+        .contact-info h3 {
+            font-size: 1.5rem;
+            color: var(--khaki-dark);
+            margin-bottom: 1.5rem;
+            font-weight: 600;
+        }
+
+        .contact-info p {
+            color: var(--khaki-muted);
+            margin-bottom: 2rem;
+            font-weight: 300;
+            line-height: 1.8;
+        }
+
+        .contact-detail {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1.2rem;
+            color: var(--khaki);
+        }
+
+        .contact-detail-icon {
+            width: 40px;
+            height: 40px;
+            background: var(--off-white);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            flex-shrink: 0;
+        }
+
+        .contact-detail span {
+            font-weight: 300;
+        }
+
+        .contact-form {
+            display: flex;
+            flex-direction: column;
+            gap: 1.2rem;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.2rem;
+        }
+
+        .contact-form input,
+        .contact-form textarea {
+            padding: 1rem;
+            border: 1px solid var(--khaki-pale);
+            background: var(--off-white);
+            font-family: inherit;
+            font-size: 0.95rem;
+            color: var(--text-dark);
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        .contact-form input:focus,
+        .contact-form textarea:focus {
+            border-color: var(--khaki-muted);
+        }
+
+        .contact-form textarea {
+            min-height: 150px;
+            resize: vertical;
+        }
+
+        .contact-form .btn {
+            align-self: flex-start;
+        }
+
+        /* Footer */
+        footer {
+            background: var(--khaki-dark);
+            color: var(--khaki-pale);
+            text-align: center;
+            padding: 3rem 2rem;
+        }
+
+        .footer-logo {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: var(--white);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin-bottom: 1rem;
+        }
+
+        .footer-logo span {
+            color: var(--khaki-pale);
+            font-weight: 300;
+        }
+
+        footer p {
+            font-size: 0.85rem;
+            opacity: 0.7;
+            font-weight: 300;
+        }
+
+        .footer-links {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin: 1.5rem 0;
+            list-style: none;
+        }
+
+        .footer-links a {
+            color: var(--khaki-pale);
+            text-decoration: none;
+            font-size: 0.85rem;
+            transition: color 0.3s;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+
+        .footer-links a:hover {
+            color: var(--white);
+        }
+
+        /* Responsive */
+        @media (max-width: 968px) {
+            .hero h1 { font-size: 3rem; }
+
+            .about-grid,
+            .contact-grid {
+                grid-template-columns: 1fr;
+                gap: 2rem;
+            }
+
+            .services-grid,
+            .testimonials-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .why-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .nav-links {
+                display: none;
+                position: absolute;
+                top: 100%;
+                left: 0;
+                right: 0;
+                background: var(--white);
+                flex-direction: column;
+                padding: 2rem;
+                gap: 1.5rem;
+                border-bottom: 1px solid var(--khaki-pale);
+            }
+
+            .nav-links.active {
+                display: flex;
+            }
+
+            .menu-toggle {
+                display: flex;
+            }
+
+            .hero h1 { font-size: 2.2rem; }
+            .hero-subtitle { font-size: 0.8rem; letter-spacing: 4px; }
+
+            .services-grid,
+            .testimonials-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .why-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+
+            .about-image {
+                height: 300px;
+            }
+
+            section {
+                padding: 4rem 1.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Navigation -->
+    <nav>
+        <a href="#" class="logo">Jean <span>Conciergerie</span></a>
+        <ul class="nav-links">
+            <li><a href="#about">A propos</a></li>
+            <li><a href="#services">Services</a></li>
+            <li><a href="#why">Engagements</a></li>
+            <li><a href="#testimonials">Avis</a></li>
+            <li><a href="#contact">Contact</a></li>
+        </ul>
+        <button class="menu-toggle" onclick="document.querySelector('.nav-links').classList.toggle('active')">
+            <span></span>
+            <span></span>
+            <span></span>
+        </button>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-content">
+            <p class="hero-subtitle">Conciergerie Airbnb haut de gamme</p>
+            <h1>Jean Conciergerie</h1>
+            <p class="hero-location">Lille &mdash; Hauts-de-France</p>
+            <p>Votre partenaire de confiance pour la gestion Airbnb de votre bien a Lille. Je maximise vos revenus locatifs et prends soin de vos voyageurs comme de vos biens.</p>
+            <a href="#contact" class="btn btn-primary">Demander un devis</a>
+        </div>
+        <div class="scroll-indicator">
+            <span></span>
+        </div>
+    </section>
+
+    <!-- About Section -->
+    <section class="about" id="about">
+        <div class="section-header">
+            <h2>A propos de Jean</h2>
+            <div class="section-line"></div>
+            <p>Votre expert Airbnb a Lille, au service de votre rentabilite</p>
+        </div>
+        <div class="about-grid">
+            <div class="about-image">
+                <span class="about-initials">JC</span>
+            </div>
+            <div class="about-text">
+                <h3>Votre conciergerie Airbnb a Lille</h3>
+                <p>Installe a Lille depuis de nombreuses annees, je connais parfaitement le marche de la location courte duree et ses specificites. Ma conciergerie Airbnb est nee d'une conviction simple : chaque proprietaire merite un service d'exception pour maximiser ses revenus sans stress.</p>
+                <p>De la creation de votre annonce Airbnb a l'accueil des voyageurs, en passant par le menage et l'optimisation tarifaire, je gere l'integralite de votre location saisonniere. Vous encaissez, je m'occupe du reste.</p>
+                <div class="about-stats">
+                    <div class="stat">
+                        <div class="stat-number">50+</div>
+                        <div class="stat-label">Biens geres</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-number">4.9</div>
+                        <div class="stat-label">Note moyenne</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-number">95%</div>
+                        <div class="stat-label">Taux d'occupation</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Services Section -->
+    <section class="services" id="services">
+        <div class="section-header">
+            <h2>Nos services</h2>
+            <div class="section-line"></div>
+            <p>Un accompagnement complet pour maximiser vos revenus locatifs</p>
+        </div>
+        <div class="services-grid">
+            <div class="service-card">
+                <div class="service-icon">&#127968;</div>
+                <h3>Gestion des annonces</h3>
+                <p>Creation et optimisation de vos annonces sur Airbnb, Booking et autres plateformes. Photos professionnelles, descriptions attractives et tarification dynamique.</p>
+            </div>
+            <div class="service-card">
+                <div class="service-icon">&#128273;</div>
+                <h3>Accueil des voyageurs</h3>
+                <p>Check-in et check-out personnalises, remise des cles, presentation du logement et recommandations locales pour une experience inoubliable.</p>
+            </div>
+            <div class="service-card">
+                <div class="service-icon">&#128516;</div>
+                <h3>Communication voyageurs</h3>
+                <p>Gestion reactive de toutes les communications avec vos hotes, de la reservation jusqu'au depart, 7j/7.</p>
+            </div>
+            <div class="service-card">
+                <div class="service-icon">&#10024;</div>
+                <h3>Menage & linge</h3>
+                <p>Nettoyage professionnel entre chaque sejour, fourniture et blanchisserie du linge de maison. Votre logement est toujours impeccable.</p>
+            </div>
+            <div class="service-card">
+                <div class="service-icon">&#128295;</div>
+                <h3>Maintenance</h3>
+                <p>Suivi technique de votre bien, interventions rapides en cas de probleme et maintenance preventive pour preserver votre investissement.</p>
+            </div>
+            <div class="service-card">
+                <div class="service-icon">&#128200;</div>
+                <h3>Reporting & revenus</h3>
+                <p>Rapports mensuels detailles sur les performances de votre bien, suivi des revenus et conseils d'optimisation.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Why Section -->
+    <section class="why" id="why">
+        <div class="section-header">
+            <h2>Pourquoi me choisir ?</h2>
+            <div class="section-line"></div>
+            <p>Quatre engagements qui font la difference</p>
+        </div>
+        <div class="why-grid">
+            <div class="why-item">
+                <div class="why-number">01</div>
+                <h3>Proximite</h3>
+                <p>Base a Lille, j'interviens rapidement et je connais chaque quartier sur le bout des doigts.</p>
+            </div>
+            <div class="why-item">
+                <div class="why-number">02</div>
+                <h3>Transparence</h3>
+                <p>Aucun frais cache, des rapports clairs et une communication directe avec moi a chaque etape.</p>
+            </div>
+            <div class="why-item">
+                <div class="why-number">03</div>
+                <h3>Excellence</h3>
+                <p>Un standard de qualite eleve pour chaque sejour, chaque voyageur, chaque detail.</p>
+            </div>
+            <div class="why-item">
+                <div class="why-number">04</div>
+                <h3>Sur-mesure</h3>
+                <p>Chaque bien est unique. J'adapte mes services a vos besoins et a ceux de vos voyageurs.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Testimonials -->
+    <section class="testimonials" id="testimonials">
+        <div class="section-header">
+            <h2>Ce qu'ils en disent</h2>
+            <div class="section-line"></div>
+            <p>La satisfaction de mes clients est ma plus belle recompense</p>
+        </div>
+        <div class="testimonials-grid">
+            <div class="testimonial-card">
+                <div class="testimonial-quote">&ldquo;</div>
+                <p>Jean a transforme la gestion de mon appartement dans le Vieux-Lille. Mon taux d'occupation a explose et je ne m'occupe plus de rien. Un vrai bonheur !</p>
+                <div class="testimonial-author">Sophie M.</div>
+                <div class="testimonial-role">Proprietaire, Vieux-Lille</div>
+            </div>
+            <div class="testimonial-card">
+                <div class="testimonial-quote">&ldquo;</div>
+                <p>Serieux, reactif et toujours disponible. Jean gere mes deux biens a Lille avec un professionnalisme exemplaire. Je recommande les yeux fermes.</p>
+                <div class="testimonial-author">Marc D.</div>
+                <div class="testimonial-role">Proprietaire, Lille Centre</div>
+            </div>
+            <div class="testimonial-card">
+                <div class="testimonial-quote">&ldquo;</div>
+                <p>Depuis que Jean s'occupe de mon studio, mes notes sont passees de 4.2 a 4.9 sur Airbnb. Il a un vrai sens du detail et de l'accueil.</p>
+                <div class="testimonial-author">Claire B.</div>
+                <div class="testimonial-role">Proprietaire, Wazemmes</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Contact Section -->
+    <section class="contact" id="contact">
+        <div class="section-header">
+            <h2>Contactez-moi</h2>
+            <div class="section-line"></div>
+            <p>Discutons ensemble de votre projet locatif</p>
+        </div>
+        <div class="contact-grid">
+            <div class="contact-info">
+                <h3>Parlons de votre bien</h3>
+                <p>Que vous soyez proprietaire d'un studio ou d'un appartement familial, je vous propose un accompagnement adapte. Prenez contact pour un premier echange sans engagement.</p>
+                <div class="contact-detail">
+                    <div class="contact-detail-icon">&#128205;</div>
+                    <span>Lille, Hauts-de-France</span>
+                </div>
+                <div class="contact-detail">
+                    <div class="contact-detail-icon">&#128231;</div>
+                    <span>contact@jean-conciergerie.fr</span>
+                </div>
+                <div class="contact-detail">
+                    <div class="contact-detail-icon">&#128222;</div>
+                    <span>06 XX XX XX XX</span>
+                </div>
+                <div class="contact-detail">
+                    <div class="contact-detail-icon">&#128337;</div>
+                    <span>Disponible 7j/7</span>
+                </div>
+            </div>
+            <form class="contact-form" onsubmit="event.preventDefault(); alert('Merci pour votre message ! Jean vous recontactera rapidement.');">
+                <div class="form-row">
+                    <input type="text" placeholder="Votre nom" required>
+                    <input type="email" placeholder="Votre email" required>
+                </div>
+                <input type="text" placeholder="Sujet">
+                <textarea placeholder="Votre message..." required></textarea>
+                <button type="submit" class="btn btn-outline">Envoyer le message</button>
+            </form>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <div class="footer-logo">Jean <span>Conciergerie</span></div>
+        <ul class="footer-links">
+            <li><a href="#about">A propos</a></li>
+            <li><a href="#services">Services</a></li>
+            <li><a href="#contact">Contact</a></li>
+        </ul>
+        <p>&copy; 2026 Jean Conciergerie &mdash; Lille. Tous droits reserves.</p>
+    </footer>
+
+</body>
+</html>
