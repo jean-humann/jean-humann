@@ -1,0 +1,19 @@
+name: retail
+namespace: analytics
+engine: duckdb
+
+# PyIceberg catalog connection. Swap these properties for a production REST /
+# Nessie / Polaris / Glue catalog and the same models run unchanged.
+# `uri` and `warehouse` are filled in at runtime by demo.py so the example is
+# fully self-contained; in a real project you would hard-code them here.
+catalog: {}
+
+# Externally-managed Iceberg tables the project reads but does not build.
+# Referenced inside model SQL by their `name`.
+sources:
+  - name: raw_orders
+    identifier: raw.orders
+    description: Raw order events landed by ingestion.
+  - name: raw_customers
+    identifier: raw.customers
+    description: Raw customer master data.
