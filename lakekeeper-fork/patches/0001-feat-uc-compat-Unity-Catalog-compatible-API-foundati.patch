@@ -1,0 +1,1859 @@
+From 52a1e5b0d514e7e3162635b3d673aa0cd290b837 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 2 Jul 2026 21:43:48 +0000
+Subject: [PATCH 1/7] feat(uc-compat): Unity Catalog-compatible API foundation
+
+Add /api/2.1/unity-catalog router with UC error envelope, pagination
+helpers, and Catalogs (read-only warehouse mapping) + Schemas (top-level
+namespace CRUD) endpoints. Schemas delegate to the existing Iceberg
+NamespaceService handlers so authorization, idempotency and authorizer
+tuples behave identically. Gated by enable_uc_compat_api (default on).
+---
+ .../tests/server_uc_catalogs_schemas.rs       | 407 ++++++++++++++++++
+ crates/lakekeeper/src/api/mod.rs              |   1 +
+ crates/lakekeeper/src/api/router.rs           |  26 +-
+ crates/lakekeeper/src/api/uc/mod.rs           | 275 ++++++++++++
+ crates/lakekeeper/src/api/uc/v1/catalogs.rs   |  97 +++++
+ crates/lakekeeper/src/api/uc/v1/mod.rs        |  98 +++++
+ crates/lakekeeper/src/api/uc/v1/schemas.rs    | 149 +++++++
+ crates/lakekeeper/src/config.rs               |   4 +
+ crates/lakekeeper/src/server/mod.rs           |   1 +
+ crates/lakekeeper/src/server/uc/catalogs.rs   | 135 ++++++
+ crates/lakekeeper/src/server/uc/mod.rs        |  88 ++++
+ crates/lakekeeper/src/server/uc/resolve.rs    | 129 ++++++
+ crates/lakekeeper/src/server/uc/schemas.rs    | 305 +++++++++++++
+ 13 files changed, 1711 insertions(+), 4 deletions(-)
+ create mode 100644 crates/lakekeeper-integration-tests/tests/server_uc_catalogs_schemas.rs
+ create mode 100644 crates/lakekeeper/src/api/uc/mod.rs
+ create mode 100644 crates/lakekeeper/src/api/uc/v1/catalogs.rs
+ create mode 100644 crates/lakekeeper/src/api/uc/v1/mod.rs
+ create mode 100644 crates/lakekeeper/src/api/uc/v1/schemas.rs
+ create mode 100644 crates/lakekeeper/src/server/uc/catalogs.rs
+ create mode 100644 crates/lakekeeper/src/server/uc/mod.rs
+ create mode 100644 crates/lakekeeper/src/server/uc/resolve.rs
+ create mode 100644 crates/lakekeeper/src/server/uc/schemas.rs
+
+diff --git a/crates/lakekeeper-integration-tests/tests/server_uc_catalogs_schemas.rs b/crates/lakekeeper-integration-tests/tests/server_uc_catalogs_schemas.rs
+new file mode 100644
+index 00000000..e6168b60
+--- /dev/null
++++ b/crates/lakekeeper-integration-tests/tests/server_uc_catalogs_schemas.rs
+@@ -0,0 +1,407 @@
++//! Unity Catalog compatibility API (Phase A): Catalogs + Schemas handlers,
++//! driven through the `UcCatalogService` trait on `CatalogServer` (same
++//! harness as `server_generic_tables.rs`).
++
++use std::collections::HashMap;
++
++use iceberg::NamespaceIdent;
++use lakekeeper::{
++    api::{
++        ApiContext,
++        iceberg::v1::namespace::{NamespaceDropFlags, NamespaceParameters, NamespaceService as _},
++        uc::{
++            UcPaginationQuery,
++            v1::{
++                CreateSchemaRequest, DeleteSchemaQuery, ListSchemasQuery, UcCatalogService as _,
++                UpdateSchemaRequest,
++            },
++        },
++    },
++    server::CatalogServer,
++    service::{
++        CatalogStore, CatalogWarehouseOps as _, State, Transaction as _,
++        authz::AllowAllAuthorizer,
++        storage::{MemoryProfile, StorageProfile},
++    },
++};
++use lakekeeper_integration_tests::{get_api_context, random_request_metadata};
++use lakekeeper_storage_postgres::{
++    PostgresBackend, SecretsState, warehouse::test::initialize_warehouse,
++};
++use sqlx::PgPool;
++
++type Ctx = ApiContext<State<AllowAllAuthorizer, PostgresBackend, SecretsState>>;
++
++/// Returns `(ctx, warehouse_id, catalog_name)`. The warehouse gets a unique
++/// name: the warehouse name→id cache is process-global, while every
++/// `#[sqlx::test]` runs against its own database — a shared name would make
++/// concurrent tests resolve each other's warehouses.
++async fn setup(pool: PgPool) -> (Ctx, lakekeeper::WarehouseId, String) {
++    lakekeeper_storage_postgres::migrations::migrate_core_only(&pool)
++        .await
++        .unwrap();
++    let api_context = get_api_context(&pool, AllowAllAuthorizer::default()).await;
++    let state = api_context.v1_state.catalog.clone();
++    // Creates a warehouse in the default (nil) project.
++    let (_project_id, warehouse_id) = initialize_warehouse(
++        state.clone(),
++        Some(StorageProfile::Memory(MemoryProfile::default())),
++        None,
++        None,
++        true,
++    )
++    .await;
++
++    let catalog_name = format!("uc_wh_{}", uuid::Uuid::now_v7().simple());
++    let mut t = <PostgresBackend as CatalogStore>::Transaction::begin_write(state)
++        .await
++        .unwrap();
++    PostgresBackend::rename_warehouse(warehouse_id, &catalog_name, t.transaction())
++        .await
++        .unwrap();
++    t.commit().await.unwrap();
++
++    (api_context, warehouse_id, catalog_name)
++}
++
++fn create_schema_request(catalog_name: &str, name: &str) -> CreateSchemaRequest {
++    CreateSchemaRequest {
++        name: name.to_string(),
++        catalog_name: catalog_name.to_string(),
++        comment: Some("a test schema".to_string()),
++        properties: HashMap::from([("owner_team".to_string(), "data".to_string())]),
++        storage_root: None,
++    }
++}
++
++#[sqlx::test]
++async fn test_list_catalogs_contains_warehouse(pool: PgPool) {
++    let (ctx, warehouse_id, catalog_name) = setup(pool).await;
++
++    let response = CatalogServer::list_catalogs(
++        UcPaginationQuery::default(),
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap();
++    assert!(response.next_page_token.is_none());
++    let catalog = response
++        .catalogs
++        .iter()
++        .find(|c| c.name == catalog_name)
++        .expect("warehouse must be listed as UC catalog");
++    assert_eq!(catalog.id, warehouse_id.to_string());
++    assert!(catalog.comment.is_none());
++    assert!(catalog.properties.is_empty());
++}
++
++#[sqlx::test]
++async fn test_get_catalog(pool: PgPool) {
++    let (ctx, warehouse_id, catalog_name) = setup(pool).await;
++
++    let catalog =
++        CatalogServer::get_catalog(catalog_name.clone(), ctx.clone(), random_request_metadata())
++            .await
++            .unwrap();
++    assert_eq!(catalog.name, catalog_name);
++    assert_eq!(catalog.id, warehouse_id.to_string());
++
++    let err = CatalogServer::get_catalog(
++        "no_such_warehouse".to_string(),
++        ctx,
++        random_request_metadata(),
++    )
++    .await
++    .unwrap_err();
++    assert_eq!(err.status, 404, "{err:?}");
++    assert_eq!(err.error_code, "NOT_FOUND");
++}
++
++#[sqlx::test]
++async fn test_schema_crud_roundtrip(pool: PgPool) {
++    let (ctx, _warehouse_id, catalog_name) = setup(pool).await;
++
++    // Create
++    let created = CatalogServer::create_schema(
++        create_schema_request(&catalog_name, "uc_schema"),
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap();
++    assert_eq!(created.name, "uc_schema");
++    assert_eq!(created.catalog_name, catalog_name);
++    assert_eq!(created.full_name, format!("{catalog_name}.uc_schema"));
++    assert_eq!(created.comment.as_deref(), Some("a test schema"));
++    assert_eq!(
++        created.properties.get("owner_team").map(String::as_str),
++        Some("data")
++    );
++    assert!(created.schema_id.is_some());
++    assert!(created.created_at.is_some());
++
++    // Get
++    let fetched = CatalogServer::get_schema(
++        created.full_name.clone(),
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap();
++    assert_eq!(fetched.schema_id, created.schema_id);
++    assert_eq!(fetched.full_name, created.full_name);
++    assert_eq!(fetched.comment, created.comment);
++    assert_eq!(fetched.created_at, created.created_at);
++
++    // List
++    let listed = CatalogServer::list_schemas(
++        ListSchemasQuery {
++            catalog_name: catalog_name.clone(),
++            max_results: None,
++            page_token: None,
++        },
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap();
++    let entry = listed
++        .schemas
++        .iter()
++        .find(|s| s.name == "uc_schema")
++        .expect("created schema must be listed");
++    assert_eq!(entry.schema_id, created.schema_id);
++    assert_eq!(entry.comment.as_deref(), Some("a test schema"));
++
++    // Update comment + properties
++    let updated = CatalogServer::update_schema(
++        created.full_name.clone(),
++        UpdateSchemaRequest {
++            comment: Some("updated comment".to_string()),
++            properties: Some(HashMap::from([("tier".to_string(), "gold".to_string())])),
++            new_name: None,
++        },
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap();
++    assert_eq!(updated.comment.as_deref(), Some("updated comment"));
++    assert_eq!(
++        updated.properties.get("tier").map(String::as_str),
++        Some("gold")
++    );
++    // Pre-existing properties are preserved.
++    assert_eq!(
++        updated.properties.get("owner_team").map(String::as_str),
++        Some("data")
++    );
++
++    // Rename is not supported.
++    let err = CatalogServer::update_schema(
++        created.full_name.clone(),
++        UpdateSchemaRequest {
++            comment: None,
++            properties: None,
++            new_name: Some("renamed".to_string()),
++        },
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap_err();
++    assert_eq!(err.status, 400, "{err:?}");
++    assert_eq!(err.error_code, "INVALID_ARGUMENT");
++
++    // Delete
++    CatalogServer::delete_schema(
++        created.full_name.clone(),
++        DeleteSchemaQuery::default(),
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap();
++
++    // Get after delete -> 404 NOT_FOUND
++    let err = CatalogServer::get_schema(created.full_name, ctx, random_request_metadata())
++        .await
++        .unwrap_err();
++    assert_eq!(err.status, 404, "{err:?}");
++    assert_eq!(err.error_code, "NOT_FOUND");
++}
++
++#[sqlx::test]
++async fn test_get_missing_schema_is_404(pool: PgPool) {
++    let (ctx, _, catalog_name) = setup(pool).await;
++    let err = CatalogServer::get_schema(
++        format!("{catalog_name}.does_not_exist"),
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap_err();
++    assert_eq!(err.status, 404, "{err:?}");
++    assert_eq!(err.error_code, "NOT_FOUND");
++
++    // Missing catalog is a 404 as well.
++    let err = CatalogServer::get_schema(
++        "no_such_catalog.does_not_exist".to_string(),
++        ctx,
++        random_request_metadata(),
++    )
++    .await
++    .unwrap_err();
++    assert_eq!(err.status, 404, "{err:?}");
++    assert_eq!(err.error_code, "NOT_FOUND");
++}
++
++#[sqlx::test]
++async fn test_invalid_full_name_is_400(pool: PgPool) {
++    let (ctx, _, _) = setup(pool).await;
++    for bad in ["nodot", "cat.a.b", ".schema", "cat."] {
++        let err =
++            CatalogServer::get_schema(bad.to_string(), ctx.clone(), random_request_metadata())
++                .await
++                .unwrap_err();
++        assert_eq!(err.status, 400, "{bad}: {err:?}");
++        assert_eq!(err.error_code, "INVALID_ARGUMENT", "{bad}");
++    }
++}
++
++#[sqlx::test]
++async fn test_delete_missing_schema_is_404(pool: PgPool) {
++    let (ctx, _, catalog_name) = setup(pool).await;
++    let err = CatalogServer::delete_schema(
++        format!("{catalog_name}.does_not_exist"),
++        DeleteSchemaQuery::default(),
++        ctx,
++        random_request_metadata(),
++    )
++    .await
++    .unwrap_err();
++    assert_eq!(err.status, 404, "{err:?}");
++    assert_eq!(err.error_code, "NOT_FOUND");
++}
++
++#[sqlx::test]
++async fn test_delete_non_empty_schema_maps_to_400(pool: PgPool) {
++    let (ctx, warehouse_id, catalog_name) = setup(pool).await;
++
++    CatalogServer::create_schema(
++        create_schema_request(&catalog_name, "non_empty"),
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap();
++
++    // Make the schema non-empty with a nested namespace (created through the
++    // Iceberg REST surface; UC only sees depth-1 namespaces).
++    let child =
++        NamespaceIdent::from_vec(vec!["non_empty".to_string(), "child".to_string()]).unwrap();
++    CatalogServer::create_namespace(
++        Some(warehouse_id.to_string().into()),
++        lakekeeper::api::CreateNamespaceRequest {
++            namespace: child.clone(),
++            properties: None,
++        },
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap();
++
++    let err = CatalogServer::delete_schema(
++        format!("{catalog_name}.non_empty"),
++        DeleteSchemaQuery::default(),
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap_err();
++    assert_eq!(err.status, 400, "{err:?}");
++    assert_eq!(err.error_code, "INVALID_ARGUMENT");
++
++    // After dropping the child, the schema can be deleted.
++    CatalogServer::drop_namespace(
++        NamespaceParameters {
++            prefix: Some(warehouse_id.to_string().into()),
++            namespace: child,
++        },
++        NamespaceDropFlags {
++            force: false,
++            purge: false,
++            recursive: false,
++        },
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap();
++    CatalogServer::delete_schema(
++        format!("{catalog_name}.non_empty"),
++        DeleteSchemaQuery::default(),
++        ctx,
++        random_request_metadata(),
++    )
++    .await
++    .unwrap();
++}
++
++#[sqlx::test]
++async fn test_list_schemas_pagination(pool: PgPool) {
++    let (ctx, _, catalog_name) = setup(pool).await;
++
++    for name in ["pag_a", "pag_b", "pag_c"] {
++        CatalogServer::create_schema(
++            create_schema_request(&catalog_name, name),
++            ctx.clone(),
++            random_request_metadata(),
++        )
++        .await
++        .unwrap();
++    }
++
++    // Negative max_results is rejected.
++    let err = CatalogServer::list_schemas(
++        ListSchemasQuery {
++            catalog_name: catalog_name.clone(),
++            max_results: Some(-1),
++            page_token: None,
++        },
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap_err();
++    assert_eq!(err.status, 400, "{err:?}");
++    assert_eq!(err.error_code, "INVALID_ARGUMENT");
++
++    // Page through with max_results=2 and collect everything.
++    let mut collected = Vec::new();
++    let mut page_token = None;
++    loop {
++        let page = CatalogServer::list_schemas(
++            ListSchemasQuery {
++                catalog_name: catalog_name.clone(),
++                max_results: Some(2),
++                page_token,
++            },
++            ctx.clone(),
++            random_request_metadata(),
++        )
++        .await
++        .unwrap();
++        assert!(page.schemas.len() <= 2);
++        collected.extend(page.schemas.into_iter().map(|s| s.name));
++        page_token = page.next_page_token;
++        if page_token.is_none() {
++            break;
++        }
++    }
++    for name in ["pag_a", "pag_b", "pag_c"] {
++        assert!(collected.contains(&name.to_string()), "{collected:?}");
++    }
++}
+diff --git a/crates/lakekeeper/src/api/mod.rs b/crates/lakekeeper/src/api/mod.rs
+index edb03100..1b78eec9 100644
+--- a/crates/lakekeeper/src/api/mod.rs
++++ b/crates/lakekeeper/src/api/mod.rs
+@@ -1,6 +1,7 @@
+ pub mod data;
+ pub mod iceberg;
+ pub mod management;
++pub mod uc;
+ 
+ pub mod endpoints;
+ #[cfg(feature = "router")]
+diff --git a/crates/lakekeeper/src/api/router.rs b/crates/lakekeeper/src/api/router.rs
+index 224d5ba1..55b0bc04 100644
+--- a/crates/lakekeeper/src/api/router.rs
++++ b/crates/lakekeeper/src/api/router.rs
+@@ -165,11 +165,29 @@ pub async fn new_full_router<
+         router = router.layer(axum::middleware::from_fn(print_request_body));
+     }
+ 
++    let mut router = router.layer(axum::middleware::from_fn_with_state(
++        endpoint_statistics_tracker_tx,
++        crate::service::endpoint_statistics::endpoint_statistics_middleware_fn,
++    ));
++
++    // The Unity Catalog compatibility router is mounted after the
++    // endpoint-statistics layer was applied, so its routes are NOT wrapped by
++    // it: UC endpoints are not in the endpoint registry and the statistics
++    // tracker error-logs every unknown matched path. It is added before the
++    // auth layer below, so it shares authentication with /catalog and
++    // /management.
++    if CONFIG.enable_uc_compat_api {
++        router = router.nest(
++            "/api/2.1/unity-catalog",
++            crate::api::uc::uc_router::<crate::server::CatalogServer<C, A, S>, State<A, C, S>>()
++                .layer(axum::middleware::from_fn(
++                    crate::api::maintenance::maintenance_middleware_fn,
++                ))
++                .layer(DefaultBodyLimit::max(CONFIG.max_request_body_size)),
++        );
++    }
++
+     let router = router
+-        .layer(axum::middleware::from_fn_with_state(
+-            endpoint_statistics_tracker_tx,
+-            crate::service::endpoint_statistics::endpoint_statistics_middleware_fn,
+-        ))
+         .layer(maybe_auth_layer)
+         // Add health later so that it is not authenticated
+         .route(
+diff --git a/crates/lakekeeper/src/api/uc/mod.rs b/crates/lakekeeper/src/api/uc/mod.rs
+new file mode 100644
+index 00000000..93a33afb
+--- /dev/null
++++ b/crates/lakekeeper/src/api/uc/mod.rs
+@@ -0,0 +1,275 @@
++//! Unity Catalog-compatible REST API, served under `/api/2.1/unity-catalog`.
++//!
++//! Maps Unity Catalog concepts onto Lakekeeper entities:
++//! UC `catalog` == Lakekeeper warehouse (in the default project),
++//! UC `schema` == top-level namespace in that warehouse.
++//!
++//! This module owns the UC wire format: the error envelope
++//! ([`UcErrorResponse`]), pagination conventions (`max_results` /
++//! `page_token`, `next_page_token`) and epoch-millisecond timestamps.
++
++pub mod v1;
++
++use axum::{Json, Router, response::IntoResponse};
++use http::StatusCode;
++use iceberg_ext::catalog::rest::{ErrorModel, IcebergErrorResponse};
++use serde::{Deserialize, Serialize};
++
++use crate::{CONFIG, api::ApiContext};
++
++/// Result type returned by all UC handlers.
++pub type UcResult<T> = Result<T, UcErrorResponse>;
++
++pub const UC_ERROR_DETAIL_TYPE: &str = "google.rpc.ErrorInfo";
++
++/// Entry of the `details` list in the UC error envelope.
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
++pub struct UcErrorDetail {
++    #[serde(rename = "@type")]
++    pub r#type: String,
++    pub reason: String,
++}
++
++/// Unity Catalog error envelope:
++/// `{"error_code": ..., "message": ..., "details": [...]}`.
++///
++/// The HTTP status code is preserved from the original Lakekeeper error and
++/// is not part of the serialized body.
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
++pub struct UcErrorResponse {
++    /// Original HTTP status code. Not serialized into the response body.
++    #[serde(skip)]
++    pub status: u16,
++    pub error_code: String,
++    pub message: String,
++    pub details: Vec<UcErrorDetail>,
++}
++
++impl UcErrorResponse {
++    #[must_use]
++    pub fn new(status: u16, error_code: impl Into<String>, message: impl Into<String>) -> Self {
++        let error_code = error_code.into();
++        Self {
++            status,
++            details: vec![UcErrorDetail {
++                r#type: UC_ERROR_DETAIL_TYPE.to_string(),
++                reason: error_code.clone(),
++            }],
++            error_code,
++            message: message.into(),
++        }
++    }
++
++    #[must_use]
++    pub fn invalid_argument(message: impl Into<String>) -> Self {
++        Self::new(
++            StatusCode::BAD_REQUEST.as_u16(),
++            "INVALID_ARGUMENT",
++            message,
++        )
++    }
++
++    #[must_use]
++    pub fn not_found(message: impl Into<String>) -> Self {
++        Self::new(StatusCode::NOT_FOUND.as_u16(), "NOT_FOUND", message)
++    }
++
++    #[must_use]
++    pub fn internal(message: impl Into<String>) -> Self {
++        Self::new(
++            StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
++            "INTERNAL",
++            message,
++        )
++    }
++}
++
++/// UC `error_code` for an HTTP status code produced by Lakekeeper.
++///
++/// Lakekeeper already masks unauthorized-to-see entities as 404, so the
++/// status codes can be mapped verbatim; anything unmapped is `INTERNAL`.
++#[must_use]
++pub fn uc_error_code_for_status(status: u16) -> &'static str {
++    match status {
++        400 => "INVALID_ARGUMENT",
++        401 => "UNAUTHENTICATED",
++        403 => "PERMISSION_DENIED",
++        404 => "NOT_FOUND",
++        409 => "ALREADY_EXISTS",
++        _ => "INTERNAL",
++    }
++}
++
++impl From<ErrorModel> for UcErrorResponse {
++    fn from(e: ErrorModel) -> Self {
++        Self::new(e.code, uc_error_code_for_status(e.code), e.message)
++    }
++}
++
++impl From<IcebergErrorResponse> for UcErrorResponse {
++    fn from(e: IcebergErrorResponse) -> Self {
++        e.error.into()
++    }
++}
++
++impl IntoResponse for UcErrorResponse {
++    fn into_response(self) -> axum::response::Response {
++        let status = StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
++        if status.is_server_error() {
++            tracing::warn!(?self, "Returning UC API server error");
++        } else {
++            tracing::debug!(?self, "Returning UC API client error");
++        }
++        (status, Json(self)).into_response()
++    }
++}
++
++/// Response body for successful UC DELETE operations: `{}` with HTTP 200.
++#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
++pub struct UcEmptyResponse {}
++
++impl IntoResponse for UcEmptyResponse {
++    fn into_response(self) -> axum::response::Response {
++        Json(self).into_response()
++    }
++}
++
++/// Common UC list-endpoint pagination query parameters.
++#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
++pub struct UcPaginationQuery {
++    #[serde(default)]
++    pub max_results: Option<i64>,
++    #[serde(default)]
++    pub page_token: Option<String>,
++}
++
++/// Effective page size for a UC `max_results` parameter.
++///
++/// UC semantics: `> 0` = min(value, server cap), `0` or absent = server
++/// default, `< 0` = `INVALID_ARGUMENT`.
++pub(crate) fn effective_page_size(max_results: Option<i64>) -> UcResult<i64> {
++    match max_results {
++        Some(n) if n < 0 => Err(UcErrorResponse::invalid_argument(format!(
++            "max_results must not be negative, got {n}"
++        ))),
++        Some(0) | None => Ok(CONFIG.page_size_or_pagination_default(None)),
++        Some(n) => Ok(CONFIG.page_size_or_pagination_default(Some(n))),
++    }
++}
++
++/// UC timestamps are int64 epoch milliseconds.
++pub(crate) fn to_epoch_millis(dt: chrono::DateTime<chrono::Utc>) -> i64 {
++    dt.timestamp_millis()
++}
++
++/// Router serving the Unity Catalog-compatible API. Mount under
++/// `/api/2.1/unity-catalog`.
++pub fn uc_router<I: v1::UcCatalogService<S>, S: crate::api::ThreadSafe>() -> Router<ApiContext<S>> {
++    v1::router::<I, S>()
++}
++
++#[cfg(test)]
++mod tests {
++    use http_body_util::BodyExt as _;
++
++    use super::*;
++
++    #[test]
++    fn test_error_envelope_serialization_is_exact() {
++        let err = UcErrorResponse::not_found("Schema not found: main.default");
++        let json = serde_json::to_string(&err).unwrap();
++        assert_eq!(
++            json,
++            r#"{"error_code":"NOT_FOUND","message":"Schema not found: main.default","details":[{"@type":"google.rpc.ErrorInfo","reason":"NOT_FOUND"}]}"#
++        );
++    }
++
++    #[test]
++    fn test_empty_response_serializes_to_empty_object() {
++        assert_eq!(serde_json::to_string(&UcEmptyResponse {}).unwrap(), "{}");
++    }
++
++    #[test]
++    fn test_status_to_error_code_mapping() {
++        for (status, code) in [
++            (400, "INVALID_ARGUMENT"),
++            (401, "UNAUTHENTICATED"),
++            (403, "PERMISSION_DENIED"),
++            (404, "NOT_FOUND"),
++            (409, "ALREADY_EXISTS"),
++            (500, "INTERNAL"),
++            (503, "INTERNAL"),
++            (418, "INTERNAL"),
++        ] {
++            let err: UcErrorResponse = ErrorModel::builder()
++                .message("msg")
++                .r#type("SomeInternalType")
++                .code(status)
++                .build()
++                .into();
++            assert_eq!(err.error_code, code, "status {status}");
++            assert_eq!(err.status, status);
++            assert_eq!(
++                err.details,
++                vec![UcErrorDetail {
++                    r#type: UC_ERROR_DETAIL_TYPE.to_string(),
++                    reason: code.to_string(),
++                }]
++            );
++        }
++    }
++
++    #[test]
++    fn test_iceberg_error_response_conversion_preserves_message() {
++        let iceberg: IcebergErrorResponse = ErrorModel::builder()
++            .message("Namespace does not exist")
++            .r#type("NamespaceNotFound")
++            .code(404)
++            .build()
++            .into();
++        let uc: UcErrorResponse = iceberg.into();
++        assert_eq!(uc.status, 404);
++        assert_eq!(uc.error_code, "NOT_FOUND");
++        assert_eq!(uc.message, "Namespace does not exist");
++    }
++
++    #[tokio::test]
++    async fn test_into_response_preserves_original_status_and_body() {
++        let response =
++            UcErrorResponse::new(409, "ALREADY_EXISTS", "Schema already exists").into_response();
++        assert_eq!(response.status(), StatusCode::CONFLICT);
++        let body = response.into_body().collect().await.unwrap().to_bytes();
++        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
++        assert_eq!(
++            json,
++            serde_json::json!({
++                "error_code": "ALREADY_EXISTS",
++                "message": "Schema already exists",
++                "details": [
++                    {"@type": "google.rpc.ErrorInfo", "reason": "ALREADY_EXISTS"}
++                ]
++            })
++        );
++    }
++
++    #[test]
++    fn test_effective_page_size() {
++        assert_eq!(
++            effective_page_size(None).unwrap(),
++            i64::from(CONFIG.pagination_size_default)
++        );
++        assert_eq!(
++            effective_page_size(Some(0)).unwrap(),
++            i64::from(CONFIG.pagination_size_default)
++        );
++        assert_eq!(effective_page_size(Some(7)).unwrap(), 7);
++        // Capped at the server maximum.
++        assert_eq!(
++            effective_page_size(Some(i64::MAX)).unwrap(),
++            i64::from(CONFIG.pagination_size_max)
++        );
++        let err = effective_page_size(Some(-1)).unwrap_err();
++        assert_eq!(err.status, 400);
++        assert_eq!(err.error_code, "INVALID_ARGUMENT");
++    }
++}
+diff --git a/crates/lakekeeper/src/api/uc/v1/catalogs.rs b/crates/lakekeeper/src/api/uc/v1/catalogs.rs
+new file mode 100644
+index 00000000..f278d9c9
+--- /dev/null
++++ b/crates/lakekeeper/src/api/uc/v1/catalogs.rs
+@@ -0,0 +1,97 @@
++//! UC Catalogs endpoints. UC catalogs map read-only onto Lakekeeper
++//! warehouses of the default project; create/update/delete go through the
++//! Lakekeeper management API instead.
++
++use std::collections::HashMap;
++
++use axum::{
++    Extension,
++    extract::{Path, Query, State},
++};
++use serde::{Deserialize, Serialize};
++
++use super::UcCatalogService;
++use crate::{
++    api::{
++        ApiContext,
++        uc::{UcErrorResponse, UcPaginationQuery, UcResult},
++    },
++    request_metadata::RequestMetadata,
++};
++
++/// UC `CatalogInfo`. UC DTOs use snake_case field names (serde default).
++#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
++pub struct CatalogInfo {
++    pub name: String,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub comment: Option<String>,
++    #[serde(default)]
++    pub properties: HashMap<String, String>,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub owner: Option<String>,
++    /// Epoch milliseconds. Lakekeeper warehouses do not track a creation
++    /// timestamp, so this is omitted.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub created_at: Option<i64>,
++    /// Epoch milliseconds.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub updated_at: Option<i64>,
++    /// Warehouse ID.
++    pub id: String,
++}
++
++#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
++pub struct ListCatalogsResponse {
++    #[serde(default)]
++    pub catalogs: Vec<CatalogInfo>,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub next_page_token: Option<String>,
++}
++
++impl axum::response::IntoResponse for CatalogInfo {
++    fn into_response(self) -> axum::response::Response {
++        axum::Json(self).into_response()
++    }
++}
++
++impl axum::response::IntoResponse for ListCatalogsResponse {
++    fn into_response(self) -> axum::response::Response {
++        axum::Json(self).into_response()
++    }
++}
++
++pub(crate) async fn list_catalogs<I: UcCatalogService<S>, S: crate::api::ThreadSafe>(
++    Query(query): Query<UcPaginationQuery>,
++    State(api_context): State<ApiContext<S>>,
++    Extension(metadata): Extension<RequestMetadata>,
++) -> UcResult<ListCatalogsResponse> {
++    I::list_catalogs(query, api_context, metadata).await
++}
++
++pub(crate) async fn get_catalog<I: UcCatalogService<S>, S: crate::api::ThreadSafe>(
++    Path(name): Path<String>,
++    State(api_context): State<ApiContext<S>>,
++    Extension(metadata): Extension<RequestMetadata>,
++) -> UcResult<CatalogInfo> {
++    I::get_catalog(name, api_context, metadata).await
++}
++
++fn manage_catalogs_via_management_api(operation: &str) -> UcErrorResponse {
++    UcErrorResponse::invalid_argument(format!(
++        "{operation} catalogs is not supported by the Unity Catalog compatibility API. \
++         UC catalogs map to Lakekeeper warehouses; use the Lakekeeper management API \
++         (/management/v1/warehouse) to manage them."
++    ))
++}
++
++pub(crate) async fn create_catalog_unsupported() -> UcErrorResponse {
++    manage_catalogs_via_management_api("Creating")
++}
++
++pub(crate) async fn update_catalog_unsupported() -> UcErrorResponse {
++    manage_catalogs_via_management_api("Updating")
++}
++
++pub(crate) async fn delete_catalog_unsupported() -> UcErrorResponse {
++    manage_catalogs_via_management_api("Deleting")
++}
+diff --git a/crates/lakekeeper/src/api/uc/v1/mod.rs b/crates/lakekeeper/src/api/uc/v1/mod.rs
+new file mode 100644
+index 00000000..dd22cd2e
+--- /dev/null
++++ b/crates/lakekeeper/src/api/uc/v1/mod.rs
+@@ -0,0 +1,98 @@
++//! Unity Catalog API v1 (`/api/2.1/unity-catalog`): routes, DTOs and the
++//! [`UcCatalogService`] trait implemented by `crate::server::CatalogServer`.
++
++pub mod catalogs;
++pub mod schemas;
++
++use async_trait::async_trait;
++use axum::{
++    Router,
++    routing::{get, post},
++};
++
++pub use self::{
++    catalogs::{CatalogInfo, ListCatalogsResponse},
++    schemas::{
++        CreateSchemaRequest, DeleteSchemaQuery, ListSchemasQuery, ListSchemasResponse, SchemaInfo,
++        UpdateSchemaRequest,
++    },
++};
++use super::{UcPaginationQuery, UcResult};
++use crate::{api::ApiContext, request_metadata::RequestMetadata};
++
++/// Handler backend for the Unity Catalog-compatible API. Keeps the axum
++/// handlers thin; implemented by `crate::server::CatalogServer`.
++#[async_trait]
++pub trait UcCatalogService<S: crate::api::ThreadSafe>
++where
++    Self: Send + Sync + 'static,
++{
++    async fn list_catalogs(
++        query: UcPaginationQuery,
++        state: ApiContext<S>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<ListCatalogsResponse>;
++
++    async fn get_catalog(
++        name: String,
++        state: ApiContext<S>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<CatalogInfo>;
++
++    async fn create_schema(
++        request: CreateSchemaRequest,
++        state: ApiContext<S>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<SchemaInfo>;
++
++    async fn list_schemas(
++        query: ListSchemasQuery,
++        state: ApiContext<S>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<ListSchemasResponse>;
++
++    /// `full_name` is `<catalog>.<schema>`.
++    async fn get_schema(
++        full_name: String,
++        state: ApiContext<S>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<SchemaInfo>;
++
++    async fn update_schema(
++        full_name: String,
++        request: UpdateSchemaRequest,
++        state: ApiContext<S>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<SchemaInfo>;
++
++    async fn delete_schema(
++        full_name: String,
++        query: DeleteSchemaQuery,
++        state: ApiContext<S>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<()>;
++}
++
++pub fn router<I: UcCatalogService<S>, S: crate::api::ThreadSafe>() -> Router<ApiContext<S>> {
++    Router::new()
++        .route(
++            "/catalogs",
++            get(catalogs::list_catalogs::<I, S>).post(catalogs::create_catalog_unsupported),
++        )
++        .route(
++            "/catalogs/{name}",
++            get(catalogs::get_catalog::<I, S>)
++                .patch(catalogs::update_catalog_unsupported)
++                .delete(catalogs::delete_catalog_unsupported),
++        )
++        .route(
++            "/schemas",
++            post(schemas::create_schema::<I, S>).get(schemas::list_schemas::<I, S>),
++        )
++        .route(
++            "/schemas/{full_name}",
++            get(schemas::get_schema::<I, S>)
++                .patch(schemas::update_schema::<I, S>)
++                .delete(schemas::delete_schema::<I, S>),
++        )
++}
+diff --git a/crates/lakekeeper/src/api/uc/v1/schemas.rs b/crates/lakekeeper/src/api/uc/v1/schemas.rs
+new file mode 100644
+index 00000000..289f8e8b
+--- /dev/null
++++ b/crates/lakekeeper/src/api/uc/v1/schemas.rs
+@@ -0,0 +1,149 @@
++//! UC Schemas endpoints. A UC schema is a top-level Lakekeeper namespace in
++//! the warehouse named by `catalog_name`; the UC `comment` is stored as the
++//! namespace property `comment`.
++
++use std::collections::HashMap;
++
++use axum::{
++    Extension, Json,
++    extract::{Path, Query, State},
++};
++use serde::{Deserialize, Serialize};
++
++use super::UcCatalogService;
++use crate::{
++    api::{
++        ApiContext,
++        uc::{UcEmptyResponse, UcResult},
++    },
++    request_metadata::RequestMetadata,
++};
++
++#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
++pub struct CreateSchemaRequest {
++    pub name: String,
++    pub catalog_name: String,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub comment: Option<String>,
++    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
++    pub properties: HashMap<String, String>,
++    /// Not supported by the compatibility API; requests carrying it are
++    /// rejected with `INVALID_ARGUMENT`.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub storage_root: Option<String>,
++}
++
++#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
++pub struct UpdateSchemaRequest {
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub comment: Option<String>,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub properties: Option<HashMap<String, String>>,
++    /// Not supported by the compatibility API; requests carrying it are
++    /// rejected with `INVALID_ARGUMENT`.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub new_name: Option<String>,
++}
++
++/// UC `SchemaInfo`. UC DTOs use snake_case field names (serde default).
++#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
++pub struct SchemaInfo {
++    pub name: String,
++    pub catalog_name: String,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub comment: Option<String>,
++    #[serde(default)]
++    pub properties: HashMap<String, String>,
++    /// `<catalog_name>.<name>`.
++    pub full_name: String,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub owner: Option<String>,
++    /// Epoch milliseconds.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub created_at: Option<i64>,
++    /// Epoch milliseconds.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub updated_at: Option<i64>,
++    /// Namespace ID.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub schema_id: Option<String>,
++}
++
++#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
++pub struct ListSchemasResponse {
++    #[serde(default)]
++    pub schemas: Vec<SchemaInfo>,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub next_page_token: Option<String>,
++}
++
++#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
++pub struct ListSchemasQuery {
++    pub catalog_name: String,
++    #[serde(default)]
++    pub max_results: Option<i64>,
++    #[serde(default)]
++    pub page_token: Option<String>,
++}
++
++#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
++pub struct DeleteSchemaQuery {
++    #[serde(default)]
++    pub force: bool,
++}
++
++impl axum::response::IntoResponse for SchemaInfo {
++    fn into_response(self) -> axum::response::Response {
++        Json(self).into_response()
++    }
++}
++
++impl axum::response::IntoResponse for ListSchemasResponse {
++    fn into_response(self) -> axum::response::Response {
++        Json(self).into_response()
++    }
++}
++
++pub(crate) async fn create_schema<I: UcCatalogService<S>, S: crate::api::ThreadSafe>(
++    State(api_context): State<ApiContext<S>>,
++    Extension(metadata): Extension<RequestMetadata>,
++    Json(request): Json<CreateSchemaRequest>,
++) -> UcResult<SchemaInfo> {
++    I::create_schema(request, api_context, metadata).await
++}
++
++pub(crate) async fn list_schemas<I: UcCatalogService<S>, S: crate::api::ThreadSafe>(
++    Query(query): Query<ListSchemasQuery>,
++    State(api_context): State<ApiContext<S>>,
++    Extension(metadata): Extension<RequestMetadata>,
++) -> UcResult<ListSchemasResponse> {
++    I::list_schemas(query, api_context, metadata).await
++}
++
++pub(crate) async fn get_schema<I: UcCatalogService<S>, S: crate::api::ThreadSafe>(
++    Path(full_name): Path<String>,
++    State(api_context): State<ApiContext<S>>,
++    Extension(metadata): Extension<RequestMetadata>,
++) -> UcResult<SchemaInfo> {
++    I::get_schema(full_name, api_context, metadata).await
++}
++
++pub(crate) async fn update_schema<I: UcCatalogService<S>, S: crate::api::ThreadSafe>(
++    Path(full_name): Path<String>,
++    State(api_context): State<ApiContext<S>>,
++    Extension(metadata): Extension<RequestMetadata>,
++    Json(request): Json<UpdateSchemaRequest>,
++) -> UcResult<SchemaInfo> {
++    I::update_schema(full_name, request, api_context, metadata).await
++}
++
++pub(crate) async fn delete_schema<I: UcCatalogService<S>, S: crate::api::ThreadSafe>(
++    Path(full_name): Path<String>,
++    Query(query): Query<DeleteSchemaQuery>,
++    State(api_context): State<ApiContext<S>>,
++    Extension(metadata): Extension<RequestMetadata>,
++) -> UcResult<UcEmptyResponse> {
++    I::delete_schema(full_name, query, api_context, metadata)
++        .await
++        .map(|()| UcEmptyResponse {})
++}
+diff --git a/crates/lakekeeper/src/config.rs b/crates/lakekeeper/src/config.rs
+index febf05a2..321ee3dd 100644
+--- a/crates/lakekeeper/src/config.rs
++++ b/crates/lakekeeper/src/config.rs
+@@ -349,6 +349,9 @@ pub struct DynAppConfig {
+     pub enable_default_project: bool,
+     /// If true, the swagger UI is served at /swagger-ui
+     pub serve_swagger_ui: bool,
++    /// If true (default), the Unity Catalog-compatible REST API is served
++    /// at /api/2.1/unity-catalog.
++    pub enable_uc_compat_api: bool,
+     /// Template to obtain the "prefix" for a warehouse,
+     /// may contain `{warehouse_id}` placeholder.
+     ///
+@@ -1069,6 +1072,7 @@ impl Default for DynAppConfig {
+             metrics: Metrics::default(),
+             endpoint_stat_flush_interval: Duration::from_secs(30),
+             serve_swagger_ui: true,
++            enable_uc_compat_api: true,
+             skip_storage_validation: false,
+             idempotency: IdempotencyConfig::default(),
+             debug: DebugConfig::default(),
+diff --git a/crates/lakekeeper/src/server/mod.rs b/crates/lakekeeper/src/server/mod.rs
+index 9e801342..8e5169ca 100644
+--- a/crates/lakekeeper/src/server/mod.rs
++++ b/crates/lakekeeper/src/server/mod.rs
+@@ -9,6 +9,7 @@ pub mod namespace;
+ mod s3_signer;
+ pub mod tables;
+ pub(crate) mod tabular;
++pub(crate) mod uc;
+ pub mod views;
+ 
+ use std::{collections::HashMap, fmt::Debug, marker::PhantomData, sync::Arc};
+diff --git a/crates/lakekeeper/src/server/uc/catalogs.rs b/crates/lakekeeper/src/server/uc/catalogs.rs
+new file mode 100644
+index 00000000..2b0226d2
+--- /dev/null
++++ b/crates/lakekeeper/src/server/uc/catalogs.rs
+@@ -0,0 +1,135 @@
++//! UC Catalogs handlers: read-only view of the warehouses in the caller's
++//! (default) project. Mirrors the management API's list/get warehouse
++//! authorization (`ListWarehouses` + `IncludeInList`, `GetMetadata`).
++
++use std::collections::HashMap;
++
++use crate::{
++    api::{
++        ApiContext,
++        uc::{
++            UcErrorResponse, UcPaginationQuery, UcResult, effective_page_size, to_epoch_millis,
++            v1::{CatalogInfo, ListCatalogsResponse},
++        },
++    },
++    request_metadata::RequestMetadata,
++    server::uc::resolve::{resolve_catalog_warehouse, uc_err},
++    service::{
++        CatalogGetWarehouseByIdError, CatalogStore, CatalogWarehouseOps, ResolvedWarehouse,
++        SecretStore, State,
++        authz::{
++            AuthZProjectOps, Authorizer, AuthzWarehouseOps, CatalogProjectAction,
++            CatalogWarehouseAction,
++        },
++        events::context::authz_to_error_no_audit,
++    },
++};
++
++fn catalog_info(warehouse: &ResolvedWarehouse) -> CatalogInfo {
++    CatalogInfo {
++        name: warehouse.name.clone(),
++        comment: None,
++        properties: HashMap::new(),
++        owner: None,
++        // Warehouses do not track a creation timestamp.
++        created_at: None,
++        updated_at: warehouse.updated_at.map(to_epoch_millis),
++        id: warehouse.warehouse_id.to_string(),
++    }
++}
++
++/// Parse the offset carried by a UC catalogs `page_token` (client-side
++/// pagination over the full, name-sorted warehouse list).
++fn parse_offset_token(page_token: Option<&str>) -> UcResult<usize> {
++    match page_token {
++        None => Ok(0),
++        Some(t) => t.parse().map_err(|_| {
++            UcErrorResponse::invalid_argument(format!("Invalid page_token '{t}'."))
++        }),
++    }
++}
++
++pub(crate) async fn list_catalogs<C: CatalogStore, A: Authorizer + Clone, S: SecretStore>(
++    query: UcPaginationQuery,
++    state: ApiContext<State<A, C, S>>,
++    request_metadata: RequestMetadata,
++) -> UcResult<ListCatalogsResponse> {
++    let page_size = usize::try_from(effective_page_size(query.max_results)?)
++        .map_err(|_| UcErrorResponse::internal("Invalid effective page size"))?;
++    let offset = parse_offset_token(query.page_token.as_deref())?;
++
++    // ------------------- AuthZ -------------------
++    let authorizer = state.v1_state.authz;
++    let project_id = request_metadata.require_project_id(None).map_err(uc_err)?;
++    authorizer
++        .require_project_action(
++            &request_metadata,
++            &project_id,
++            CatalogProjectAction::ListWarehouses,
++        )
++        .await
++        .map_err(|e| uc_err(authz_to_error_no_audit(e)))?;
++
++    // ------------------- Business Logic -------------------
++    let warehouses = C::list_warehouses(&project_id, None, state.v1_state.catalog)
++        .await
++        .map_err(uc_err)?;
++
++    let mut visible: Vec<_> = authorizer
++        .are_allowed_warehouse_actions_vec(
++            &request_metadata,
++            None,
++            &warehouses
++                .iter()
++                .map(|w| (&**w, CatalogWarehouseAction::IncludeInList))
++                .collect::<Vec<_>>(),
++        )
++        .await
++        .map_err(|e| uc_err(authz_to_error_no_audit(e)))?
++        .into_allowed()
++        .into_iter()
++        .zip(warehouses)
++        .filter_map(|(allowed, warehouse)| allowed.then_some(warehouse))
++        .collect();
++
++    // Client-side pagination: warehouses per project are few, so paginate
++    // over the full, name-sorted list with a plain offset token.
++    visible.sort_by(|a, b| a.name.cmp(&b.name));
++    let total = visible.len();
++    let catalogs: Vec<CatalogInfo> = visible
++        .iter()
++        .skip(offset)
++        .take(page_size)
++        .map(|w| catalog_info(w))
++        .collect();
++    let next_page_token = (!catalogs.is_empty() && offset + catalogs.len() < total)
++        .then(|| (offset + catalogs.len()).to_string());
++
++    Ok(ListCatalogsResponse {
++        catalogs,
++        next_page_token,
++    })
++}
++
++pub(crate) async fn get_catalog<C: CatalogStore, A: Authorizer + Clone, S: SecretStore>(
++    name: String,
++    state: ApiContext<State<A, C, S>>,
++    request_metadata: RequestMetadata,
++) -> UcResult<CatalogInfo> {
++    let authorizer = state.v1_state.authz;
++    let warehouse =
++        resolve_catalog_warehouse::<C>(&request_metadata, &name, state.v1_state.catalog).await?;
++
++    // Non-visible warehouses are masked as 404 by the authorizer.
++    let warehouse = authorizer
++        .require_warehouse_action(
++            &request_metadata,
++            warehouse.warehouse_id,
++            Ok::<_, CatalogGetWarehouseByIdError>(Some(warehouse)),
++            CatalogWarehouseAction::GetMetadata,
++        )
++        .await
++        .map_err(|e| uc_err(authz_to_error_no_audit(e)))?;
++
++    Ok(catalog_info(&warehouse))
++}
+diff --git a/crates/lakekeeper/src/server/uc/mod.rs b/crates/lakekeeper/src/server/uc/mod.rs
+new file mode 100644
+index 00000000..854a41cf
+--- /dev/null
++++ b/crates/lakekeeper/src/server/uc/mod.rs
+@@ -0,0 +1,88 @@
++//! Server-side implementation of the Unity Catalog compatibility API
++//! (`crate::api::uc`).
++
++pub(crate) mod catalogs;
++pub(crate) mod resolve;
++pub(crate) mod schemas;
++
++use async_trait::async_trait;
++
++use crate::{
++    api::{
++        ApiContext,
++        uc::{
++            UcPaginationQuery, UcResult,
++            v1::{
++                CatalogInfo, CreateSchemaRequest, DeleteSchemaQuery, ListCatalogsResponse,
++                ListSchemasQuery, ListSchemasResponse, SchemaInfo, UcCatalogService,
++                UpdateSchemaRequest,
++            },
++        },
++    },
++    request_metadata::RequestMetadata,
++    server::CatalogServer,
++    service::{CatalogStore, SecretStore, State, authz::Authorizer},
++};
++
++#[async_trait]
++impl<C: CatalogStore, A: Authorizer + Clone, S: SecretStore> UcCatalogService<State<A, C, S>>
++    for CatalogServer<C, A, S>
++{
++    async fn list_catalogs(
++        query: UcPaginationQuery,
++        state: ApiContext<State<A, C, S>>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<ListCatalogsResponse> {
++        catalogs::list_catalogs::<C, A, S>(query, state, request_metadata).await
++    }
++
++    async fn get_catalog(
++        name: String,
++        state: ApiContext<State<A, C, S>>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<CatalogInfo> {
++        catalogs::get_catalog::<C, A, S>(name, state, request_metadata).await
++    }
++
++    async fn create_schema(
++        request: CreateSchemaRequest,
++        state: ApiContext<State<A, C, S>>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<SchemaInfo> {
++        schemas::create_schema::<C, A, S>(request, state, request_metadata).await
++    }
++
++    async fn list_schemas(
++        query: ListSchemasQuery,
++        state: ApiContext<State<A, C, S>>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<ListSchemasResponse> {
++        schemas::list_schemas::<C, A, S>(query, state, request_metadata).await
++    }
++
++    async fn get_schema(
++        full_name: String,
++        state: ApiContext<State<A, C, S>>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<SchemaInfo> {
++        schemas::get_schema::<C, A, S>(full_name, state, request_metadata).await
++    }
++
++    async fn update_schema(
++        full_name: String,
++        request: UpdateSchemaRequest,
++        state: ApiContext<State<A, C, S>>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<SchemaInfo> {
++        schemas::update_schema::<C, A, S>(full_name, request, state, request_metadata).await
++    }
++
++    async fn delete_schema(
++        full_name: String,
++        query: DeleteSchemaQuery,
++        state: ApiContext<State<A, C, S>>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<()> {
++        schemas::delete_schema::<C, A, S>(full_name, query, state, request_metadata).await
++    }
++}
+diff --git a/crates/lakekeeper/src/server/uc/resolve.rs b/crates/lakekeeper/src/server/uc/resolve.rs
+new file mode 100644
+index 00000000..992a33ba
+--- /dev/null
++++ b/crates/lakekeeper/src/server/uc/resolve.rs
+@@ -0,0 +1,129 @@
++//! Name resolution for the Unity Catalog compatibility API:
++//! UC `catalog_name` → warehouse in the caller's (default) project,
++//! UC `schema` (part of `full_name`) → top-level namespace.
++
++use std::sync::Arc;
++
++use iceberg::NamespaceIdent;
++use iceberg_ext::catalog::rest::IcebergErrorResponse;
++
++use crate::{
++    api::uc::{UcErrorResponse, UcResult},
++    request_metadata::RequestMetadata,
++    service::{
++        CachePolicy, CatalogNamespaceOps, CatalogStore, CatalogWarehouseOps, NamespaceHierarchy,
++        ResolvedWarehouse, WarehouseId, WarehouseStatus,
++        authz::{Authorizer, AuthzNamespaceOps},
++        events::context::{UserProvidedNamespace, authz_to_error_no_audit},
++    },
++};
++
++/// Convert any Lakekeeper API error into the UC error envelope, preserving
++/// the HTTP status code.
++pub(crate) fn uc_err(e: impl Into<IcebergErrorResponse>) -> UcErrorResponse {
++    UcErrorResponse::from(e.into())
++}
++
++/// Resolve a UC `catalog_name` to an active warehouse of the caller's
++/// project (the default project for requests without an explicit project).
++///
++/// Performs no authorization — callers must authorize the warehouse (or an
++/// operation on one of its children, which masks non-visible warehouses as
++/// 404) before returning warehouse data to the client.
++pub(crate) async fn resolve_catalog_warehouse<C: CatalogStore>(
++    request_metadata: &RequestMetadata,
++    catalog_name: &str,
++    catalog_state: C::State,
++) -> UcResult<Arc<ResolvedWarehouse>> {
++    let project_id = request_metadata.require_project_id(None).map_err(uc_err)?;
++    C::get_warehouse_by_name(
++        catalog_name,
++        &project_id,
++        WarehouseStatus::active(),
++        catalog_state,
++    )
++    .await
++    .map_err(uc_err)?
++    .ok_or_else(|| catalog_not_found(catalog_name))
++}
++
++pub(crate) fn catalog_not_found(catalog_name: &str) -> UcErrorResponse {
++    UcErrorResponse::not_found(format!("Catalog not found: {catalog_name}"))
++}
++
++/// Split a UC schema `full_name` (`<catalog>.<schema>`) into its parts.
++/// UC schemas map to top-level namespaces, so the schema part must be a
++/// single (dot-free) name.
++pub(crate) fn split_schema_full_name(full_name: &str) -> UcResult<(&str, &str)> {
++    match full_name.split_once('.') {
++        Some((catalog, schema))
++            if !catalog.is_empty() && !schema.is_empty() && !schema.contains('.') =>
++        {
++            Ok((catalog, schema))
++        }
++        _ => Err(UcErrorResponse::invalid_argument(format!(
++            "Invalid schema full name '{full_name}'. Expected '<catalog>.<schema>'."
++        ))),
++    }
++}
++
++/// Resolve a UC schema name to its top-level namespace, authorizing `action`
++/// (non-visible namespaces are masked as 404 by the authorizer).
++pub(crate) async fn resolve_schema_namespace<C: CatalogStore, A: Authorizer>(
++    authorizer: &A,
++    request_metadata: &RequestMetadata,
++    warehouse_id: WarehouseId,
++    schema_name: &str,
++    action: impl Into<A::NamespaceAction> + Send,
++    catalog_state: C::State,
++) -> UcResult<(Arc<ResolvedWarehouse>, NamespaceHierarchy)> {
++    let namespace = NamespaceIdent::new(schema_name.to_string());
++    authorizer
++        .load_and_authorize_namespace_action::<C>(
++            request_metadata,
++            UserProvidedNamespace::new(warehouse_id, namespace),
++            action,
++            CachePolicy::Skip,
++            catalog_state,
++        )
++        .await
++        .map_err(|e| uc_err(authz_to_error_no_audit(e)))
++}
++
++/// Fetch a namespace that is known to exist (e.g. right after creating or
++/// updating it). Skips the namespace cache so fresh mutations are visible.
++pub(crate) async fn require_namespace<C: CatalogStore>(
++    warehouse_id: WarehouseId,
++    namespace: &NamespaceIdent,
++    catalog_state: C::State,
++) -> UcResult<NamespaceHierarchy> {
++    C::get_namespace_cache_aware(
++        warehouse_id,
++        namespace.clone(),
++        CachePolicy::Skip,
++        catalog_state,
++    )
++    .await
++    .map_err(uc_err)?
++    .ok_or_else(|| {
++        UcErrorResponse::not_found(format!("Schema not found: {}", namespace.to_url_string()))
++    })
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn test_split_schema_full_name() {
++        assert_eq!(
++            split_schema_full_name("cat.schema").unwrap(),
++            ("cat", "schema")
++        );
++        for bad in ["", "cat", "cat.", ".schema", "cat.a.b", "."] {
++            let err = split_schema_full_name(bad).unwrap_err();
++            assert_eq!(err.status, 400, "{bad}");
++            assert_eq!(err.error_code, "INVALID_ARGUMENT", "{bad}");
++        }
++    }
++}
+diff --git a/crates/lakekeeper/src/server/uc/schemas.rs b/crates/lakekeeper/src/server/uc/schemas.rs
+new file mode 100644
+index 00000000..33d78618
+--- /dev/null
++++ b/crates/lakekeeper/src/server/uc/schemas.rs
+@@ -0,0 +1,305 @@
++//! UC Schemas handlers. Delegate to the Iceberg REST namespace handlers
++//! (`NamespaceService` on `CatalogServer`) so authorization, idempotency and
++//! authorizer bookkeeping stay identical to the Iceberg surface, then map
++//! namespaces to the UC `SchemaInfo` wire shape.
++
++use std::collections::HashMap;
++
++use iceberg::NamespaceIdent;
++use iceberg_ext::catalog::rest::{CreateNamespaceRequest, UpdateNamespacePropertiesRequest};
++
++use crate::{
++    api::{
++        ApiContext,
++        iceberg::v1::{
++            ListNamespacesQuery, PageToken,
++            namespace::{NamespaceDropFlags, NamespaceParameters, NamespaceService as _},
++        },
++        uc::{
++            UcErrorResponse, UcResult, effective_page_size, to_epoch_millis,
++            v1::{
++                CreateSchemaRequest, DeleteSchemaQuery, ListSchemasQuery, ListSchemasResponse,
++                SchemaInfo, UpdateSchemaRequest,
++            },
++        },
++    },
++    request_metadata::RequestMetadata,
++    server::{
++        CatalogServer,
++        uc::resolve::{
++            require_namespace, resolve_catalog_warehouse, resolve_schema_namespace,
++            split_schema_full_name, uc_err,
++        },
++    },
++    service::{
++        CatalogNamespaceOps, CatalogStore, NamespaceWithParent, SecretStore, State, WarehouseId,
++        authz::{Authorizer, CatalogNamespaceAction},
++    },
++};
++
++/// Namespace property carrying the UC schema `comment`.
++const COMMENT_PROPERTY: &str = "comment";
++
++fn schema_info(catalog_name: &str, namespace: &NamespaceWithParent) -> SchemaInfo {
++    let name = namespace.namespace_ident().as_ref().join(".");
++    let mut properties = namespace.properties().cloned().unwrap_or_default();
++    let comment = properties.remove(COMMENT_PROPERTY);
++    SchemaInfo {
++        full_name: format!("{catalog_name}.{name}"),
++        name,
++        catalog_name: catalog_name.to_string(),
++        comment,
++        properties,
++        owner: None,
++        created_at: Some(to_epoch_millis(namespace.created_at())),
++        updated_at: namespace.updated_at().map(to_epoch_millis),
++        schema_id: Some(namespace.namespace_id().to_string()),
++    }
++}
++
++fn namespace_parameters(warehouse_id: WarehouseId, namespace: &NamespaceIdent) -> NamespaceParameters {
++    NamespaceParameters {
++        prefix: Some(warehouse_id.to_string().into()),
++        namespace: namespace.clone(),
++    }
++}
++
++pub(crate) async fn create_schema<C: CatalogStore, A: Authorizer + Clone, S: SecretStore>(
++    request: CreateSchemaRequest,
++    state: ApiContext<State<A, C, S>>,
++    request_metadata: RequestMetadata,
++) -> UcResult<SchemaInfo> {
++    let CreateSchemaRequest {
++        name,
++        catalog_name,
++        comment,
++        mut properties,
++        storage_root,
++    } = request;
++    if storage_root.is_some() {
++        return Err(UcErrorResponse::invalid_argument(
++            "storage_root is not supported by the Unity Catalog compatibility API. \
++             Schema locations are derived from the warehouse storage profile.",
++        ));
++    }
++    if name.contains('.') {
++        return Err(UcErrorResponse::invalid_argument(format!(
++            "Invalid schema name '{name}': schema names must not contain '.'."
++        )));
++    }
++
++    let warehouse = resolve_catalog_warehouse::<C>(
++        &request_metadata,
++        &catalog_name,
++        state.v1_state.catalog.clone(),
++    )
++    .await?;
++    let warehouse_id = warehouse.warehouse_id;
++
++    if let Some(comment) = comment {
++        properties.insert(COMMENT_PROPERTY.to_string(), comment);
++    }
++    let namespace = NamespaceIdent::new(name);
++
++    // Authorization (`CreateNamespace` on the warehouse) happens inside the
++    // delegated handler.
++    CatalogServer::<C, A, S>::create_namespace(
++        Some(warehouse_id.to_string().into()),
++        CreateNamespaceRequest {
++            namespace: namespace.clone(),
++            properties: Some(properties),
++        },
++        state.clone(),
++        request_metadata.clone(),
++    )
++    .await
++    .map_err(uc_err)?;
++
++    // Re-fetch for the server-populated fields (id, timestamps, location).
++    let hierarchy =
++        require_namespace::<C>(warehouse_id, &namespace, state.v1_state.catalog).await?;
++    Ok(schema_info(&catalog_name, &hierarchy.namespace))
++}
++
++pub(crate) async fn list_schemas<C: CatalogStore, A: Authorizer + Clone, S: SecretStore>(
++    query: ListSchemasQuery,
++    state: ApiContext<State<A, C, S>>,
++    request_metadata: RequestMetadata,
++) -> UcResult<ListSchemasResponse> {
++    let ListSchemasQuery {
++        catalog_name,
++        max_results,
++        page_token,
++    } = query;
++    let page_size = effective_page_size(max_results)?;
++    let warehouse = resolve_catalog_warehouse::<C>(
++        &request_metadata,
++        &catalog_name,
++        state.v1_state.catalog.clone(),
++    )
++    .await?;
++    let warehouse_id = warehouse.warehouse_id;
++
++    // Top-level namespaces only (parent = None). Authorization
++    // (`ListNamespaces` + per-namespace `IncludeInList`) happens inside the
++    // delegated handler.
++    let response = CatalogServer::<C, A, S>::list_namespaces(
++        Some(warehouse_id.to_string().into()),
++        ListNamespacesQuery {
++            page_token: page_token.map_or(PageToken::Empty, PageToken::Present),
++            page_size: Some(page_size),
++            parent: None,
++            return_uuids: false,
++            return_protection_status: false,
++        },
++        state.clone(),
++        request_metadata,
++    )
++    .await
++    .map_err(uc_err)?;
++
++    // Enrich with per-namespace metadata (id, timestamps, comment). The
++    // listed namespaces passed `IncludeInList`, so reading their metadata
++    // does not leak anything; races with concurrent drops simply skip.
++    let mut schemas = Vec::with_capacity(response.namespaces.len());
++    let lookups = response.namespaces.iter().map(|namespace_ident| {
++        let catalog_state = state.v1_state.catalog.clone();
++        async move {
++            C::get_namespace_cache_aware(
++                warehouse_id,
++                namespace_ident.clone(),
++                crate::service::CachePolicy::Skip,
++                catalog_state,
++            )
++            .await
++        }
++    });
++    for hierarchy in futures::future::try_join_all(lookups).await.map_err(uc_err)? {
++        if let Some(hierarchy) = hierarchy {
++            schemas.push(schema_info(&catalog_name, &hierarchy.namespace));
++        }
++    }
++
++    Ok(ListSchemasResponse {
++        schemas,
++        next_page_token: response.next_page_token,
++    })
++}
++
++pub(crate) async fn get_schema<C: CatalogStore, A: Authorizer + Clone, S: SecretStore>(
++    full_name: String,
++    state: ApiContext<State<A, C, S>>,
++    request_metadata: RequestMetadata,
++) -> UcResult<SchemaInfo> {
++    let (catalog_name, schema_name) = split_schema_full_name(&full_name)?;
++    let warehouse = resolve_catalog_warehouse::<C>(
++        &request_metadata,
++        catalog_name,
++        state.v1_state.catalog.clone(),
++    )
++    .await?;
++
++    let (_warehouse, hierarchy) = resolve_schema_namespace::<C, A>(
++        &state.v1_state.authz,
++        &request_metadata,
++        warehouse.warehouse_id,
++        schema_name,
++        CatalogNamespaceAction::GetMetadata,
++        state.v1_state.catalog,
++    )
++    .await?;
++
++    Ok(schema_info(catalog_name, &hierarchy.namespace))
++}
++
++pub(crate) async fn update_schema<C: CatalogStore, A: Authorizer + Clone, S: SecretStore>(
++    full_name: String,
++    request: UpdateSchemaRequest,
++    state: ApiContext<State<A, C, S>>,
++    request_metadata: RequestMetadata,
++) -> UcResult<SchemaInfo> {
++    let UpdateSchemaRequest {
++        comment,
++        properties,
++        new_name,
++    } = request;
++    if new_name.is_some() {
++        return Err(UcErrorResponse::invalid_argument(
++            "Renaming schemas is not supported by the Unity Catalog compatibility API.",
++        ));
++    }
++    let (catalog_name, schema_name) = split_schema_full_name(&full_name)?;
++    let warehouse = resolve_catalog_warehouse::<C>(
++        &request_metadata,
++        catalog_name,
++        state.v1_state.catalog.clone(),
++    )
++    .await?;
++    let warehouse_id = warehouse.warehouse_id;
++    let namespace = NamespaceIdent::new(schema_name.to_string());
++
++    let mut updates: HashMap<String, String> = properties.unwrap_or_default();
++    if let Some(comment) = comment {
++        updates.insert(COMMENT_PROPERTY.to_string(), comment);
++    }
++
++    if updates.is_empty() {
++        // Nothing to change; behave like a get (incl. authorization).
++        return get_schema::<C, A, S>(full_name, state, request_metadata).await;
++    }
++
++    // Authorization (`UpdateProperties` on the namespace) happens inside the
++    // delegated handler; missing namespaces surface as 404.
++    CatalogServer::<C, A, S>::update_namespace_properties(
++        namespace_parameters(warehouse_id, &namespace),
++        UpdateNamespacePropertiesRequest {
++            removals: None,
++            updates: Some(updates),
++        },
++        state.clone(),
++        request_metadata.clone(),
++    )
++    .await
++    .map_err(uc_err)?;
++
++    let hierarchy =
++        require_namespace::<C>(warehouse_id, &namespace, state.v1_state.catalog).await?;
++    Ok(schema_info(catalog_name, &hierarchy.namespace))
++}
++
++pub(crate) async fn delete_schema<C: CatalogStore, A: Authorizer + Clone, S: SecretStore>(
++    full_name: String,
++    query: DeleteSchemaQuery,
++    state: ApiContext<State<A, C, S>>,
++    request_metadata: RequestMetadata,
++) -> UcResult<()> {
++    let (catalog_name, schema_name) = split_schema_full_name(&full_name)?;
++    let warehouse = resolve_catalog_warehouse::<C>(
++        &request_metadata,
++        catalog_name,
++        state.v1_state.catalog.clone(),
++    )
++    .await?;
++    let namespace = NamespaceIdent::new(schema_name.to_string());
++
++    // Non-recursive drop: fails when the schema is not empty. UC reports
++    // that as a 400 rather than Lakekeeper's 409.
++    CatalogServer::<C, A, S>::drop_namespace(
++        namespace_parameters(warehouse.warehouse_id, &namespace),
++        NamespaceDropFlags {
++            force: query.force,
++            purge: false,
++            recursive: false,
++        },
++        state,
++        request_metadata,
++    )
++    .await
++    .map_err(|e| {
++        if e.error.r#type == "NamespaceNotEmptyException" {
++            UcErrorResponse::invalid_argument(e.error.message)
++        } else {
++            uc_err(e)
++        }
++    })
++}
+-- 
+2.43.0
+

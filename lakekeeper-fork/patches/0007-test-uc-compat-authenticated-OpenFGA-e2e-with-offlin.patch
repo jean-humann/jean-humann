@@ -1,0 +1,1128 @@
+From 2c5865add32b089f5c74d350f7affa75eec67c10 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 3 Jul 2026 01:09:58 +0000
+Subject: [PATCH 7/7] test(uc-compat): authenticated OpenFGA e2e with offline
+ OIDC stub
+
+Add an offline OIDC stub (discovery, JWKS, client-credentials tokens)
+so MODE=openfga runs with real Bearer tokens and no external IdP:
+bootstrap-as-admin, owner action sets, 404 existence-masking before
+grants, assignments-API grants, 200-read/403-write after select-only
+grant, function and model spot checks. DuckDB engine test now runs
+offline via the bundled httpfs extension wheel.
+---
+ tests/uc-compat/README.md       |  87 +++++--
+ tests/uc-compat/conftest.py     |  34 ++-
+ tests/uc-compat/oidc_stub.py    | 236 ++++++++++++++++++
+ tests/uc-compat/run.sh          | 132 +++++++---
+ tests/uc-compat/test_authz.py   | 424 +++++++++++++++++++++++++++-----
+ tests/uc-compat/test_volumes.py |  16 +-
+ 6 files changed, 813 insertions(+), 116 deletions(-)
+ create mode 100644 tests/uc-compat/oidc_stub.py
+
+diff --git a/tests/uc-compat/README.md b/tests/uc-compat/README.md
+index e04e9afe..00a15717 100644
+--- a/tests/uc-compat/README.md
++++ b/tests/uc-compat/README.md
+@@ -14,11 +14,14 @@ bash tests/uc-compat/run.sh
+ # only the endpoints that already exist server-side (catalogs/schemas)
+ bash tests/uc-compat/run.sh -m smoke
+ 
+-# openfga stack verification (see "Modes" below)
++# authenticated OpenFGA authz matrix (see "Modes" below)
+ MODE=openfga bash tests/uc-compat/run.sh
+ 
+ # reuse a previously built binary / leave the stack running for debugging
+ SKIP_BUILD=1 KEEP_RUNNING=1 bash tests/uc-compat/run.sh -m smoke
++
++# extra pytest args via env or positionals
++MODE=openfga PYTEST_ARGS="--tb=short" bash tests/uc-compat/run.sh
+ ```
+ 
+ `run.sh` builds `target/debug/lakekeeper` on the host, starts
+@@ -35,20 +38,60 @@ Python dependencies (pinned in the e2e venv; `UC_TEST_PYTHON` to override):
+ 
+ | MODE | authn | authz | what runs |
+ |---|---|---|---|
+-| `allowall` (default) | disabled (anonymous) | `LAKEKEEPER__AUTHZ_BACKEND=allowall` | everything: anonymous bootstrap works, full UC data-plane suite |
+-| `openfga` | disabled (anonymous) | `LAKEKEEPER__AUTHZ_BACKEND=openfga` + gRPC to compose OpenFGA on `localhost:8081` | `test_authz.py` only |
+-
+-**Why MODE=openfga is limited:** the OpenFGA authorizer rejects anonymous
+-bootstrap (`crates/authz-openfga/src/authorizer.rs`: "Anonymous users cannot
+-bootstrap the catalog") and the fork has no dev/test authenticator — real
+-authentication needs an OIDC IdP or Kubernetes tokens. MODE=openfga still
+-proves: `lakekeeper migrate` creates the OpenFGA store and writes the fork's
+-authorization model (incl. new volume/function/model FGA types once v4.8
+-lands), the server serves with `authz-backend=openfga`, and anonymous
+-bootstrap is properly rejected. Supplying `UC_TEST_TOKEN` (external IdP)
+-additionally unlocks creator-owner-relation checks. TODO placeholder: add a
+-keycloak service (realm-import pattern in `tests/docker-compose.yaml`) to run
+-the full matrix hermetically.
++| `allowall` (default) | disabled (anonymous) | `LAKEKEEPER__AUTHZ_BACKEND=allowall` | everything: anonymous bootstrap works, full UC data-plane suite (`test_authz.py` skips) |
++| `openfga` | **enabled** — offline OIDC stub (`oidc_stub.py`, host port 8899) | `LAKEKEEPER__AUTHZ_BACKEND=openfga` + gRPC to compose OpenFGA on `localhost:8081` | `test_authz.py` (authz matrix) by default; `UC_TEST_SUITE=.` runs everything authenticated |
++
++### The offline OIDC stub
++
++`oidc_stub.py` is a threaded stdlib HTTP server (no docker, no egress) that
++implements the three things Lakekeeper's OIDC authentication (limes
++`JWKSWebAuthenticator`) needs: `/.well-known/openid-configuration`
++(`issuer` + `jwks_uri`, fetched once at `serve` startup), `/jwks` (RS256
++public key, generated at stub startup, matched by `kid`), and `/token`
++(`client_credentials` grant → RS256 JWT with `iss`/`sub=<client_id>`/`aud`/
++`exp=now+1h`). run.sh backgrounds it, health-checks the discovery endpoint,
++and points the server at it:
++
++```
++LAKEKEEPER__OPENID_PROVIDER_URI=http://localhost:8899   # idp id "oidc"
++LAKEKEEPER__OPENID_AUDIENCE=lakekeeper
++```
++
++Subjects map to Lakekeeper user ids as `oidc~<sub>` (subject-claim preference
++`oid` then `sub`; the stub only sets `sub`). run.sh mints two machine users
++and bootstraps:
++
++* `admin` → `oidc~admin`: run.sh POSTs `/management/v1/bootstrap` with this
++  token — the **first authenticated caller becomes the global admin** — and
++  the pytest fixtures then create the `uc_e2e` warehouse and all UC objects
++  as admin (creator == OpenFGA owner). Exported as `UC_TEST_TOKEN`.
++* `user2` → `oidc~user2`: a second principal with **no grants**; the tests
++  self-provision it (`POST /management/v1/user`, id extracted from the JWT)
++  and grant it privileges piecemeal. Exported as `UC_TEST_TOKEN_USER2`.
++
++Tests can also mint ad-hoc tokens from a running stub via
++`from oidc_stub import mint_token; mint_token("alice")`.
++
++### Authz matrix (`test_authz.py`, MODE=openfga)
++
++| # | check | expected |
++|---|---|---|
++| 1 | `/management/v1/info` | `authz-backend=openfga` (proves `migrate` wrote the fork's FGA model incl. volume/function/model types) |
++| 2 | anonymous / garbage-token UC request, anonymous bootstrap | `401` (authn middleware fail-closed) |
++| 3 | user2 `POST /management/v1/user {"update-if-exists": true}` | `200/201`, id `oidc~user2`; `whoami` resolves (create-on-first-login; users are NOT auto-registered by arbitrary calls) |
++| 4 | admin `GET .../volume/{id}/authorizer-actions` | exactly `read_assignments, grant_* (pass_grants/manage_grants/describe/select/modify), change_ownership` — creator/owner holds the full grant set |
++| 5 | user2 `GET /volumes/{full_name}` and READ_VOLUME temp-creds pre-grant | `404 NOT_FOUND` UC envelope (existence masking) |
++| 6 | admin `POST .../volume/{id}/assignments` `{"writes": [{"type": "describe", "user": "oidc~user2"}, {"type": "select", "user": "oidc~user2"}]}` | `204`; assignments listing echoes both entries |
++| 7 | user2 volume GET / READ_VOLUME creds post-grant | `200` (vended AWS creds present) |
++| 8 | user2 WRITE_VOLUME creds post-grant | **real** `403 PERMISSION_DENIED` envelope (visible but `select` ≠ `modify`); own authorizer-actions stay empty (describe/select confer no grant powers) |
++| 9 | function: pre-grant `404` → grant `describe` → `200`; admin's authorizer-actions include `grant_execute` | function spot-check incl. execute grant action |
++| 10 | model: pre-grant `404` → grant `describe` → `200` | model spot-check |
++
++Volume `GET`/creds authorize directly on the volume object (`load_and_
++authorize_volume`), so a per-volume grant suffices — no namespace/warehouse
++grants are needed for visibility (the FGA model also inherits
++`describe/select/modify from parent` if you grant at namespace level
++instead).
+ 
+ ## Environment matrix
+ 
+@@ -56,7 +99,11 @@ the full matrix hermetically.
+ |---|---|---|
+ | `UC_TEST_BASE_URL` | `http://localhost:8181` | Lakekeeper base URL |
+ | `UC_TEST_MODE` | `allowall` | `allowall` \| `openfga` (set by run.sh from `MODE`) |
+-| `UC_TEST_TOKEN` | unset | optional bearer token (external IdP) |
++| `UC_TEST_TOKEN` | unset | admin bearer token (minted from the OIDC stub by run.sh in MODE=openfga) |
++| `UC_TEST_TOKEN_USER2` | unset | second-principal token (`oidc~user2`, no grants) |
++| `UC_TEST_SUITE` | `test_authz.py` | MODE=openfga only: pytest target(s) relative to `tests/uc-compat` |
++| `PYTEST_ARGS` | unset | extra pytest args (both modes), e.g. `--tb=short` |
++| `OIDC_PORT` / `OIDC_AUDIENCE` | `8899` / `lakekeeper` | OIDC stub listen port and token audience (MODE=openfga) |
+ | `UC_TEST_S3_ENDPOINT` | `http://localhost:9000` | MinIO S3+STS endpoint |
+ | `UC_TEST_S3_BUCKET` | `uc-e2e` | test bucket (created by `minio-init`) |
+ | `UC_TEST_S3_KEY_PREFIX` | `warehouse` | warehouse key prefix in the bucket |
+@@ -83,7 +130,8 @@ downscoped semantics — as an intersection with an IAM user's policy.
+ | `test_volumes.py` | volume CRUD (MANAGED location generation, EXTERNAL location validation), pagination, PATCH comment / rename rejected, 409 conflict, delete→`{}`→404; `temporary-volume-credentials` shape; **engines**: boto3 put/get with vended creds, read-only downscoping (best-effort), DuckDB httpfs reads volume parquet with vended keys |
+ | `test_functions.py` | **unitycatalog-ai** `create_python_function` → get/list → local `execute_function`; **LangChain** `UCFunctionToolkit` tool direct invocation (no LLM); **OpenAI** toolkit JSON-schema generation (no API call); raw-SDK round-trip fidelity (`routine_definition`, `input_params` positions), no PATCH endpoint, 404 mapping |
+ | `test_models.py` | registered-model CRUD; **MLflow-style flow**: version PENDING → READ_WRITE creds → boto3 artifact upload → finalize READY → READ_WRITE rejected → READ creds download; version auto-increment; delete-with-versions guard |
+-| `test_authz.py` (`-m authz`, MODE=openfga) | openfga backend live, FGA store/model migration, anonymous-bootstrap rejection; owner-relation checks behind `UC_TEST_TOKEN` |
++| `test_authz.py` (`-m authz`, MODE=openfga) | authenticated OpenFGA authz matrix (see table above): fail-closed authn, user provisioning, owner grant set, existence masking, assignments-based grants, downscoped 403, function/model spot-checks |
++| `oidc_stub.py` | not a test file — the offline OIDC IdP used by MODE=openfga (also runnable standalone: `python oidc_stub.py --port 8899`) |
+ 
+ ## Notes / known constraints
+ 
+@@ -91,7 +139,8 @@ downscoped semantics — as an intersection with an IAM user's policy.
+   client inside a running loop); `conftest.UcSdk` runs a dedicated
+   background event loop. unitycatalog-ai's sync facade is bridged via
+   `uc_ai` (nest_asyncio inside `run_until_complete`) — see conftest docstring.
+-* The DuckDB test needs the `httpfs` extension; it skips cleanly if the
+-  extension cannot be downloaded in an offline environment.
++* The DuckDB test needs the `httpfs` extension; it prefers the
++  `duckdb-extension-httpfs` wheel (bundled, offline-friendly), falls back to
++  the online `INSTALL httpfs`, and skips cleanly if neither is available.
+ * Volumes/functions/models endpoints are being implemented concurrently
+   (design phases B-D); until they land only `-m smoke` passes.
+diff --git a/tests/uc-compat/conftest.py b/tests/uc-compat/conftest.py
+index 064998ae..d371cb06 100644
+--- a/tests/uc-compat/conftest.py
++++ b/tests/uc-compat/conftest.py
+@@ -37,9 +37,13 @@ BASE_URL = os.environ.get("UC_TEST_BASE_URL", "http://localhost:8181").rstrip("/
+ UC_HOST = f"{BASE_URL}/api/2.1/unity-catalog"
+ MANAGEMENT_URL = f"{BASE_URL}/management"
+ MODE = os.environ.get("UC_TEST_MODE", "allowall")
+-# Optional bearer token (only meaningful when the server runs with an IdP;
+-# the default e2e stack is anonymous).
++# Bearer tokens. MODE=allowall runs anonymously (both unset). MODE=openfga:
++# run.sh boots the offline OIDC stub (oidc_stub.py) and exports
++# UC_TEST_TOKEN (machine user `admin`, the bootstrapping global admin) and
++# UC_TEST_TOKEN_USER2 (machine user `user2`, no grants — the authz matrix
++# grants it volume/function/model privileges piecemeal).
+ TOKEN = os.environ.get("UC_TEST_TOKEN") or None
++TOKEN_USER2 = os.environ.get("UC_TEST_TOKEN_USER2") or None
+ 
+ S3_ENDPOINT = os.environ.get("UC_TEST_S3_ENDPOINT", "http://localhost:9000")
+ S3_REGION = os.environ.get("UC_TEST_S3_REGION", "local")
+@@ -299,6 +303,32 @@ def server() -> Server:
+     client.close()
+ 
+ 
++@pytest.fixture(scope="session")
++def user2_client(server) -> httpx.Client:
++    """httpx client authenticated as the second principal (`oidc~user2`).
++
++    user2 holds NO grants initially; the authz matrix tests grant privileges
++    to it step by step. Skips when run.sh did not provide the token.
++    """
++    if not TOKEN_USER2:
++        pytest.skip("needs UC_TEST_TOKEN_USER2 (exported by run.sh MODE=openfga)")
++    client = httpx.Client(
++        base_url=BASE_URL,
++        headers={"Authorization": f"Bearer {TOKEN_USER2}"},
++        timeout=30.0,
++    )
++    yield client
++    client.close()
++
++
++@pytest.fixture(scope="session")
++def anon_client(server) -> httpx.Client:
++    """httpx client with NO Authorization header (anonymous caller)."""
++    client = httpx.Client(base_url=BASE_URL, timeout=30.0)
++    yield client
++    client.close()
++
++
+ @pytest.fixture(scope="session")
+ def warehouse(server: Server) -> dict:
+     """Ensure the `uc_e2e` warehouse exists in the default project.
+diff --git a/tests/uc-compat/oidc_stub.py b/tests/uc-compat/oidc_stub.py
+new file mode 100644
+index 00000000..04238b3f
+--- /dev/null
++++ b/tests/uc-compat/oidc_stub.py
+@@ -0,0 +1,236 @@
++"""Tiny offline OIDC identity-provider stub for the uc-compat e2e suite.
++
++Lakekeeper's OIDC authentication (limes ``JWKSWebAuthenticator``) only needs
++three things from an IdP:
++
++  * ``{issuer}/.well-known/openid-configuration`` with ``issuer`` + ``jwks_uri``
++    (fetched once at server startup, ``require_connected_on_startup=true``);
++  * the JWKS document with the RS256 public key (matched by ``kid``);
++  * RS256-signed JWTs carrying ``iss``/``aud``/``exp`` and a subject claim
++    (Lakekeeper prefers ``oid``, falls back to ``sub``).
++
++This stub serves exactly that from a threaded stdlib HTTP server with an RSA
++keypair generated at startup — no docker image, no network egress, no
++keycloak. Machine users are minted via the standard ``client_credentials``
++grant: ``POST /token`` with ``client_id=<sub>`` returns a Bearer JWT whose
++``sub`` is the client id (Lakekeeper user id ``oidc~<sub>``).
++
++Usage:
++  * standalone:  python oidc_stub.py [--port 8899] [--audience lakekeeper]
++    (prints a ready line; SIGTERM/SIGINT to stop — run.sh backgrounds it and
++    health-checks the discovery endpoint);
++  * from tests:  ``from oidc_stub import mint_token`` — requests a token from
++    a *running* stub over HTTP, so tests and the run.sh-launched stub share
++    one signing key without persisting it anywhere.
++
++Dependencies: ``pyjwt`` + ``cryptography`` (pip-installed into the e2e venv).
++"""
++
++from __future__ import annotations
++
++import argparse
++import base64
++import json
++import os
++import signal
++import sys
++import threading
++import time
++import urllib.parse
++import urllib.request
++from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
++
++DEFAULT_PORT = int(os.environ.get("OIDC_STUB_PORT", "8899"))
++DEFAULT_AUDIENCE = os.environ.get("OIDC_STUB_AUDIENCE", "lakekeeper")
++KEY_ID = "uc-e2e-rs256-key"
++TOKEN_TTL_SECONDS = 3600
++
++
++def _b64url_uint(n: int) -> str:
++    raw = n.to_bytes((n.bit_length() + 7) // 8, "big")
++    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
++
++
++class OidcStub:
++    """RSA keypair + JWT minting + the three OIDC documents."""
++
++    def __init__(self, issuer: str, default_audience: str = DEFAULT_AUDIENCE):
++        from cryptography.hazmat.primitives import serialization
++        from cryptography.hazmat.primitives.asymmetric import rsa
++
++        self.issuer = issuer.rstrip("/")
++        self.default_audience = default_audience
++        self._private_key = rsa.generate_private_key(
++            public_exponent=65537, key_size=2048
++        )
++        self._private_pem = self._private_key.private_bytes(
++            serialization.Encoding.PEM,
++            serialization.PrivateFormat.PKCS8,
++            serialization.NoEncryption(),
++        )
++        public_numbers = self._private_key.public_key().public_numbers()
++        self.jwks = {
++            "keys": [
++                {
++                    "kty": "RSA",
++                    "use": "sig",
++                    "alg": "RS256",
++                    "kid": KEY_ID,
++                    "n": _b64url_uint(public_numbers.n),
++                    "e": _b64url_uint(public_numbers.e),
++                }
++            ]
++        }
++
++    @property
++    def discovery(self) -> dict:
++        return {
++            "issuer": self.issuer,
++            "jwks_uri": f"{self.issuer}/jwks",
++            "token_endpoint": f"{self.issuer}/token",
++            "response_types_supported": ["token"],
++            "grant_types_supported": ["client_credentials"],
++            "id_token_signing_alg_values_supported": ["RS256"],
++        }
++
++    def mint(
++        self,
++        sub: str,
++        aud: str | None = None,
++        oid: str | None = None,
++        ttl: int = TOKEN_TTL_SECONDS,
++    ) -> str:
++        """RS256 JWT for machine user ``sub`` (Lakekeeper user id ``oidc~<sub>``)."""
++        import jwt as pyjwt
++
++        now = int(time.time())
++        claims = {
++            "iss": self.issuer,
++            "sub": sub,
++            "aud": aud or self.default_audience,
++            "iat": now,
++            "exp": now + ttl,
++            # Cosmetic claims so self-provisioning picks up a display name.
++            "name": sub,
++            "preferred_username": sub,
++        }
++        if oid is not None:
++            claims["oid"] = oid
++        return pyjwt.encode(
++            claims, self._private_pem, algorithm="RS256", headers={"kid": KEY_ID}
++        )
++
++
++def _make_handler(stub: OidcStub):
++    class Handler(BaseHTTPRequestHandler):
++        def _json(self, status: int, body: dict):
++            data = json.dumps(body).encode()
++            self.send_response(status)
++            self.send_header("Content-Type", "application/json")
++            self.send_header("Content-Length", str(len(data)))
++            self.end_headers()
++            self.wfile.write(data)
++
++        def do_GET(self):  # noqa: N802 (http.server API)
++            path = self.path.split("?", 1)[0].rstrip("/")
++            if path == "/.well-known/openid-configuration":
++                self._json(200, stub.discovery)
++            elif path == "/jwks":
++                self._json(200, stub.jwks)
++            else:
++                self._json(404, {"error": "not_found", "path": self.path})
++
++        def do_POST(self):  # noqa: N802
++            path = self.path.split("?", 1)[0].rstrip("/")
++            if path != "/token":
++                self._json(404, {"error": "not_found", "path": self.path})
++                return
++            length = int(self.headers.get("Content-Length") or 0)
++            form = urllib.parse.parse_qs(self.rfile.read(length).decode())
++            grant_type = form.get("grant_type", [""])[0]
++            client_id = form.get("client_id", [""])[0]
++            if grant_type != "client_credentials":
++                self._json(400, {"error": "unsupported_grant_type"})
++                return
++            if not client_id:
++                self._json(400, {"error": "invalid_request",
++                                 "error_description": "client_id is required"})
++                return
++            token = stub.mint(
++                sub=client_id,
++                aud=form.get("audience", [None])[0],
++                oid=form.get("oid", [None])[0],
++            )
++            self._json(200, {
++                "access_token": token,
++                "token_type": "Bearer",
++                "expires_in": TOKEN_TTL_SECONDS,
++            })
++
++        def log_message(self, fmt, *args):  # quiet unless OIDC_STUB_VERBOSE
++            if os.environ.get("OIDC_STUB_VERBOSE"):
++                sys.stderr.write("oidc-stub: " + fmt % args + "\n")
++
++    return Handler
++
++
++def mint_token(
++    sub: str,
++    aud: str = DEFAULT_AUDIENCE,
++    issuer: str | None = None,
++    timeout: float = 10.0,
++) -> str:
++    """Get a Bearer token for ``sub`` from a RUNNING stub (client_credentials).
++
++    Importable by conftest/tests. Goes over HTTP so the token is signed with
++    the key held by the stub process run.sh started (proxy env is bypassed —
++    the stub is always on localhost).
++    """
++    issuer = (issuer or os.environ.get(
++        "OIDC_STUB_ISSUER", f"http://localhost:{DEFAULT_PORT}")).rstrip("/")
++    body = urllib.parse.urlencode(
++        {"grant_type": "client_credentials", "client_id": sub, "audience": aud}
++    ).encode()
++    req = urllib.request.Request(
++        f"{issuer}/token", data=body,
++        headers={"Content-Type": "application/x-www-form-urlencoded"},
++    )
++    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
++    with opener.open(req, timeout=timeout) as resp:
++        return json.loads(resp.read())["access_token"]
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
++    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
++    parser.add_argument("--host", default="127.0.0.1")
++    parser.add_argument("--audience", default=DEFAULT_AUDIENCE)
++    parser.add_argument(
++        "--issuer", default=None,
++        help="issuer URL in discovery/tokens (default http://localhost:<port>)",
++    )
++    args = parser.parse_args()
++
++    issuer = args.issuer or f"http://localhost:{args.port}"
++    stub = OidcStub(issuer=issuer, default_audience=args.audience)
++    server = ThreadingHTTPServer((args.host, args.port), _make_handler(stub))
++    server.daemon_threads = True
++
++    stop = threading.Event()
++    for sig in (signal.SIGTERM, signal.SIGINT):
++        signal.signal(sig, lambda *_: stop.set())
++
++    thread = threading.Thread(target=server.serve_forever, daemon=True)
++    thread.start()
++    print(
++        f"oidc-stub ready: issuer={issuer} audience={args.audience} "
++        f"discovery={issuer}/.well-known/openid-configuration",
++        flush=True,
++    )
++    stop.wait()
++    server.shutdown()
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/tests/uc-compat/run.sh b/tests/uc-compat/run.sh
+index 0343e011..8181e2e2 100755
+--- a/tests/uc-compat/run.sh
++++ b/tests/uc-compat/run.sh
+@@ -8,12 +8,16 @@
+ # Usage:
+ #   bash tests/uc-compat/run.sh [extra pytest args...]
+ #   MODE=allowall bash tests/uc-compat/run.sh -m smoke     # catalogs/schemas only
+-#   MODE=openfga  bash tests/uc-compat/run.sh              # stack-level authz checks
++#   MODE=openfga  bash tests/uc-compat/run.sh              # authenticated authz matrix
+ #
+ # Environment knobs:
+ #   MODE          allowall (default) | openfga
+ #   SKIP_BUILD=1  don't run `cargo build -p lakekeeper-bin`
+-#   KEEP_RUNNING=1  leave the compose stack + server up after the run
++#   KEEP_RUNNING=1  leave the compose stack + server + oidc stub up after the run
++#   PYTEST_ARGS   extra pytest args (word-split), e.g. PYTEST_ARGS="--tb=short"
++#   UC_TEST_SUITE MODE=openfga only: pytest target(s) relative to this dir
++#                 (default test_authz.py; "." runs every suite authenticated)
++#   OIDC_PORT / OIDC_AUDIENCE  OIDC stub port (8899) / token audience (lakekeeper)
+ #   UC_TEST_PYTHON  python interpreter with test deps (unitycatalog-client
+ #                   0.4.1, unitycatalog-ai 0.4.0, boto3, duckdb, pytest, ...).
+ #                   Defaults to the e2e venv next to the repo checkout if it
+@@ -28,25 +32,20 @@
+ #     surface (catalogs/schemas/volumes/functions/models/temp-credentials)
+ #     is exercised end-to-end.
+ #
+-# * MODE=openfga (stack verification + placeholder):
++# * MODE=openfga (authenticated authz matrix):
+ #     LAKEKEEPER__AUTHZ_BACKEND=openfga against the compose OpenFGA (gRPC on
+ #     localhost:8081). `lakekeeper migrate` creates the OpenFGA store and
+-#     writes the authorization model — this run therefore proves the fork's
+-#     FGA model (incl. any new volume/function/model types) is accepted by
+-#     OpenFGA and that the server serves with the openfga backend.
+-#     HOWEVER: the OpenFGA authorizer rejects anonymous bootstrap
+-#     ("Anonymous users cannot bootstrap the catalog",
+-#     crates/authz-openfga/src/authorizer.rs), and this fork has no dev/test
+-#     authenticator — authentication requires a real OIDC IdP or Kubernetes
+-#     tokens. So with authentication disabled the data-plane suite CANNOT run
+-#     in this mode. MODE=openfga runs only test_authz.py, which asserts:
+-#       - /management/v1/info reports authz-backend=openfga
+-#       - anonymous bootstrap is rejected with 4xx (403)
+-#       - (when UC_TEST_TOKEN is provided by an external IdP setup) owner
+-#         relations / authorizer-actions on created UC objects.
+-#     TODO(placeholder): add a keycloak service (see tests/docker-compose.yaml
+-#     for the realm import pattern) and an OIDC token fixture to unlock the
+-#     full authz matrix; until then allowall is the supported full path.
++#     writes the fork's authorization model (incl. the new
++#     volume/function/model FGA types). Authentication is enabled against a
++#     tiny OFFLINE OIDC stub (oidc_stub.py, host port 8899): the stub serves
++#     the discovery document + RS256 JWKS and mints client_credentials JWTs.
++#     run.sh mints two machine-user tokens (sub=admin, sub=user2), bootstraps
++#     the catalog as `admin` (the first authenticated caller becomes the
++#     global admin, users oidc~admin / oidc~user2), and exports
++#     UC_TEST_TOKEN/UC_TEST_TOKEN_USER2 for pytest. By default only
++#     test_authz.py runs in this mode (the CRUD suites are MODE=allowall's
++#     job); set UC_TEST_SUITE to override, e.g.
++#       MODE=openfga UC_TEST_SUITE=. bash tests/uc-compat/run.sh
+ set -euo pipefail
+ 
+ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+@@ -85,15 +84,18 @@ fi
+ RUN_DIR="${SCRIPT_DIR}/.run"
+ mkdir -p "${RUN_DIR}"
+ SERVER_PID=""
++OIDC_PID=""
+ cleanup() {
+     if [ "${KEEP_RUNNING:-0}" = "1" ]; then
+-        echo "KEEP_RUNNING=1 — leaving stack up (server pid: ${SERVER_PID:-n/a})" >&2
++        echo "KEEP_RUNNING=1 — leaving stack up (server pid: ${SERVER_PID:-n/a}, oidc-stub pid: ${OIDC_PID:-n/a})" >&2
+         return
+     fi
+-    if [ -n "${SERVER_PID}" ] && kill -0 "${SERVER_PID}" 2>/dev/null; then
+-        kill "${SERVER_PID}" 2>/dev/null || true
+-        wait "${SERVER_PID}" 2>/dev/null || true
+-    fi
++    for pid in "${SERVER_PID}" "${OIDC_PID}"; do
++        if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
++            kill "${pid}" 2>/dev/null || true
++            wait "${pid}" 2>/dev/null || true
++        fi
++    done
+     "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
+ }
+ trap cleanup EXIT
+@@ -129,16 +131,47 @@ export LAKEKEEPER__LISTEN_PORT="${LAKEKEEPER__LISTEN_PORT:-8181}"
+ # published S3 port on the host network.
+ export LAKEKEEPER__METRICS_PORT="${LAKEKEEPER__METRICS_PORT:-9090}"
+ export RUST_LOG="${RUST_LOG:-info,lakekeeper=debug}"
+-# Authentication stays DISABLED in both modes (no OPENID_PROVIDER_URI, no
+-# kubernetes authn): requests are anonymous.
+ export LAKEKEEPER__ENABLE_KUBERNETES_AUTHENTICATION=false
+-unset LAKEKEEPER__OPENID_PROVIDER_URI || true
++
++OIDC_PORT="${OIDC_PORT:-8899}"
++OIDC_ISSUER="http://localhost:${OIDC_PORT}"
++OIDC_AUDIENCE="${OIDC_AUDIENCE:-lakekeeper}"
++UC_TEST_TOKEN=""
++UC_TEST_TOKEN_USER2=""
+ 
+ if [ "$MODE" = "openfga" ]; then
+     export LAKEKEEPER__AUTHZ_BACKEND=openfga
+     export LAKEKEEPER__OPENFGA__ENDPOINT="http://localhost:8081"
++
++    # ── Offline OIDC stub: authentication for the authz matrix ──────────────
++    # Single-provider config (idp id "oidc" → user ids `oidc~<sub>`); limes
++    # fetches ${OIDC_ISSUER}/.well-known/openid-configuration at startup, so
++    # the stub must be up BEFORE `lakekeeper serve`.
++    "${UC_TEST_PYTHON}" "${SCRIPT_DIR}/oidc_stub.py" \
++        --port "${OIDC_PORT}" --audience "${OIDC_AUDIENCE}" \
++        >"${RUN_DIR}/oidc-stub.log" 2>&1 &
++    OIDC_PID=$!
++    wait_for oidc-stub curl -sf "${OIDC_ISSUER}/.well-known/openid-configuration" || {
++        echo "--- oidc-stub.log ---" >&2
++        cat "${RUN_DIR}/oidc-stub.log" >&2
++        exit 1
++    }
++
++    export LAKEKEEPER__OPENID_PROVIDER_URI="${OIDC_ISSUER}"
++    export LAKEKEEPER__OPENID_AUDIENCE="${OIDC_AUDIENCE}"
++
++    mint_token() { # <sub>
++        curl -sf -X POST "${OIDC_ISSUER}/token" \
++            -d "grant_type=client_credentials&client_id=$1&audience=${OIDC_AUDIENCE}" \
++            | "${UC_TEST_PYTHON}" -c 'import sys, json; print(json.load(sys.stdin)["access_token"])'
++    }
++    UC_TEST_TOKEN="$(mint_token admin)"
++    UC_TEST_TOKEN_USER2="$(mint_token user2)"
+ else
++    # Authentication stays DISABLED (no OPENID_PROVIDER_URI, no kubernetes
++    # authn): requests are anonymous, allowed by the AllowAll authorizer.
+     export LAKEKEEPER__AUTHZ_BACKEND=allowall
++    unset LAKEKEEPER__OPENID_PROVIDER_URI || true
+ fi
+ 
+ # ── Migrate + serve ──────────────────────────────────────────────────────────
+@@ -155,16 +188,55 @@ wait_for lakekeeper curl -sf "http://localhost:${LAKEKEEPER__LISTEN_PORT}/health
+     exit 1
+ }
+ 
++BASE_URL="http://localhost:${LAKEKEEPER__LISTEN_PORT}"
++
++if [ "$MODE" = "openfga" ]; then
++    # ── Bootstrap as `admin` ─────────────────────────────────────────────────
++    # POST /management/v1/bootstrap: the FIRST authenticated caller becomes
++    # the initial global admin (server `admin` relation in OpenFGA) and is
++    # provisioned as user `oidc~admin`. Idempotent across KEEP_RUNNING reruns:
++    # tolerate failure iff the server already reports bootstrapped=true.
++    BOOTSTRAP_STATUS=$(curl -s -o "${RUN_DIR}/bootstrap.json" -w '%{http_code}' \
++        -X POST "${BASE_URL}/management/v1/bootstrap" \
++        -H "Authorization: Bearer ${UC_TEST_TOKEN}" \
++        -H "Content-Type: application/json" \
++        -d '{"accept-terms-of-use": true}')
++    if [ "${BOOTSTRAP_STATUS}" -ge 300 ]; then
++        ALREADY=$(curl -sf "${BASE_URL}/management/v1/info" \
++            -H "Authorization: Bearer ${UC_TEST_TOKEN}" \
++            | "${UC_TEST_PYTHON}" -c 'import sys, json; print(json.load(sys.stdin).get("bootstrapped"))')
++        if [ "${ALREADY}" != "True" ]; then
++            echo "Bootstrap as admin failed (HTTP ${BOOTSTRAP_STATUS}):" >&2
++            cat "${RUN_DIR}/bootstrap.json" >&2
++            exit 1
++        fi
++        echo "Server already bootstrapped — continuing." >&2
++    else
++        echo "Bootstrapped catalog as user oidc~admin (HTTP ${BOOTSTRAP_STATUS})." >&2
++    fi
++    # The uc_e2e warehouse is created by the pytest `warehouse` fixture using
++    # the admin token (creator == owner in OpenFGA).
++fi
++
+ # ── Pytest ───────────────────────────────────────────────────────────────────
+ export UC_TEST_MODE="${MODE}"
+-export UC_TEST_BASE_URL="http://localhost:${LAKEKEEPER__LISTEN_PORT}"
++export UC_TEST_BASE_URL="${BASE_URL}"
+ export UC_TEST_S3_ENDPOINT="http://localhost:9000"
++if [ "$MODE" = "openfga" ]; then
++    export UC_TEST_TOKEN
++    export UC_TEST_TOKEN_USER2
++fi
+ 
++# Extra pytest args: PYTEST_ARGS env (word-split on purpose) + positional args.
++# shellcheck disable=SC2086
+ set +e
+ if [ "$MODE" = "openfga" ]; then
+-    "${UC_TEST_PYTHON}" -m pytest "${SCRIPT_DIR}/test_authz.py" -v "$@"
++    # Authz matrix only by default — the CRUD suites are MODE=allowall's job.
++    # UC_TEST_SUITE (path(s) relative to tests/uc-compat) overrides.
++    SUITE="${UC_TEST_SUITE:-test_authz.py}"
++    (cd "${SCRIPT_DIR}" && "${UC_TEST_PYTHON}" -m pytest ${SUITE} -v ${PYTEST_ARGS:-} "$@")
+ else
+-    "${UC_TEST_PYTHON}" -m pytest "${SCRIPT_DIR}" -v "$@"
++    "${UC_TEST_PYTHON}" -m pytest "${SCRIPT_DIR}" -v ${PYTEST_ARGS:-} "$@"
+ fi
+ STATUS=$?
+ set -e
+diff --git a/tests/uc-compat/test_authz.py b/tests/uc-compat/test_authz.py
+index d05aa6e8..a4923892 100644
+--- a/tests/uc-compat/test_authz.py
++++ b/tests/uc-compat/test_authz.py
+@@ -1,26 +1,38 @@
+-"""AuthZ checks for MODE=openfga. Skipped entirely under MODE=allowall.
+-
+-Reality of this stack (see run.sh header): the OpenFGA authorizer rejects
+-anonymous bootstrap and the fork ships no dev/test authenticator, so without
+-an IdP (keycloak — placeholder, not yet in the compose file) the data-plane
+-suite cannot run against the openfga backend. What IS covered here:
+-
+-  1. the server actually runs with authz-backend=openfga (which also proves
+-     `lakekeeper migrate` successfully created the OpenFGA store and wrote
+-     the fork's authorization model, incl. new UC object types);
+-  2. anonymous bootstrap is rejected (the documented failure mode);
+-  3. when a real bearer token IS available (UC_TEST_TOKEN, external IdP),
+-     creator-owner semantics: the volume creator holds the full authorizer
+-     action set via /management/v1/permissions/warehouse/{wh}/volume/{vol}/
+-     authorizer-actions, and a permissions read endpoint exists.
+-
+-The deep allow/deny matrix needs multiple authenticated principals and is
+-out of scope until the keycloak service lands.
++"""Authenticated OpenFGA authz matrix over the UC surface (MODE=openfga only).
++
++run.sh boots the offline OIDC stub (oidc_stub.py), enables authentication via
++LAKEKEEPER__OPENID_PROVIDER_URI, bootstraps the catalog as machine user
++`admin` (first authenticated caller -> global admin, user id `oidc~admin`)
++and exports two client-credentials tokens:
++
++  * UC_TEST_TOKEN        sub=admin  — global admin; the conftest `server` /
++                         `warehouse` / `uc` fixtures act as this principal,
++                         so every UC object created below is OWNED by admin;
++  * UC_TEST_TOKEN_USER2  sub=user2  — a second principal with NO grants.
++
++What is proven here (via the UC API + /management/v1/permissions/*):
++
++  1. server runs with authz-backend=openfga (FGA store + fork model migrated);
++  2. anonymous requests are rejected (401 — no token, middleware fail-closed);
++  3. user2 self-provisions via POST /management/v1/user (create-on-first-login
++     semantics: id extracted from the JWT -> `oidc~user2`);
++  4. creator/owner holds the full grant-action set on a volume it created
++     (authorizer-actions endpoint);
++  5. existence masking: user2 gets 404 (NOT_FOUND envelope) for admin's
++     volume/function/model and volume temp-credentials before any grant;
++  6. POST .../assignments {"writes": [{"type": "<relation>", "user":
++     "oidc~user2"}]} grants describe/select — after which user2 can GET the
++     volume (200) and obtain READ_VOLUME creds (200), but WRITE_VOLUME creds
++     fail with a REAL 403 PERMISSION_DENIED UC envelope (visible, not masked:
++     select grants can_read_data, not can_write_data);
++  7. function + model spot-checks incl. the execute grant-action listing.
++
++Everything skips cleanly under MODE=allowall.
+ """
+ 
+ import pytest
+ 
+-from conftest import MODE, TOKEN, unique_name
++from conftest import MODE, TOKEN, TOKEN_USER2, unique_name
+ 
+ pytestmark = [
+     pytest.mark.authz,
+@@ -28,58 +40,342 @@ pytestmark = [
+         MODE != "openfga",
+         reason="authz tests only run with UC_TEST_MODE=openfga",
+     ),
++    pytest.mark.skipif(
++        MODE == "openfga" and not TOKEN,
++        reason="MODE=openfga needs UC_TEST_TOKEN (run via tests/uc-compat/run.sh)",
++    ),
+ ]
+ 
++UC = "/api/2.1/unity-catalog"
++USER2_ID = "oidc~user2"
++# The OpenFGA authorizer-actions endpoints expose the *grant management*
++# action set (crates/authz-openfga/src/relations.rs `OpenFGA*Action`), in
++# line with the upstream table/view permission endpoints.
++OWNER_GRANT_ACTIONS = {
++    "read_assignments",
++    "grant_pass_grants",
++    "grant_manage_grants",
++    "grant_describe",
++    "grant_select",
++    "grant_modify",
++    "change_ownership",
++}
++
++
++def perms(warehouse_id: str, entity: str, entity_id: str, tail: str) -> str:
++    return (
++        f"/management/v1/permissions/warehouse/{warehouse_id}"
++        f"/{entity}/{entity_id}/{tail}"
++    )
++
++
++def assert_uc_envelope(resp, status: int, error_code: str):
++    assert resp.status_code == status, (
++        f"expected HTTP {status}, got {resp.status_code}: {resp.text}"
++    )
++    body = resp.json()
++    assert body.get("error_code") == error_code, (
++        f"expected UC error_code={error_code}, got: {resp.text}"
++    )
++
++
++def grant(admin_client, warehouse_id, entity, entity_id, relations, user=USER2_ID):
++    """POST an assignments update; relations are FGA relation names."""
++    resp = admin_client.post(
++        perms(warehouse_id, entity, entity_id, "assignments"),
++        json={
++            "writes": [{"type": rel, "user": user} for rel in relations],
++            "deletes": [],
++        },
++    )
++    assert resp.status_code == 204, f"grant {relations} failed: {resp.text}"
++
++
++# ─────────────────────────────────────────────────────────────────────────────
++# Fixtures: user2 provisioning + admin-owned UC objects
++# ─────────────────────────────────────────────────────────────────────────────
++
++
++@pytest.fixture(scope="session")
++def user2(user2_client) -> str:
++    """Provision `oidc~user2` (self-service, id extracted from the JWT).
++
++    Users are NOT auto-registered on arbitrary authenticated calls — the
++    documented flow (docs/docs/authentication.md) is create-user-on-first-
++    login: POST /management/v1/user without an id self-provisions the caller.
++    """
++    resp = user2_client.post(
++        "/management/v1/user", json={"update-if-exists": True}
++    )
++    assert resp.status_code in (200, 201), f"user2 self-provision: {resp.text}"
++    assert resp.json()["id"] == USER2_ID
++    # whoami now resolves the provisioned user.
++    who = user2_client.get("/management/v1/whoami")
++    assert who.status_code == 200, who.text
++    assert who.json()["id"] == USER2_ID
++    return USER2_ID
++
++
++@pytest.fixture(scope="module")
++def authz_schema(server, warehouse) -> dict:
++    """A module-scoped schema owned by admin (server.client carries the
++    admin token in MODE=openfga)."""
++    name = unique_name("authz_sch")
++    resp = server.client.post(
++        f"{UC}/schemas", json={"name": name, "catalog_name": warehouse["name"]}
++    )
++    assert resp.status_code == 200, resp.text
++    yield {"name": name, "catalog_name": warehouse["name"]}
++    server.client.delete(
++        f"{UC}/schemas/{warehouse['name']}.{name}", params={"force": True}
++    )
++
++
++@pytest.fixture(scope="module")
++def admin_volume(server, authz_schema) -> dict:
++    name = unique_name("vol")
++    resp = server.client.post(
++        f"{UC}/volumes",
++        json={
++            "catalog_name": authz_schema["catalog_name"],
++            "schema_name": authz_schema["name"],
++            "name": name,
++            "volume_type": "MANAGED",
++        },
++    )
++    assert resp.status_code == 200, resp.text
++    info = resp.json()
++    full_name = f"{authz_schema['catalog_name']}.{authz_schema['name']}.{name}"
++    yield {"full_name": full_name, "volume_id": info["volume_id"]}
++    server.client.delete(f"{UC}/volumes/{full_name}")
++
++
++@pytest.fixture(scope="module")
++def admin_function(server, authz_schema) -> dict:
++    name = unique_name("fn")
++    # The 14 required CreateFunction fields (uc-api-contract.md §4).
++    function_info = {
++        "name": name,
++        "catalog_name": authz_schema["catalog_name"],
++        "schema_name": authz_schema["name"],
++        "input_params": {"parameters": []},
++        "data_type": "INT",
++        "full_data_type": "INT",
++        "routine_body": "EXTERNAL",
++        "routine_definition": "return 42",
++        "parameter_style": "S",
++        "is_deterministic": True,
++        "sql_data_access": "NO_SQL",
++        "is_null_call": False,
++        "security_type": "DEFINER",
++        "specific_name": name,
++        "external_language": "PYTHON",
++    }
++    resp = server.client.post(f"{UC}/functions", json={"function_info": function_info})
++    assert resp.status_code == 200, resp.text
++    info = resp.json()
++    full_name = f"{authz_schema['catalog_name']}.{authz_schema['name']}.{name}"
++    yield {"full_name": full_name, "function_id": info["function_id"]}
++    server.client.delete(f"{UC}/functions/{full_name}")
++
++
++@pytest.fixture(scope="module")
++def admin_model(server, authz_schema) -> dict:
++    name = unique_name("mdl")
++    resp = server.client.post(
++        f"{UC}/models",
++        json={
++            "name": name,
++            "catalog_name": authz_schema["catalog_name"],
++            "schema_name": authz_schema["name"],
++        },
++    )
++    assert resp.status_code == 200, resp.text
++    info = resp.json()
++    full_name = f"{authz_schema['catalog_name']}.{authz_schema['name']}.{name}"
++    yield {"full_name": full_name, "model_id": info["id"]}
++    server.client.delete(f"{UC}/models/{full_name}")
++
++
++# ─────────────────────────────────────────────────────────────────────────────
++# 1+2: backend + fail-closed authentication
++# ─────────────────────────────────────────────────────────────────────────────
++
+ 
+ def test_server_uses_openfga_backend(server):
+     assert server.info.get("authz-backend") == "openfga"
+ 
+ 
+-def test_anonymous_bootstrap_is_rejected(server):
+-    if TOKEN:
+-        pytest.skip("token supplied; anonymous-rejection check not applicable")
+-    if server.bootstrapped:
+-        pytest.skip("server already bootstrapped by an authenticated principal")
+-    assert server.bootstrap_error is not None
+-    status = int(server.bootstrap_error.split(":", 1)[0])
+-    assert 400 <= status < 500
+-
+-
+-@pytest.mark.skipif(
+-    not TOKEN,
+-    reason="needs an authenticated principal (UC_TEST_TOKEN via external IdP); "
+-    "keycloak service is a TODO placeholder in this stack",
+-)
+-class TestOwnerRelations:
+-    def test_volume_creator_gets_full_action_set(self, server, uc, warehouse, schema):
+-        from unitycatalog.client.models import CreateVolumeRequestContent, VolumeType
+-
+-        vol = uc.run(
+-            uc.volumes.create_volume(
+-                CreateVolumeRequestContent(
+-                    catalog_name=schema["catalog_name"],
+-                    schema_name=schema["name"],
+-                    name=unique_name("vol"),
+-                    volume_type=VolumeType.MANAGED,
+-                )
+-            )
++def test_anonymous_uc_request_rejected(anon_client):
++    # No token at all: the authn middleware rejects before any handler runs.
++    resp = anon_client.get(f"{UC}/catalogs")
++    assert resp.status_code == 401, resp.text
++
++
++def test_anonymous_bootstrap_rejected(anon_client):
++    resp = anon_client.post(
++        "/management/v1/bootstrap", json={"accept-terms-of-use": True}
++    )
++    assert resp.status_code in (401, 403), resp.text
++
++
++def test_garbage_token_rejected(anon_client):
++    resp = anon_client.get(
++        f"{UC}/catalogs", headers={"Authorization": "Bearer not.a.jwt"}
++    )
++    assert resp.status_code == 401, resp.text
++
++
++# ─────────────────────────────────────────────────────────────────────────────
++# 3: user provisioning
++# ─────────────────────────────────────────────────────────────────────────────
++
++
++def test_user2_self_provisions_from_token(user2):
++    assert user2 == USER2_ID
++
++
++# ─────────────────────────────────────────────────────────────────────────────
++# 4-6: volume authz matrix (ordered within the class)
++# ─────────────────────────────────────────────────────────────────────────────
++
++
++class TestVolumeAuthzMatrix:
++    def test_admin_creator_holds_full_grant_action_set(
++        self, server, warehouse, admin_volume
++    ):
++        resp = server.client.get(
++            perms(warehouse["id"], "volume", admin_volume["volume_id"],
++                  "authorizer-actions")
++        )
++        assert resp.status_code == 200, resp.text
++        actions = set(resp.json()["allowed-actions"])
++        assert actions == OWNER_GRANT_ACTIONS, actions
++
++    def test_user2_cannot_see_volume_pre_grant(
++        self, user2_client, user2, admin_volume
++    ):
++        # Existence masking: not-visible == not-found.
++        resp = user2_client.get(f"{UC}/volumes/{admin_volume['full_name']}")
++        assert_uc_envelope(resp, 404, "NOT_FOUND")
++
++    def test_user2_temp_credentials_masked_pre_grant(
++        self, user2_client, user2, admin_volume
++    ):
++        resp = user2_client.post(
++            f"{UC}/temporary-volume-credentials",
++            json={"volume_id": admin_volume["volume_id"],
++                  "operation": "READ_VOLUME"},
++        )
++        assert_uc_envelope(resp, 404, "NOT_FOUND")
++
++    def test_admin_grants_describe_and_select(
++        self, server, warehouse, admin_volume, user2
++    ):
++        grant(server.client, warehouse["id"], "volume",
++              admin_volume["volume_id"], ["describe", "select"])
++        # user2 now shows up in the assignment listing.
++        resp = server.client.get(
++            perms(warehouse["id"], "volume", admin_volume["volume_id"],
++                  "assignments")
++        )
++        assert resp.status_code == 200, resp.text
++        assignments = resp.json()["assignments"]
++        assert {"type": "describe", "user": USER2_ID} in assignments
++        assert {"type": "select", "user": USER2_ID} in assignments
++
++    def test_user2_sees_volume_post_grant(self, user2_client, admin_volume):
++        resp = user2_client.get(f"{UC}/volumes/{admin_volume['full_name']}")
++        assert resp.status_code == 200, resp.text
++        assert resp.json()["volume_id"] == admin_volume["volume_id"]
++
++    def test_user2_read_credentials_post_grant(self, user2_client, admin_volume):
++        resp = user2_client.post(
++            f"{UC}/temporary-volume-credentials",
++            json={"volume_id": admin_volume["volume_id"],
++                  "operation": "READ_VOLUME"},
++        )
++        assert resp.status_code == 200, resp.text
++        assert resp.json().get("aws_temp_credentials"), resp.text
++
++    def test_user2_write_credentials_denied_with_real_403(
++        self, user2_client, admin_volume
++    ):
++        # select grants can_read_data only; the volume is VISIBLE to user2
++        # now, so this must be a true PERMISSION_DENIED, not a masked 404.
++        resp = user2_client.post(
++            f"{UC}/temporary-volume-credentials",
++            json={"volume_id": admin_volume["volume_id"],
++                  "operation": "WRITE_VOLUME"},
+         )
++        assert_uc_envelope(resp, 403, "PERMISSION_DENIED")
++
++    def test_user2_still_has_no_grant_powers(
++        self, user2_client, warehouse, admin_volume
++    ):
++        # describe+select confer no grant management: user2's own
++        # authorizer-action set on the volume stays empty.
++        resp = user2_client.get(
++            perms(warehouse["id"], "volume", admin_volume["volume_id"],
++                  "authorizer-actions")
++        )
++        assert resp.status_code == 200, resp.text
++        assert resp.json()["allowed-actions"] == []
++
++
++# ─────────────────────────────────────────────────────────────────────────────
++# 7: function + model spot-checks
++# ─────────────────────────────────────────────────────────────────────────────
++
++
++class TestFunctionAuthzSpotChecks:
++    def test_admin_grant_actions_include_execute(
++        self, server, warehouse, admin_function
++    ):
+         resp = server.client.get(
+-            f"/management/v1/permissions/warehouse/{warehouse['id']}"
+-            f"/volume/{vol.volume_id}/authorizer-actions"
++            perms(warehouse["id"], "function", admin_function["function_id"],
++                  "authorizer-actions")
++        )
++        assert resp.status_code == 200, resp.text
++        actions = set(resp.json()["allowed-actions"])
++        # Functions add the execute grant on top of the common set.
++        assert actions == OWNER_GRANT_ACTIONS | {"grant_execute"}, actions
++
++    def test_user2_cannot_see_function_pre_grant(
++        self, user2_client, user2, admin_function
++    ):
++        resp = user2_client.get(f"{UC}/functions/{admin_function['full_name']}")
++        assert_uc_envelope(resp, 404, "NOT_FOUND")
++
++    def test_grant_describe_then_user2_gets_function(
++        self, server, warehouse, user2_client, user2, admin_function
++    ):
++        grant(server.client, warehouse["id"], "function",
++              admin_function["function_id"], ["describe"])
++        resp = user2_client.get(f"{UC}/functions/{admin_function['full_name']}")
++        assert resp.status_code == 200, resp.text
++        assert resp.json()["function_id"] == admin_function["function_id"]
++        # describe does not confer grant powers (incl. grant_execute).
++        own = user2_client.get(
++            perms(warehouse["id"], "function", admin_function["function_id"],
++                  "authorizer-actions")
+         )
+-        if resp.status_code == 404:
+-            pytest.xfail(
+-                "volume authorizer-actions management endpoint not implemented yet"
+-            )
+-        resp.raise_for_status()
+-        actions = resp.json().get("allowed-actions", resp.json())
+-        # Creator/owner should hold the full set incl. drop + write.
+-        joined = str(actions).lower()
+-        assert "drop" in joined and ("write" in joined or "read" in joined)
+-
+-    def test_permissions_check_endpoint_exists(self, server):
+-        # Keep light: the endpoint must exist (POST body shape is
+-        # backend-specific; anything but 404/405 proves routing).
+-        resp = server.client.post("/management/v1/permissions/check", json={})
+-        assert resp.status_code not in (404, 405)
++        assert own.status_code == 200, own.text
++        assert own.json()["allowed-actions"] == []
++
++
++class TestModelAuthzSpotChecks:
++    def test_user2_cannot_see_model_pre_grant(
++        self, user2_client, user2, admin_model
++    ):
++        resp = user2_client.get(f"{UC}/models/{admin_model['full_name']}")
++        assert_uc_envelope(resp, 404, "NOT_FOUND")
++
++    def test_grant_describe_then_user2_gets_model(
++        self, server, warehouse, user2_client, user2, admin_model
++    ):
++        grant(server.client, warehouse["id"], "model",
++              admin_model["model_id"], ["describe"])
++        resp = user2_client.get(f"{UC}/models/{admin_model['full_name']}")
++        assert resp.status_code == 200, resp.text
++        assert resp.json()["id"] == admin_model["model_id"]
+diff --git a/tests/uc-compat/test_volumes.py b/tests/uc-compat/test_volumes.py
+index 527de191..51d20300 100644
+--- a/tests/uc-compat/test_volumes.py
++++ b/tests/uc-compat/test_volumes.py
+@@ -6,6 +6,7 @@ the validated unitycatalog-client 0.4.1 surface.
+ """
+ 
+ import io
++import os
+ import uuid
+ 
+ import pytest
+@@ -273,7 +274,20 @@ class TestVolumeEngineAccess:
+         con = duckdb.connect()
+         try:
+             try:
+-                con.execute("INSTALL httpfs; LOAD httpfs;")
++                # Offline environments: the duckdb-extension-httpfs wheel
++                # bundles the extension; fall back to the online INSTALL.
++                try:
++                    import duckdb_extension_httpfs as _httpfs_pkg
++
++                    _ext = os.path.join(
++                        os.path.dirname(_httpfs_pkg.__file__),
++                        "extensions",
++                        f"v{duckdb.__version__}",
++                        "httpfs.duckdb_extension",
++                    )
++                    con.execute(f"LOAD '{_ext}';")
++                except Exception:
++                    con.execute("INSTALL httpfs; LOAD httpfs;")
+             except Exception as e:
+                 pytest.skip(f"duckdb httpfs extension unavailable offline: {e}")
+             endpoint = S3_ENDPOINT.split("://", 1)[1]
+-- 
+2.43.0
+

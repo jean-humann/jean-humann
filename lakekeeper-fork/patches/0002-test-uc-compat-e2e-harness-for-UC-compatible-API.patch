@@ -1,0 +1,1820 @@
+From 6d1406a6366726a2b951736399ffdd94c2734abf Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 2 Jul 2026 22:17:18 +0000
+Subject: [PATCH 2/7] test(uc-compat): e2e harness for UC-compatible API
+
+Docker-compose stack (Postgres, OpenFGA, MinIO with non-root vending
+user), run.sh boot path (migrate, serve, bootstrap, warehouse setup),
+and pytest suite covering catalogs/schemas (passing), volumes,
+functions (unitycatalog-ai + LangChain/OpenAI adapters), model
+lifecycle, and vended-credential storage access. allowall and openfga
+modes.
+---
+ tests/uc-compat/.gitignore               |   3 +
+ tests/uc-compat/README.md                |  97 ++++++
+ tests/uc-compat/conftest.py              | 383 +++++++++++++++++++++++
+ tests/uc-compat/docker-compose.yaml      |  94 ++++++
+ tests/uc-compat/pytest.ini               |   5 +
+ tests/uc-compat/run.sh                   | 176 +++++++++++
+ tests/uc-compat/test_authz.py            |  85 +++++
+ tests/uc-compat/test_catalogs_schemas.py | 157 ++++++++++
+ tests/uc-compat/test_functions.py        | 169 ++++++++++
+ tests/uc-compat/test_models.py           | 254 +++++++++++++++
+ tests/uc-compat/test_volumes.py          | 292 +++++++++++++++++
+ 11 files changed, 1715 insertions(+)
+ create mode 100644 tests/uc-compat/.gitignore
+ create mode 100644 tests/uc-compat/README.md
+ create mode 100644 tests/uc-compat/conftest.py
+ create mode 100644 tests/uc-compat/docker-compose.yaml
+ create mode 100644 tests/uc-compat/pytest.ini
+ create mode 100755 tests/uc-compat/run.sh
+ create mode 100644 tests/uc-compat/test_authz.py
+ create mode 100644 tests/uc-compat/test_catalogs_schemas.py
+ create mode 100644 tests/uc-compat/test_functions.py
+ create mode 100644 tests/uc-compat/test_models.py
+ create mode 100644 tests/uc-compat/test_volumes.py
+
+diff --git a/tests/uc-compat/.gitignore b/tests/uc-compat/.gitignore
+new file mode 100644
+index 00000000..9f6ff907
+--- /dev/null
++++ b/tests/uc-compat/.gitignore
+@@ -0,0 +1,3 @@
++.run/
++__pycache__/
++.pytest_cache/
+diff --git a/tests/uc-compat/README.md b/tests/uc-compat/README.md
+new file mode 100644
+index 00000000..e04e9afe
+--- /dev/null
++++ b/tests/uc-compat/README.md
+@@ -0,0 +1,97 @@
++# Unity Catalog compatibility e2e suite
++
++End-to-end tests for this fork's Unity Catalog-compatible API mounted at
++`/api/2.1/unity-catalog` (volumes, functions, registered models + versions,
++temporary credentials, read-mapped catalogs/schemas). Wire contract:
++`scratchpad/uc-api-contract.md`; semantics: `scratchpad/design-uc-objects.md`.
++
++## How to run
++
++```bash
++# full suite (default MODE=allowall)
++bash tests/uc-compat/run.sh
++
++# only the endpoints that already exist server-side (catalogs/schemas)
++bash tests/uc-compat/run.sh -m smoke
++
++# openfga stack verification (see "Modes" below)
++MODE=openfga bash tests/uc-compat/run.sh
++
++# reuse a previously built binary / leave the stack running for debugging
++SKIP_BUILD=1 KEEP_RUNNING=1 bash tests/uc-compat/run.sh -m smoke
++```
++
++`run.sh` builds `target/debug/lakekeeper` on the host, starts
++postgres/openfga/minio via `docker-compose.yaml`, runs `lakekeeper migrate`,
++starts `lakekeeper serve` on the host network, waits for `/health`, runs
++pytest, and tears everything down (server + `docker compose down -v`).
++
++Python dependencies (pinned in the e2e venv; `UC_TEST_PYTHON` to override):
++`unitycatalog-client==0.4.1`, `unitycatalog-ai==0.4.0`,
++`unitycatalog-langchain`, `unitycatalog-openai`, `boto3`, `duckdb`,
++`pyarrow`, `httpx`, `pytest`.
++
++## Modes
++
++| MODE | authn | authz | what runs |
++|---|---|---|---|
++| `allowall` (default) | disabled (anonymous) | `LAKEKEEPER__AUTHZ_BACKEND=allowall` | everything: anonymous bootstrap works, full UC data-plane suite |
++| `openfga` | disabled (anonymous) | `LAKEKEEPER__AUTHZ_BACKEND=openfga` + gRPC to compose OpenFGA on `localhost:8081` | `test_authz.py` only |
++
++**Why MODE=openfga is limited:** the OpenFGA authorizer rejects anonymous
++bootstrap (`crates/authz-openfga/src/authorizer.rs`: "Anonymous users cannot
++bootstrap the catalog") and the fork has no dev/test authenticator — real
++authentication needs an OIDC IdP or Kubernetes tokens. MODE=openfga still
++proves: `lakekeeper migrate` creates the OpenFGA store and writes the fork's
++authorization model (incl. new volume/function/model FGA types once v4.8
++lands), the server serves with `authz-backend=openfga`, and anonymous
++bootstrap is properly rejected. Supplying `UC_TEST_TOKEN` (external IdP)
++additionally unlocks creator-owner-relation checks. TODO placeholder: add a
++keycloak service (realm-import pattern in `tests/docker-compose.yaml`) to run
++the full matrix hermetically.
++
++## Environment matrix
++
++| variable | default | meaning |
++|---|---|---|
++| `UC_TEST_BASE_URL` | `http://localhost:8181` | Lakekeeper base URL |
++| `UC_TEST_MODE` | `allowall` | `allowall` \| `openfga` (set by run.sh from `MODE`) |
++| `UC_TEST_TOKEN` | unset | optional bearer token (external IdP) |
++| `UC_TEST_S3_ENDPOINT` | `http://localhost:9000` | MinIO S3+STS endpoint |
++| `UC_TEST_S3_BUCKET` | `uc-e2e` | test bucket (created by `minio-init`) |
++| `UC_TEST_S3_KEY_PREFIX` | `warehouse` | warehouse key prefix in the bucket |
++| `UC_TEST_S3_ACCESS_KEY` / `UC_TEST_S3_SECRET_KEY` | `lakekeeper` / `lakekeeper-secret` | non-root MinIO user used as warehouse storage credential |
++| `UC_TEST_WAREHOUSE` | `uc_e2e` | warehouse name == UC catalog name |
++
++## Vended credentials against MinIO
++
++The `uc_e2e` warehouse is created with an S3 storage profile:
++`endpoint`/`sts-endpoint` → MinIO, `path-style-access: true`,
++`flavor: s3-compat`, `sts-enabled: true`, no `sts-role-arn` (per
++`docs/docs/storage.md`, S3-compatible stores need neither role ARN nor trust
++setup — Lakekeeper calls MinIO's AssumeRole with the configured access key).
++The credential is a dedicated non-root `lakekeeper` user (created by the
++`minio-init` container with the `readwrite` policy) because MinIO applies
++STS *session policies* — which give READ_VOLUME/WRITE_VOLUME creds their
++downscoped semantics — as an intersection with an IAM user's policy.
++
++## What each file proves
++
++| file | coverage |
++|---|---|
++| `test_catalogs_schemas.py` (`-m smoke`) | catalog=warehouse read mapping; catalogs read-only (400); schema CRUD = top-level namespaces; pagination envelope; 404/409 error mapping |
++| `test_volumes.py` | volume CRUD (MANAGED location generation, EXTERNAL location validation), pagination, PATCH comment / rename rejected, 409 conflict, delete→`{}`→404; `temporary-volume-credentials` shape; **engines**: boto3 put/get with vended creds, read-only downscoping (best-effort), DuckDB httpfs reads volume parquet with vended keys |
++| `test_functions.py` | **unitycatalog-ai** `create_python_function` → get/list → local `execute_function`; **LangChain** `UCFunctionToolkit` tool direct invocation (no LLM); **OpenAI** toolkit JSON-schema generation (no API call); raw-SDK round-trip fidelity (`routine_definition`, `input_params` positions), no PATCH endpoint, 404 mapping |
++| `test_models.py` | registered-model CRUD; **MLflow-style flow**: version PENDING → READ_WRITE creds → boto3 artifact upload → finalize READY → READ_WRITE rejected → READ creds download; version auto-increment; delete-with-versions guard |
++| `test_authz.py` (`-m authz`, MODE=openfga) | openfga backend live, FGA store/model migration, anonymous-bootstrap rejection; owner-relation checks behind `UC_TEST_TOKEN` |
++
++## Notes / known constraints
++
++* unitycatalog-client 0.4.1 is async (aiohttp ≥3.10 requires constructing the
++  client inside a running loop); `conftest.UcSdk` runs a dedicated
++  background event loop. unitycatalog-ai's sync facade is bridged via
++  `uc_ai` (nest_asyncio inside `run_until_complete`) — see conftest docstring.
++* The DuckDB test needs the `httpfs` extension; it skips cleanly if the
++  extension cannot be downloaded in an offline environment.
++* Volumes/functions/models endpoints are being implemented concurrently
++  (design phases B-D); until they land only `-m smoke` passes.
+diff --git a/tests/uc-compat/conftest.py b/tests/uc-compat/conftest.py
+new file mode 100644
+index 00000000..f254da38
+--- /dev/null
++++ b/tests/uc-compat/conftest.py
+@@ -0,0 +1,383 @@
++"""Fixtures for the Unity Catalog compatibility e2e suite.
++
++The suite talks to a Lakekeeper fork running on the host (default
++http://localhost:8181) whose UC-compatible surface is mounted at
++/api/2.1/unity-catalog. Infrastructure (postgres/openfga/minio) comes from
++tests/uc-compat/docker-compose.yaml; see run.sh for orchestration.
++
++SDK notes (validated against the pinned venv):
++  * unitycatalog-client 0.4.1 is fully async (aiohttp). Under aiohttp>=3.10
++    an ApiClient can only be CONSTRUCTED inside a running event loop, and its
++    session is bound to that loop. The ``uc`` fixture therefore runs a
++    dedicated background event-loop thread; construct + every call happen on
++    that loop via ``uc.run(coro)``.
++  * unitycatalog-ai 0.4.0's UnitycatalogFunctionClient exposes a sync facade
++    that re-enters the *running* loop via nest_asyncio when one exists. The
++    ``uc_ai`` fixture exploits this: tests hand a plain sync callable to
++    ``uc_ai(fn)`` and it is executed inside ``loop.run_until_complete`` with a
++    fresh UnitycatalogFunctionClient bound to that loop.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import dataclasses
++import json
++import os
++import threading
++import time
++import uuid
++
++import boto3
++import httpx
++import pytest
++from botocore.config import Config as BotoConfig
++
++BASE_URL = os.environ.get("UC_TEST_BASE_URL", "http://localhost:8181").rstrip("/")
++UC_HOST = f"{BASE_URL}/api/2.1/unity-catalog"
++MANAGEMENT_URL = f"{BASE_URL}/management"
++MODE = os.environ.get("UC_TEST_MODE", "allowall")
++# Optional bearer token (only meaningful when the server runs with an IdP;
++# the default e2e stack is anonymous).
++TOKEN = os.environ.get("UC_TEST_TOKEN") or None
++
++S3_ENDPOINT = os.environ.get("UC_TEST_S3_ENDPOINT", "http://localhost:9000")
++S3_REGION = os.environ.get("UC_TEST_S3_REGION", "local")
++S3_BUCKET = os.environ.get("UC_TEST_S3_BUCKET", "uc-e2e")
++S3_KEY_PREFIX = os.environ.get("UC_TEST_S3_KEY_PREFIX", "warehouse")
++# Non-root MinIO user created by the minio-init compose container. MinIO's
++# AssumeRole STS + session-policy downscoping applies to IAM users; the
++# warehouse storage-credential therefore uses this user, not minioadmin.
++S3_ACCESS_KEY = os.environ.get("UC_TEST_S3_ACCESS_KEY", "lakekeeper")
++S3_SECRET_KEY = os.environ.get("UC_TEST_S3_SECRET_KEY", "lakekeeper-secret")
++S3_ROOT_ACCESS_KEY = os.environ.get("UC_TEST_S3_ROOT_ACCESS_KEY", "minioadmin")
++S3_ROOT_SECRET_KEY = os.environ.get("UC_TEST_S3_ROOT_SECRET_KEY", "minioadmin")
++
++WAREHOUSE_NAME = os.environ.get("UC_TEST_WAREHOUSE", "uc_e2e")
++DEFAULT_PROJECT_ID = "00000000-0000-0000-0000-000000000000"
++WAREHOUSE_BASE_LOCATION = f"s3://{S3_BUCKET}/{S3_KEY_PREFIX}"
++
++
++def unique_name(prefix: str) -> str:
++    return f"{prefix}_{uuid.uuid4().hex[:12]}"
++
++
++# ─────────────────────────────────────────────────────────────────────────────
++# Raw unitycatalog-client SDK on a background event loop
++# ─────────────────────────────────────────────────────────────────────────────
++
++
++class UcSdk:
++    """unitycatalog-client 0.4.1 wrapper.
++
++    Owns a background event-loop thread; the aiohttp-backed ApiClient is
++    constructed on that loop and every SDK coroutine is dispatched to it via
++    :meth:`run`. API objects (validated to exist in 0.4.1):
++    catalogs, schemas, volumes, functions, models, model_versions, temp_creds.
++    """
++
++    def __init__(self, host: str, token: str | None = None):
++        self._loop = asyncio.new_event_loop()
++        self._thread = threading.Thread(
++            target=self._loop.run_forever, name="uc-sdk-loop", daemon=True
++        )
++        self._thread.start()
++        self._api_client = self.run(self._make_client(host, token))
++
++        from unitycatalog.client.api import (
++            CatalogsApi,
++            FunctionsApi,
++            ModelVersionsApi,
++            RegisteredModelsApi,
++            SchemasApi,
++            TemporaryCredentialsApi,
++            VolumesApi,
++        )
++
++        self.catalogs = CatalogsApi(self._api_client)
++        self.schemas = SchemasApi(self._api_client)
++        self.volumes = VolumesApi(self._api_client)
++        self.functions = FunctionsApi(self._api_client)
++        self.models = RegisteredModelsApi(self._api_client)
++        self.model_versions = ModelVersionsApi(self._api_client)
++        self.temp_creds = TemporaryCredentialsApi(self._api_client)
++
++    @staticmethod
++    async def _make_client(host: str, token: str | None):
++        # Import + construct inside the running loop: aiohttp>=3.10 requires it.
++        from unitycatalog.client import ApiClient, Configuration
++
++        return ApiClient(configuration=Configuration(host=host, access_token=token))
++
++    def run(self, coro, timeout: float = 120.0):
++        return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout)
++
++    def close(self):
++        try:
++            self.run(self._api_client.close())
++        finally:
++            self._loop.call_soon_threadsafe(self._loop.stop)
++            self._thread.join(timeout=10)
++
++
++@pytest.fixture(scope="session")
++def uc(server) -> UcSdk:
++    sdk = UcSdk(UC_HOST, token=TOKEN)
++    yield sdk
++    sdk.close()
++
++
++def uc_error(exc_info) -> dict:
++    """Parse the UC error envelope out of an ApiException."""
++    exc = exc_info.value if hasattr(exc_info, "value") else exc_info
++    try:
++        return json.loads(exc.body or "{}")
++    except (TypeError, ValueError):
++        return {}
++
++
++def assert_uc_error(exc_info, status: int, error_code: str | None = None):
++    exc = exc_info.value if hasattr(exc_info, "value") else exc_info
++    assert exc.status == status, f"expected HTTP {status}, got {exc.status}: {exc.body}"
++    if error_code is not None:
++        body = uc_error(exc)
++        assert body.get("error_code") == error_code, (
++            f"expected error_code={error_code}, got body: {exc.body}"
++        )
++
++
++# ─────────────────────────────────────────────────────────────────────────────
++# unitycatalog-ai bridge (sync facade needs a running loop, see module docs)
++# ─────────────────────────────────────────────────────────────────────────────
++
++
++@pytest.fixture()
++def uc_ai():
++    """Run ``fn(client)`` with a UnitycatalogFunctionClient inside a loop.
++
++    Usage::
++
++        def test_x(uc_ai):
++            def scenario(client):        # sync code, sync SDK facade works
++                client.create_python_function(...)
++                return client.execute_function(...)
++            result = uc_ai(scenario)
++    """
++
++    def runner(fn, execution_mode: str = "sandbox"):
++        async def amain():
++            from unitycatalog.ai.core.client import UnitycatalogFunctionClient
++            from unitycatalog.client import ApiClient, Configuration
++
++            api = ApiClient(
++                configuration=Configuration(host=UC_HOST, access_token=TOKEN)
++            )
++            client = UnitycatalogFunctionClient(
++                api_client=api, execution_mode=execution_mode
++            )
++            try:
++                return fn(client)
++            finally:
++                await api.close()
++
++        loop = asyncio.new_event_loop()
++        asyncio.set_event_loop(loop)
++        try:
++            return loop.run_until_complete(amain())
++        finally:
++            asyncio.set_event_loop(None)
++            loop.close()
++
++    return runner
++
++
++# ─────────────────────────────────────────────────────────────────────────────
++# Management API: bootstrap + warehouse
++# ─────────────────────────────────────────────────────────────────────────────
++
++
++@dataclasses.dataclass
++class Server:
++    client: httpx.Client
++    info: dict
++    bootstrapped: bool
++    bootstrap_error: str | None = None
++
++
++def _storage_profile() -> dict:
++    # Mirrors tests/python/tests/conftest.py (S3-compatible + vended creds)
++    # and docs/docs/storage.md "S3-compatible" guidance: MinIO supports
++    # AssumeRole STS with plain access keys, so vended credentials work with
++    # sts-enabled=true + flavor=s3-compat and NO sts-role-arn.
++    return {
++        "type": "s3",
++        "bucket": S3_BUCKET,
++        "key-prefix": S3_KEY_PREFIX,
++        "endpoint": S3_ENDPOINT,
++        "sts-endpoint": S3_ENDPOINT,
++        "region": S3_REGION,
++        "path-style-access": True,
++        "flavor": "s3-compat",
++        "sts-enabled": True,
++    }
++
++
++def _storage_credential() -> dict:
++    return {
++        "type": "s3",
++        "credential-type": "access-key",
++        "aws-access-key-id": S3_ACCESS_KEY,
++        "aws-secret-access-key": S3_SECRET_KEY,
++    }
++
++
++def _ensure_bucket_and_user():
++    """boto3 fallback for environments where minio-init could not run."""
++    root = boto3.client(
++        "s3",
++        endpoint_url=S3_ENDPOINT,
++        aws_access_key_id=S3_ROOT_ACCESS_KEY,
++        aws_secret_access_key=S3_ROOT_SECRET_KEY,
++        region_name=S3_REGION,
++        config=BotoConfig(s3={"addressing_style": "path"}),
++    )
++    try:
++        root.head_bucket(Bucket=S3_BUCKET)
++    except Exception:
++        try:
++            root.create_bucket(Bucket=S3_BUCKET)
++        except Exception as e:  # pragma: no cover - diagnostics only
++            pytest.exit(f"Cannot create bucket {S3_BUCKET} on {S3_ENDPOINT}: {e}")
++
++
++@pytest.fixture(scope="session")
++def server() -> Server:
++    headers = {"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}
++    client = httpx.Client(base_url=BASE_URL, headers=headers, timeout=30.0)
++
++    # Wait for the server (run.sh already waits; this covers direct pytest use).
++    deadline = time.time() + 60
++    while True:
++        try:
++            client.get("/health").raise_for_status()
++            break
++        except Exception:
++            if time.time() > deadline:
++                pytest.exit(f"Lakekeeper not reachable at {BASE_URL}")
++            time.sleep(1)
++
++    info = client.get("/management/v1/info")
++    info.raise_for_status()
++    info = info.json()
++
++    bootstrapped = bool(info.get("bootstrapped"))
++    bootstrap_error = None
++    if not bootstrapped:
++        # POST /management/v1/bootstrap, body per management-open-api.yaml
++        # (required: accept-terms-of-use). Works anonymously with the
++        # AllowAll authorizer; the OpenFGA authorizer rejects anonymous
++        # bootstrap — recorded instead of failing so MODE=openfga can assert
++        # the rejection.
++        resp = client.post(
++            "/management/v1/bootstrap", json={"accept-terms-of-use": True}
++        )
++        if resp.status_code < 300:
++            bootstrapped = True
++        else:
++            bootstrap_error = f"{resp.status_code}: {resp.text}"
++
++    srv = Server(
++        client=client,
++        info=info,
++        bootstrapped=bootstrapped,
++        bootstrap_error=bootstrap_error,
++    )
++    yield srv
++    client.close()
++
++
++@pytest.fixture(scope="session")
++def warehouse(server: Server) -> dict:
++    """Ensure the `uc_e2e` warehouse exists in the default project.
++
++    Returns ``{"id": ..., "name": ...}``. The warehouse doubles as the UC
++    *catalog* (design D2: UC catalog == Lakekeeper warehouse).
++    """
++    if not server.bootstrapped:
++        pytest.skip(
++            "Server could not be bootstrapped anonymously "
++            f"({server.bootstrap_error}); data-plane tests need MODE=allowall "
++            "or an IdP token via UC_TEST_TOKEN."
++        )
++
++    _ensure_bucket_and_user()
++    mgmt = server.client
++
++    listing = mgmt.get(
++        "/management/v1/warehouse", params={"project-id": DEFAULT_PROJECT_ID}
++    )
++    listing.raise_for_status()
++    for wh in listing.json().get("warehouses", []):
++        if wh.get("name") == WAREHOUSE_NAME:
++            return {"id": wh["id"], "name": WAREHOUSE_NAME}
++
++    payload = {
++        "warehouse-name": WAREHOUSE_NAME,
++        "project-id": DEFAULT_PROJECT_ID,
++        "storage-profile": _storage_profile(),
++        "storage-credential": _storage_credential(),
++    }
++    resp = mgmt.post("/management/v1/warehouse", json=payload)
++    assert resp.status_code < 300, (
++        f"warehouse creation failed ({resp.status_code}): {resp.text}"
++    )
++    return {"id": resp.json()["warehouse-id"], "name": WAREHOUSE_NAME}
++
++
++@pytest.fixture()
++def schema(uc: UcSdk, warehouse: dict) -> dict:
++    """A fresh UC schema (top-level Lakekeeper namespace) per test."""
++    from unitycatalog.client.models import CreateSchema
++
++    name = unique_name("sch")
++    info = uc.run(
++        uc.schemas.create_schema(
++            CreateSchema(name=name, catalog_name=warehouse["name"])
++        )
++    )
++    yield {
++        "name": name,
++        "catalog_name": warehouse["name"],
++        "full_name": f"{warehouse['name']}.{name}",
++        "info": info,
++    }
++    try:
++        uc.run(uc.schemas.delete_schema(f"{warehouse['name']}.{name}", force=True))
++    except Exception:
++        pass
++
++
++# ─────────────────────────────────────────────────────────────────────────────
++# S3 helpers (vended credentials → boto3)
++# ─────────────────────────────────────────────────────────────────────────────
++
++
++def s3_client_from_creds(temp_creds):
++    """boto3 S3 client from a UC TemporaryCredentials response."""
++    aws = temp_creds.aws_temp_credentials
++    assert aws is not None, f"expected aws_temp_credentials, got: {temp_creds}"
++    return boto3.client(
++        "s3",
++        endpoint_url=S3_ENDPOINT,
++        aws_access_key_id=aws.access_key_id,
++        aws_secret_access_key=aws.secret_access_key,
++        aws_session_token=aws.session_token,
++        region_name=S3_REGION,
++        config=BotoConfig(s3={"addressing_style": "path"}),
++    )
++
++
++def split_s3_uri(uri: str) -> tuple[str, str]:
++    assert uri.startswith("s3://"), uri
++    bucket, _, key = uri[len("s3://") :].partition("/")
++    return bucket, key.rstrip("/")
+diff --git a/tests/uc-compat/docker-compose.yaml b/tests/uc-compat/docker-compose.yaml
+new file mode 100644
+index 00000000..2823a063
+--- /dev/null
++++ b/tests/uc-compat/docker-compose.yaml
+@@ -0,0 +1,94 @@
++# Infrastructure for the Unity Catalog compatibility e2e suite.
++#
++# The Lakekeeper fork binary itself is NOT part of this stack: it is built on
++# the host (`cargo build -p lakekeeper-bin`) and run on the host network by
++# `run.sh`, pointing at the published ports below.
++#
++# Images are pulled from mirror.gcr.io because docker.io/quay.io/ghcr.io blob
++# CDNs are blocked by the environment's egress proxy.
++#
++# Published ports (host):
++#   5433  -> postgres 5432   (5433 to avoid clashing with a dev pg on 5432)
++#   8081  -> openfga  8081   (gRPC; LAKEKEEPER__OPENFGA__ENDPOINT speaks gRPC)
++#   8083  -> openfga  8080   (HTTP API, handy for debugging)
++#   9000  -> minio    9000   (S3 API + STS AssumeRole)
++#   9001  -> minio    9001   (console)
++name: uc-compat-e2e
++
++services:
++  db:
++    image: mirror.gcr.io/library/postgres:16
++    environment:
++      - POSTGRES_PASSWORD=postgres
++    ports:
++      - "5433:5432"
++    healthcheck:
++      test: ["CMD-SHELL", "pg_isready -U postgres -p 5432 -d postgres"]
++      interval: 2s
++      timeout: 10s
++      retries: 5
++      start_period: 15s
++
++  # OpenFGA with in-memory datastore. Lakekeeper's `migrate` command creates
++  # the store and writes the authorization model itself (see
++  # tests/docker-compose-openfga-overlay.yaml for the reference wiring), so no
++  # store/model bootstrap container is needed. In-memory is fine for e2e: the
++  # store only needs to outlive one run of the suite.
++  openfga:
++    image: mirror.gcr.io/openfga/openfga:v1.8.13
++    command: run
++    environment:
++      - OPENFGA_DATASTORE_ENGINE=memory
++      - OPENFGA_PLAYGROUND_ENABLED=false
++    ports:
++      - "8081:8081" # gRPC (used by Lakekeeper)
++      - "8083:8080" # HTTP (debugging)
++    healthcheck:
++      test: ["CMD", "/usr/local/bin/grpc_health_probe", "-addr=localhost:8081"]
++      interval: 2s
++      timeout: 30s
++      retries: 10
++      start_period: 5s
++
++  minio:
++    image: mirror.gcr.io/minio/minio:latest
++    environment:
++      - MINIO_ROOT_USER=minioadmin
++      - MINIO_ROOT_PASSWORD=minioadmin
++      # Explicit region so vended-credential clients and the storage profile
++      # agree on a region string.
++      - MINIO_REGION=local
++    command: ["server", "--console-address", ":9001", "/data"]
++    ports:
++      - "9000:9000"
++      - "9001:9001"
++    healthcheck:
++      test: ["CMD", "mc", "ready", "local"]
++      interval: 2s
++      timeout: 10s
++      retries: 5
++      start_period: 10s
++
++  # Creates the test bucket and a non-root `lakekeeper` user with the
++  # `readwrite` policy. The warehouse storage-credential uses this user, not
++  # the root credentials: MinIO's AssumeRole STS is intended for non-root
++  # users, and session policies (which give downscoped vended credentials
++  # their read-only/read-write semantics) are only intersected against a
++  # user's attached IAM policy. Uses the minio image itself for `mc` since a
++  # separate mc image cannot be pulled through the proxy. conftest.py has a
++  # boto3 fallback that creates the bucket if this container did not run.
++  minio-init:
++    image: mirror.gcr.io/minio/minio:latest
++    depends_on:
++      minio:
++        condition: service_healthy
++    restart: "no"
++    entrypoint: >
++      /bin/sh -c "
++      set -e;
++      mc alias set local http://minio:9000 minioadmin minioadmin;
++      mc mb --ignore-existing local/uc-e2e;
++      mc admin user add local lakekeeper lakekeeper-secret || true;
++      mc admin policy attach local readwrite --user lakekeeper || true;
++      exit 0;
++      "
+diff --git a/tests/uc-compat/pytest.ini b/tests/uc-compat/pytest.ini
+new file mode 100644
+index 00000000..5ed939f8
+--- /dev/null
++++ b/tests/uc-compat/pytest.ini
+@@ -0,0 +1,5 @@
++[pytest]
++addopts = -ra
++markers =
++    smoke: catalogs/schemas surface only — endpoints that already exist server-side
++    authz: OpenFGA-backed checks; only meaningful with UC_TEST_MODE=openfga
+diff --git a/tests/uc-compat/run.sh b/tests/uc-compat/run.sh
+new file mode 100755
+index 00000000..0343e011
+--- /dev/null
++++ b/tests/uc-compat/run.sh
+@@ -0,0 +1,176 @@
++#!/usr/bin/env bash
++# run.sh — Unity Catalog compatibility e2e runner.
++#
++# Boots postgres + openfga + minio via docker compose, builds and runs the
++# fork's `lakekeeper` binary on the HOST network (not in compose), then runs
++# the pytest suite in tests/uc-compat/ against it.
++#
++# Usage:
++#   bash tests/uc-compat/run.sh [extra pytest args...]
++#   MODE=allowall bash tests/uc-compat/run.sh -m smoke     # catalogs/schemas only
++#   MODE=openfga  bash tests/uc-compat/run.sh              # stack-level authz checks
++#
++# Environment knobs:
++#   MODE          allowall (default) | openfga
++#   SKIP_BUILD=1  don't run `cargo build -p lakekeeper-bin`
++#   KEEP_RUNNING=1  leave the compose stack + server up after the run
++#   UC_TEST_PYTHON  python interpreter with test deps (unitycatalog-client
++#                   0.4.1, unitycatalog-ai 0.4.0, boto3, duckdb, pytest, ...).
++#                   Defaults to the e2e venv next to the repo checkout if it
++#                   exists, else `python3`.
++#
++# MODE semantics
++# --------------
++# * MODE=allowall (default, fully working path):
++#     LAKEKEEPER__AUTHZ_BACKEND=allowall, authentication disabled (no
++#     LAKEKEEPER__OPENID_PROVIDER_URI). All requests are anonymous; anonymous
++#     bootstrap is permitted by the AllowAll authorizer, so the whole UC
++#     surface (catalogs/schemas/volumes/functions/models/temp-credentials)
++#     is exercised end-to-end.
++#
++# * MODE=openfga (stack verification + placeholder):
++#     LAKEKEEPER__AUTHZ_BACKEND=openfga against the compose OpenFGA (gRPC on
++#     localhost:8081). `lakekeeper migrate` creates the OpenFGA store and
++#     writes the authorization model — this run therefore proves the fork's
++#     FGA model (incl. any new volume/function/model types) is accepted by
++#     OpenFGA and that the server serves with the openfga backend.
++#     HOWEVER: the OpenFGA authorizer rejects anonymous bootstrap
++#     ("Anonymous users cannot bootstrap the catalog",
++#     crates/authz-openfga/src/authorizer.rs), and this fork has no dev/test
++#     authenticator — authentication requires a real OIDC IdP or Kubernetes
++#     tokens. So with authentication disabled the data-plane suite CANNOT run
++#     in this mode. MODE=openfga runs only test_authz.py, which asserts:
++#       - /management/v1/info reports authz-backend=openfga
++#       - anonymous bootstrap is rejected with 4xx (403)
++#       - (when UC_TEST_TOKEN is provided by an external IdP setup) owner
++#         relations / authorizer-actions on created UC objects.
++#     TODO(placeholder): add a keycloak service (see tests/docker-compose.yaml
++#     for the realm import pattern) and an OIDC token fixture to unlock the
++#     full authz matrix; until then allowall is the supported full path.
++set -euo pipefail
++
++SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
++REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
++COMPOSE=(docker compose -f "${SCRIPT_DIR}/docker-compose.yaml")
++
++MODE="${MODE:-allowall}"
++if [[ "$MODE" != "allowall" && "$MODE" != "openfga" ]]; then
++    echo "MODE must be 'allowall' or 'openfga', got: $MODE" >&2
++    exit 2
++fi
++
++# ── Python interpreter with the test dependencies ────────────────────────────
++DEFAULT_VENV="$(cd "${REPO_ROOT}/.." && pwd)/e2e-venv"
++if [ -z "${UC_TEST_PYTHON:-}" ]; then
++    if [ -x "${DEFAULT_VENV}/bin/python" ]; then
++        UC_TEST_PYTHON="${DEFAULT_VENV}/bin/python"
++    else
++        UC_TEST_PYTHON="python3"
++    fi
++fi
++echo "MODE=${MODE}  python=${UC_TEST_PYTHON}" >&2
++
++# ── Build the server on the host ─────────────────────────────────────────────
++BINARY="${REPO_ROOT}/target/debug/lakekeeper"
++if [ "${SKIP_BUILD:-0}" != "1" ]; then
++    echo "Building lakekeeper-bin (SKIP_BUILD=1 to skip)..." >&2
++    (cd "${REPO_ROOT}" && cargo build -p lakekeeper-bin)
++fi
++if [ ! -x "${BINARY}" ]; then
++    echo "Server binary not found at ${BINARY}. Build it first." >&2
++    exit 1
++fi
++
++# ── Teardown ──────────────────────────────────────────────────────────────────
++RUN_DIR="${SCRIPT_DIR}/.run"
++mkdir -p "${RUN_DIR}"
++SERVER_PID=""
++cleanup() {
++    if [ "${KEEP_RUNNING:-0}" = "1" ]; then
++        echo "KEEP_RUNNING=1 — leaving stack up (server pid: ${SERVER_PID:-n/a})" >&2
++        return
++    fi
++    if [ -n "${SERVER_PID}" ] && kill -0 "${SERVER_PID}" 2>/dev/null; then
++        kill "${SERVER_PID}" 2>/dev/null || true
++        wait "${SERVER_PID}" 2>/dev/null || true
++    fi
++    "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
++}
++trap cleanup EXIT
++
++# ── Start infrastructure ─────────────────────────────────────────────────────
++"${COMPOSE[@]}" up -d
++
++wait_for() { # <name> <command...>
++    local name="$1"; shift
++    for _ in $(seq 1 60); do
++        if "$@" >/dev/null 2>&1; then echo "  ${name}: ready" >&2; return 0; fi
++        sleep 2
++    done
++    echo "  ${name}: NOT ready after 120s" >&2
++    return 1
++}
++echo "Waiting for infrastructure..." >&2
++wait_for postgres "${COMPOSE[@]}" exec -T db pg_isready -U postgres
++wait_for minio curl -sf http://localhost:9000/minio/health/live
++if [ "$MODE" = "openfga" ]; then
++    # OpenFGA serves an HTTP health endpoint on its HTTP port (published 8083).
++    wait_for openfga curl -sf http://localhost:8083/healthz
++fi
++# Bucket + non-root user creation (one-shot container).
++"${COMPOSE[@]}" wait minio-init >/dev/null 2>&1 || true
++
++# ── Server environment ───────────────────────────────────────────────────────
++export LAKEKEEPER__PG_DATABASE_URL_READ="postgresql://postgres:postgres@localhost:5433/postgres"
++export LAKEKEEPER__PG_DATABASE_URL_WRITE="postgresql://postgres:postgres@localhost:5433/postgres"
++export LAKEKEEPER__PG_ENCRYPTION_KEY="uc-e2e-insecure-encryption-key"
++export LAKEKEEPER__LISTEN_PORT="${LAKEKEEPER__LISTEN_PORT:-8181}"
++# The metrics server defaults to port 9000, which collides with MinIO's
++# published S3 port on the host network.
++export LAKEKEEPER__METRICS_PORT="${LAKEKEEPER__METRICS_PORT:-9090}"
++export RUST_LOG="${RUST_LOG:-info,lakekeeper=debug}"
++# Authentication stays DISABLED in both modes (no OPENID_PROVIDER_URI, no
++# kubernetes authn): requests are anonymous.
++export LAKEKEEPER__ENABLE_KUBERNETES_AUTHENTICATION=false
++unset LAKEKEEPER__OPENID_PROVIDER_URI || true
++
++if [ "$MODE" = "openfga" ]; then
++    export LAKEKEEPER__AUTHZ_BACKEND=openfga
++    export LAKEKEEPER__OPENFGA__ENDPOINT="http://localhost:8081"
++else
++    export LAKEKEEPER__AUTHZ_BACKEND=allowall
++fi
++
++# ── Migrate + serve ──────────────────────────────────────────────────────────
++echo "Running migrations (postgres schema + OpenFGA store/model if enabled)..." >&2
++"${BINARY}" migrate
++
++echo "Starting lakekeeper serve (log: ${RUN_DIR}/server.log)..." >&2
++"${BINARY}" serve >"${RUN_DIR}/server.log" 2>&1 &
++SERVER_PID=$!
++
++wait_for lakekeeper curl -sf "http://localhost:${LAKEKEEPER__LISTEN_PORT}/health" || {
++    echo "--- server.log (tail) ---" >&2
++    tail -50 "${RUN_DIR}/server.log" >&2
++    exit 1
++}
++
++# ── Pytest ───────────────────────────────────────────────────────────────────
++export UC_TEST_MODE="${MODE}"
++export UC_TEST_BASE_URL="http://localhost:${LAKEKEEPER__LISTEN_PORT}"
++export UC_TEST_S3_ENDPOINT="http://localhost:9000"
++
++set +e
++if [ "$MODE" = "openfga" ]; then
++    "${UC_TEST_PYTHON}" -m pytest "${SCRIPT_DIR}/test_authz.py" -v "$@"
++else
++    "${UC_TEST_PYTHON}" -m pytest "${SCRIPT_DIR}" -v "$@"
++fi
++STATUS=$?
++set -e
++
++if [ $STATUS -ne 0 ]; then
++    echo "--- server.log (tail) ---" >&2
++    tail -80 "${RUN_DIR}/server.log" >&2
++fi
++exit $STATUS
+diff --git a/tests/uc-compat/test_authz.py b/tests/uc-compat/test_authz.py
+new file mode 100644
+index 00000000..d05aa6e8
+--- /dev/null
++++ b/tests/uc-compat/test_authz.py
+@@ -0,0 +1,85 @@
++"""AuthZ checks for MODE=openfga. Skipped entirely under MODE=allowall.
++
++Reality of this stack (see run.sh header): the OpenFGA authorizer rejects
++anonymous bootstrap and the fork ships no dev/test authenticator, so without
++an IdP (keycloak — placeholder, not yet in the compose file) the data-plane
++suite cannot run against the openfga backend. What IS covered here:
++
++  1. the server actually runs with authz-backend=openfga (which also proves
++     `lakekeeper migrate` successfully created the OpenFGA store and wrote
++     the fork's authorization model, incl. new UC object types);
++  2. anonymous bootstrap is rejected (the documented failure mode);
++  3. when a real bearer token IS available (UC_TEST_TOKEN, external IdP),
++     creator-owner semantics: the volume creator holds the full authorizer
++     action set via /management/v1/permissions/warehouse/{wh}/volume/{vol}/
++     authorizer-actions, and a permissions read endpoint exists.
++
++The deep allow/deny matrix needs multiple authenticated principals and is
++out of scope until the keycloak service lands.
++"""
++
++import pytest
++
++from conftest import MODE, TOKEN, unique_name
++
++pytestmark = [
++    pytest.mark.authz,
++    pytest.mark.skipif(
++        MODE != "openfga",
++        reason="authz tests only run with UC_TEST_MODE=openfga",
++    ),
++]
++
++
++def test_server_uses_openfga_backend(server):
++    assert server.info.get("authz-backend") == "openfga"
++
++
++def test_anonymous_bootstrap_is_rejected(server):
++    if TOKEN:
++        pytest.skip("token supplied; anonymous-rejection check not applicable")
++    if server.bootstrapped:
++        pytest.skip("server already bootstrapped by an authenticated principal")
++    assert server.bootstrap_error is not None
++    status = int(server.bootstrap_error.split(":", 1)[0])
++    assert 400 <= status < 500
++
++
++@pytest.mark.skipif(
++    not TOKEN,
++    reason="needs an authenticated principal (UC_TEST_TOKEN via external IdP); "
++    "keycloak service is a TODO placeholder in this stack",
++)
++class TestOwnerRelations:
++    def test_volume_creator_gets_full_action_set(self, server, uc, warehouse, schema):
++        from unitycatalog.client.models import CreateVolumeRequestContent, VolumeType
++
++        vol = uc.run(
++            uc.volumes.create_volume(
++                CreateVolumeRequestContent(
++                    catalog_name=schema["catalog_name"],
++                    schema_name=schema["name"],
++                    name=unique_name("vol"),
++                    volume_type=VolumeType.MANAGED,
++                )
++            )
++        )
++        resp = server.client.get(
++            f"/management/v1/permissions/warehouse/{warehouse['id']}"
++            f"/volume/{vol.volume_id}/authorizer-actions"
++        )
++        if resp.status_code == 404:
++            pytest.xfail(
++                "volume authorizer-actions management endpoint not implemented yet"
++            )
++        resp.raise_for_status()
++        actions = resp.json().get("allowed-actions", resp.json())
++        # Creator/owner should hold the full set incl. drop + write.
++        joined = str(actions).lower()
++        assert "drop" in joined and ("write" in joined or "read" in joined)
++
++    def test_permissions_check_endpoint_exists(self, server):
++        # Keep light: the endpoint must exist (POST body shape is
++        # backend-specific; anything but 404/405 proves routing).
++        resp = server.client.post("/management/v1/permissions/check", json={})
++        assert resp.status_code not in (404, 405)
+diff --git a/tests/uc-compat/test_catalogs_schemas.py b/tests/uc-compat/test_catalogs_schemas.py
+new file mode 100644
+index 00000000..64e578c0
+--- /dev/null
++++ b/tests/uc-compat/test_catalogs_schemas.py
+@@ -0,0 +1,157 @@
++"""UC Catalogs + Schemas surface (design D2: catalog=warehouse, schema=ns).
++
++These endpoints already exist server-side; everything here is `-m smoke`
++runnable, except the delete-non-empty case which needs Volumes.
++"""
++
++import pytest
++from unitycatalog.client.exceptions import ApiException, NotFoundException
++from unitycatalog.client.models import CreateSchema, UpdateSchema
++
++from conftest import assert_uc_error, unique_name
++
++pytestmark = pytest.mark.smoke
++
++
++class TestCatalogs:
++    def test_list_catalogs_contains_warehouse(self, uc, warehouse):
++        resp = uc.run(uc.catalogs.list_catalogs())
++        names = [c.name for c in resp.catalogs]
++        assert warehouse["name"] in names
++
++    def test_get_catalog(self, uc, warehouse):
++        cat = uc.run(uc.catalogs.get_catalog(warehouse["name"]))
++        assert cat.name == warehouse["name"]
++        assert cat.id == warehouse["id"]
++
++    def test_get_catalog_404(self, uc, warehouse):
++        with pytest.raises(NotFoundException) as ei:
++            uc.run(uc.catalogs.get_catalog(unique_name("nope")))
++        assert_uc_error(ei, 404, "NOT_FOUND")
++
++    def test_catalogs_are_read_only(self, uc, warehouse):
++        # v1 scope cut: catalog create/update/delete → 400 INVALID_ARGUMENT
++        # pointing to the management API.
++        from unitycatalog.client.models import CreateCatalog, UpdateCatalog
++
++        with pytest.raises(ApiException) as ei:
++            uc.run(uc.catalogs.create_catalog(CreateCatalog(name=unique_name("cat"))))
++        assert_uc_error(ei, 400, "INVALID_ARGUMENT")
++
++        with pytest.raises(ApiException) as ei:
++            uc.run(
++                uc.catalogs.update_catalog(
++                    warehouse["name"], UpdateCatalog(comment="nope")
++                )
++            )
++        assert_uc_error(ei, 400, "INVALID_ARGUMENT")
++
++        with pytest.raises(ApiException) as ei:
++            uc.run(uc.catalogs.delete_catalog(warehouse["name"]))
++        assert_uc_error(ei, 400, "INVALID_ARGUMENT")
++
++    def test_list_catalogs_pagination_envelope(self, uc, warehouse):
++        resp = uc.run(uc.catalogs.list_catalogs(max_results=1))
++        assert len(resp.catalogs) <= 1
++
++
++class TestSchemas:
++    def test_schema_crud_roundtrip(self, uc, warehouse):
++        name = unique_name("sch")
++        full_name = f"{warehouse['name']}.{name}"
++
++        created = uc.run(
++            uc.schemas.create_schema(
++                CreateSchema(
++                    name=name, catalog_name=warehouse["name"], comment="e2e schema"
++                )
++            )
++        )
++        assert created.name == name
++        assert created.catalog_name == warehouse["name"]
++        assert created.full_name == full_name
++        assert created.comment == "e2e schema"
++
++        got = uc.run(uc.schemas.get_schema(full_name))
++        assert got.full_name == full_name
++
++        listed = uc.run(uc.schemas.list_schemas(catalog_name=warehouse["name"]))
++        assert name in [s.name for s in listed.schemas]
++
++        updated = uc.run(
++            uc.schemas.update_schema(full_name, UpdateSchema(comment="updated"))
++        )
++        assert updated.comment == "updated"
++
++        deleted = uc.run(uc.schemas.delete_schema(full_name))
++        # DELETE returns 200 with an empty JSON object.
++        assert deleted in ({}, None)
++
++        with pytest.raises(NotFoundException) as ei:
++            uc.run(uc.schemas.get_schema(full_name))
++        assert_uc_error(ei, 404, "NOT_FOUND")
++
++    def test_get_schema_404(self, uc, warehouse):
++        with pytest.raises(NotFoundException) as ei:
++            uc.run(uc.schemas.get_schema(f"{warehouse['name']}.{unique_name('nope')}"))
++        assert_uc_error(ei, 404, "NOT_FOUND")
++
++    def test_create_schema_in_missing_catalog_404(self, uc, warehouse):
++        with pytest.raises(NotFoundException) as ei:
++            uc.run(
++                uc.schemas.create_schema(
++                    CreateSchema(
++                        name=unique_name("sch"), catalog_name=unique_name("nocat")
++                    )
++                )
++            )
++        assert_uc_error(ei, 404)
++
++    def test_create_duplicate_schema_conflict(self, uc, schema):
++        with pytest.raises(ApiException) as ei:
++            uc.run(
++                uc.schemas.create_schema(
++                    CreateSchema(
++                        name=schema["name"], catalog_name=schema["catalog_name"]
++                    )
++                )
++            )
++        assert_uc_error(ei, 409, "ALREADY_EXISTS")
++
++    def test_list_schemas_pagination(self, uc, warehouse):
++        names = [unique_name("pag") for _ in range(2)]
++        for n in names:
++            uc.run(
++                uc.schemas.create_schema(
++                    CreateSchema(name=n, catalog_name=warehouse["name"])
++                )
++            )
++        try:
++            seen, token = [], None
++            for _ in range(50):
++                resp = uc.run(
++                    uc.schemas.list_schemas(
++                        catalog_name=warehouse["name"], max_results=1, page_token=token
++                    )
++                )
++                assert len(resp.schemas) <= 1
++                seen += [s.name for s in resp.schemas]
++                token = resp.next_page_token
++                if not token:
++                    break
++            for n in names:
++                assert n in seen
++        finally:
++            for n in names:
++                uc.run(uc.schemas.delete_schema(f"{warehouse['name']}.{n}"))
++
++
++def test_delete_nonexistent_schema_404(uc, warehouse):
++    with pytest.raises(NotFoundException) as ei:
++        uc.run(uc.schemas.delete_schema(f"{warehouse['name']}.{unique_name('nope')}"))
++    assert_uc_error(ei, 404, "NOT_FOUND")
++
++
++# The delete-non-empty-schema → 400 case lives in test_volumes.py
++# (test_delete_schema_containing_volume_fails): it needs the Volumes
++# endpoints to make the schema non-empty, so it cannot be `-m smoke`.
+diff --git a/tests/uc-compat/test_functions.py b/tests/uc-compat/test_functions.py
+new file mode 100644
+index 00000000..f401ec2d
+--- /dev/null
++++ b/tests/uc-compat/test_functions.py
+@@ -0,0 +1,169 @@
++"""UC Functions: unitycatalog-ai create/execute + framework adapters + raw SDK.
++
++Function execution is CLIENT-side (uc-api-contract.md §8): the server must
++round-trip `routine_definition` and friends byte-identically; unitycatalog-ai
++reconstructs a Python callable from the stored definition. The LangChain and
++OpenAI toolkit tests prove framework integration without calling any LLM API.
++"""
++
++import json
++
++import pytest
++from unitycatalog.client.exceptions import ApiException, NotFoundException
++
++from conftest import assert_uc_error, unique_name
++
++
++def add_numbers(a: int, b: int) -> int:
++    """Adds two numbers and returns the result.
++
++    Args:
++        a: The first number.
++        b: The second number.
++
++    Returns:
++        The sum of the two numbers.
++    """
++    return a + b
++
++
++class TestUnitycatalogAi:
++    def test_create_retrieve_execute(self, uc_ai, schema):
++        catalog, sch = schema["catalog_name"], schema["name"]
++        full_name = f"{catalog}.{sch}.add_numbers"
++
++        def scenario(client):
++            info = client.create_python_function(
++                func=add_numbers, catalog=catalog, schema=sch, replace=True
++            )
++            assert info.full_name == full_name
++            assert info.routine_body == "EXTERNAL"
++            assert info.external_language == "PYTHON"
++
++            got = client.get_function(full_name)
++            assert got.name == "add_numbers"
++            # Byte-fidelity of the stored python body is what makes local
++            # execution possible.
++            assert "return a + b" in got.routine_definition
++
++            listed = client.list_functions(catalog=catalog, schema=sch)
++            assert full_name in [f.full_name for f in listed]
++
++            result = client.execute_function(full_name, {"a": 2, "b": 40})
++            assert result.error is None
++            assert str(result.value) == "42"
++
++            client.delete_function(full_name)
++            return True
++
++        assert uc_ai(scenario) is True
++
++    def test_langchain_tool_invocation(self, uc_ai, schema):
++        catalog, sch = schema["catalog_name"], schema["name"]
++        full_name = f"{catalog}.{sch}.add_numbers"
++
++        def scenario(client):
++            from unitycatalog.ai.langchain.toolkit import UCFunctionToolkit
++
++            client.create_python_function(
++                func=add_numbers, catalog=catalog, schema=sch, replace=True
++            )
++            toolkit = UCFunctionToolkit(client=client, function_names=[full_name])
++            tools = toolkit.tools
++            assert len(tools) == 1
++            tool = tools[0]
++            assert tool.uc_function_name == full_name
++            assert "Adds two numbers" in tool.description
++            # Direct invocation — no LLM involved. tool.func returns the
++            # FunctionExecutionResult serialized to JSON.
++            out = json.loads(tool.func(a=3, b=4))
++            assert str(out["value"]) == "7"
++            # StructuredTool.invoke path works too.
++            out2 = json.loads(tool.invoke({"a": 10, "b": 5}))
++            assert str(out2["value"]) == "15"
++            client.delete_function(full_name)
++            return True
++
++        assert uc_ai(scenario) is True
++
++    def test_openai_tool_spec_generation(self, uc_ai, schema):
++        catalog, sch = schema["catalog_name"], schema["name"]
++        full_name = f"{catalog}.{sch}.add_numbers"
++
++        def scenario(client):
++            from unitycatalog.ai.openai.toolkit import UCFunctionToolkit
++
++            client.create_python_function(
++                func=add_numbers, catalog=catalog, schema=sch, replace=True
++            )
++            toolkit = UCFunctionToolkit(client=client, function_names=[full_name])
++            tools = toolkit.tools  # ChatCompletionToolParam dicts — NOT an API call
++            assert len(tools) == 1
++            spec = tools[0]
++            assert spec["type"] == "function"
++            params = spec["function"]["parameters"]
++            props = params.get("properties", {})
++            assert "a" in props and "b" in props
++            client.delete_function(full_name)
++            return True
++
++        assert uc_ai(scenario) is True
++
++
++class TestFunctionsRawSdk:
++    def test_function_info_roundtrip_fields(self, uc, uc_ai, schema):
++        catalog, sch = schema["catalog_name"], schema["name"]
++        full_name = f"{catalog}.{sch}.add_numbers"
++
++        def create(client):
++            client.create_python_function(
++                func=add_numbers, catalog=catalog, schema=sch, replace=True
++            )
++
++        uc_ai(create)
++
++        info = uc.run(uc.functions.get_function(full_name))
++        assert info.routine_body == "EXTERNAL"
++        assert info.external_language == "PYTHON"
++        assert "return a + b" in info.routine_definition
++        assert info.function_id
++        assert info.created_at is not None
++        params = info.input_params.parameters
++        assert [p.name for p in params] == ["a", "b"]
++        assert [p.position for p in params] == [0, 1]
++        for p in params:
++            assert p.type_name is not None
++            assert p.type_text
++            assert p.type_json
++        # data_type/full_data_type echo the return type.
++        assert str(info.data_type) in ("ColumnTypeName.LONG", "LONG")
++
++        listed = uc.run(
++            uc.functions.list_functions(catalog_name=catalog, schema_name=sch)
++        )
++        assert full_name in [f.full_name for f in listed.functions]
++
++        deleted = uc.run(uc.functions.delete_function(full_name))
++        assert deleted in ({}, None)
++        with pytest.raises(NotFoundException) as ei:
++            uc.run(uc.functions.get_function(full_name))
++        assert_uc_error(ei, 404, "NOT_FOUND")
++
++    def test_get_missing_function_404(self, uc, schema):
++        with pytest.raises(NotFoundException) as ei:
++            uc.run(
++                uc.functions.get_function(f"{schema['full_name']}.{unique_name('fn')}")
++            )
++        assert_uc_error(ei, 404, "NOT_FOUND")
++
++    def test_functions_have_no_update_endpoint(self, uc, schema):
++        # Contract: no PATCH /functions/{name}. A PATCH must not be routed.
++        import httpx
++
++        from conftest import UC_HOST
++
++        resp = httpx.patch(
++            f"{UC_HOST}/functions/{schema['full_name']}.{unique_name('fn')}",
++            json={"comment": "nope"},
++        )
++        assert resp.status_code in (404, 405)
+diff --git a/tests/uc-compat/test_models.py b/tests/uc-compat/test_models.py
+new file mode 100644
+index 00000000..10703724
+--- /dev/null
++++ b/tests/uc-compat/test_models.py
+@@ -0,0 +1,254 @@
++"""UC Registered Models + Model Versions: MLflow-style artifact lifecycle.
++
++Contract (uc-api-contract.md §5-§7):
++  create model -> create version (PENDING_REGISTRATION, server assigns int
++  version + storage_location) -> READ_WRITE creds while pending -> upload
++  artifacts -> finalize (READY) -> READ_WRITE creds now rejected -> READ creds
++  download artifacts.
++"""
++
++import pytest
++from unitycatalog.client.exceptions import ApiException, NotFoundException
++from unitycatalog.client.models import (
++    CreateModelVersion,
++    CreateRegisteredModel,
++    FinalizeModelVersion,
++    GenerateTemporaryModelVersionCredential,
++    ModelVersionOperation,
++    ModelVersionStatus,
++    UpdateRegisteredModel,
++)
++
++from conftest import (
++    assert_uc_error,
++    s3_client_from_creds,
++    split_s3_uri,
++    unique_name,
++)
++
++ARTIFACT = b"\x93NUMPY-not-really-model-bytes"
++
++
++@pytest.fixture()
++def model(uc, schema):
++    name = unique_name("model")
++    info = uc.run(
++        uc.models.create_registered_model(
++            CreateRegisteredModel(
++                name=name,
++                catalog_name=schema["catalog_name"],
++                schema_name=schema["name"],
++                comment="e2e model",
++            )
++        )
++    )
++    yield info
++    # Cleanup: drop remaining versions, then the model.
++    try:
++        versions = uc.run(uc.model_versions.list_model_versions(info.full_name))
++        for v in versions.model_versions or []:
++            try:
++                uc.run(
++                    uc.model_versions.delete_model_version(info.full_name, v.version)
++                )
++            except Exception:
++                pass
++        uc.run(uc.models.delete_registered_model(info.full_name))
++    except Exception:
++        pass
++
++
++def _mv_creds(uc, model_info, version, operation):
++    return uc.run(
++        uc.temp_creds.generate_temporary_model_version_credentials(
++            GenerateTemporaryModelVersionCredential(
++                catalog_name=model_info.catalog_name,
++                schema_name=model_info.schema_name,
++                model_name=model_info.name,
++                version=version,
++                operation=operation,
++            )
++        )
++    )
++
++
++class TestRegisteredModels:
++    def test_create_model_shape(self, model, schema):
++        assert model.full_name == f"{schema['full_name']}.{model.name}"
++        assert model.id
++        assert model.storage_location and model.storage_location.startswith("s3://")
++        assert model.created_at is not None
++
++    def test_get_and_list(self, uc, model, schema):
++        got = uc.run(uc.models.get_registered_model(model.full_name))
++        assert got.id == model.id
++
++        listed = uc.run(
++            uc.models.list_registered_models(
++                catalog_name=schema["catalog_name"], schema_name=schema["name"]
++            )
++        )
++        assert model.full_name in [m.full_name for m in listed.registered_models]
++
++        # listRegisteredModels allows omitting catalog/schema (list-all).
++        all_models = uc.run(uc.models.list_registered_models())
++        assert model.full_name in [m.full_name for m in all_models.registered_models]
++
++    def test_update_comment(self, uc, model):
++        updated = uc.run(
++            uc.models.update_registered_model(
++                model.full_name, UpdateRegisteredModel(comment="patched")
++            )
++        )
++        assert updated.comment == "patched"
++
++    def test_get_missing_model_404(self, uc, schema):
++        with pytest.raises(NotFoundException) as ei:
++            uc.run(
++                uc.models.get_registered_model(
++                    f"{schema['full_name']}.{unique_name('m')}"
++                )
++            )
++        assert_uc_error(ei, 404, "NOT_FOUND")
++
++    def test_duplicate_model_409(self, uc, model, schema):
++        with pytest.raises(ApiException) as ei:
++            uc.run(
++                uc.models.create_registered_model(
++                    CreateRegisteredModel(
++                        name=model.name,
++                        catalog_name=schema["catalog_name"],
++                        schema_name=schema["name"],
++                    )
++                )
++            )
++        assert_uc_error(ei, 409, "ALREADY_EXISTS")
++
++
++class TestModelVersionLifecycle:
++    def test_full_artifact_lifecycle(self, uc, model):
++        # 1. Create version: server assigns version=1, PENDING_REGISTRATION,
++        #    and a managed storage_location under the model's location.
++        mv = uc.run(
++            uc.model_versions.create_model_version(
++                CreateModelVersion(
++                    model_name=model.name,
++                    catalog_name=model.catalog_name,
++                    schema_name=model.schema_name,
++                    source="uc-e2e://local-training-run",
++                    comment="v1",
++                )
++            )
++        )
++        assert mv.version == 1
++        assert mv.status == ModelVersionStatus.PENDING_REGISTRATION
++        assert mv.storage_location and mv.storage_location.startswith("s3://")
++
++        # 2. READ_WRITE creds while PENDING -> upload artifact.
++        rw = _mv_creds(
++            uc, model, mv.version, ModelVersionOperation.READ_WRITE_MODEL_VERSION
++        )
++        assert rw.aws_temp_credentials is not None
++        bucket, prefix = split_s3_uri(mv.storage_location)
++        key = f"{prefix}/model.bin"
++        s3_client_from_creds(rw).put_object(Bucket=bucket, Key=key, Body=ARTIFACT)
++
++        # 3. Finalize -> READY. Body repeats full_name+version per contract.
++        finalized = uc.run(
++            uc.model_versions.finalize_model_version(
++                model.full_name,
++                mv.version,
++                FinalizeModelVersion(full_name=model.full_name, version=mv.version),
++            )
++        )
++        assert finalized.status == ModelVersionStatus.READY
++
++        # 4. READ_WRITE creds after READY must be rejected (contract says the
++        #    reference server 400s; accept 400/409 per implementation).
++        with pytest.raises(ApiException) as ei:
++            _mv_creds(
++                uc, model, mv.version, ModelVersionOperation.READ_WRITE_MODEL_VERSION
++            )
++        assert ei.value.status in (400, 409)
++
++        # 5. READ creds -> download matches.
++        ro = _mv_creds(uc, model, mv.version, ModelVersionOperation.READ_MODEL_VERSION)
++        body = (
++            s3_client_from_creds(ro)
++            .get_object(Bucket=bucket, Key=key)["Body"]
++            .read()
++        )
++        assert body == ARTIFACT
++
++        # 6. list + get by version.
++        listed = uc.run(uc.model_versions.list_model_versions(model.full_name))
++        assert mv.version in [v.version for v in listed.model_versions]
++        got = uc.run(uc.model_versions.get_model_version(model.full_name, mv.version))
++        assert got.status == ModelVersionStatus.READY
++        assert got.id == mv.id
++
++        # 7. Version numbers auto-increment per model.
++        mv2 = uc.run(
++            uc.model_versions.create_model_version(
++                CreateModelVersion(
++                    model_name=model.name,
++                    catalog_name=model.catalog_name,
++                    schema_name=model.schema_name,
++                    source="uc-e2e://local-training-run-2",
++                )
++            )
++        )
++        assert mv2.version == 2
++
++        # 8. Delete version 2, then it 404s.
++        deleted = uc.run(
++            uc.model_versions.delete_model_version(model.full_name, mv2.version)
++        )
++        assert deleted in ({}, None)
++        with pytest.raises(NotFoundException):
++            uc.run(uc.model_versions.get_model_version(model.full_name, mv2.version))
++
++        # 9. Deleting a model with live versions fails without force.
++        with pytest.raises(ApiException) as ei:
++            uc.run(uc.models.delete_registered_model(model.full_name))
++        assert ei.value.status in (400, 409)
++
++        # 10. Drop version 1, then the model deletes cleanly and 404s.
++        uc.run(uc.model_versions.delete_model_version(model.full_name, mv.version))
++        uc.run(uc.models.delete_registered_model(model.full_name))
++        with pytest.raises(NotFoundException) as ei:
++            uc.run(uc.models.get_registered_model(model.full_name))
++        assert_uc_error(ei, 404, "NOT_FOUND")
++
++    def test_finalize_twice_rejected(self, uc, model):
++        mv = uc.run(
++            uc.model_versions.create_model_version(
++                CreateModelVersion(
++                    model_name=model.name,
++                    catalog_name=model.catalog_name,
++                    schema_name=model.schema_name,
++                    source="uc-e2e://run",
++                )
++            )
++        )
++        uc.run(
++            uc.model_versions.finalize_model_version(
++                model.full_name,
++                mv.version,
++                FinalizeModelVersion(full_name=model.full_name, version=mv.version),
++            )
++        )
++        with pytest.raises(ApiException) as ei:
++            uc.run(
++                uc.model_versions.finalize_model_version(
++                    model.full_name,
++                    mv.version,
++                    FinalizeModelVersion(full_name=model.full_name, version=mv.version),
++                )
++            )
++        assert ei.value.status in (400, 409)
++
++    def test_version_creds_for_missing_version_fail(self, uc, model):
++        with pytest.raises(ApiException) as ei:
++            _mv_creds(uc, model, 999, ModelVersionOperation.READ_MODEL_VERSION)
++        assert ei.value.status in (400, 404)
+diff --git a/tests/uc-compat/test_volumes.py b/tests/uc-compat/test_volumes.py
+new file mode 100644
+index 00000000..527de191
+--- /dev/null
++++ b/tests/uc-compat/test_volumes.py
+@@ -0,0 +1,292 @@
++"""UC Volumes: CRUD, pagination, temporary credentials, engine access.
++
++Wire contract: uc-api-contract.md §3 + §7. Endpoints are being implemented
++concurrently (design phase B); this file is written against the contract and
++the validated unitycatalog-client 0.4.1 surface.
++"""
++
++import io
++import uuid
++
++import pytest
++from unitycatalog.client.exceptions import ApiException, NotFoundException
++from unitycatalog.client.models import (
++    CreateVolumeRequestContent,
++    GenerateTemporaryVolumeCredential,
++    UpdateVolumeRequestContent,
++    VolumeOperation,
++    VolumeType,
++)
++
++from conftest import (
++    WAREHOUSE_BASE_LOCATION,
++    assert_uc_error,
++    s3_client_from_creds,
++    split_s3_uri,
++    unique_name,
++)
++
++
++def _external_location() -> str:
++    # Must be under the warehouse base location to pass
++    # `storage_profile.require_allowed_location` (design D4).
++    return f"{WAREHOUSE_BASE_LOCATION}/external-volumes/{uuid.uuid4().hex}"
++
++
++@pytest.fixture()
++def volume_factory(uc, schema):
++    created = []
++
++    def factory(volume_type: VolumeType, **kwargs):
++        name = kwargs.pop("name", unique_name("vol"))
++        req = CreateVolumeRequestContent(
++            catalog_name=schema["catalog_name"],
++            schema_name=schema["name"],
++            name=name,
++            volume_type=volume_type,
++            **kwargs,
++        )
++        info = uc.run(uc.volumes.create_volume(req))
++        created.append(info.full_name)
++        return info
++
++    yield factory
++    for full_name in created:
++        try:
++            uc.run(uc.volumes.delete_volume(full_name))
++        except Exception:
++            pass
++
++
++class TestVolumeCrud:
++    def test_create_external_volume(self, uc, schema, volume_factory):
++        location = _external_location()
++        vol = volume_factory(
++            VolumeType.EXTERNAL, storage_location=location, comment="ext vol"
++        )
++        assert vol.volume_type == VolumeType.EXTERNAL
++        assert vol.storage_location.rstrip("/") == location.rstrip("/")
++        assert vol.full_name == f"{schema['full_name']}.{vol.name}"
++        assert vol.volume_id  # UUID string used by temporary-volume-credentials
++        assert vol.created_at is not None
++
++    def test_create_managed_volume(self, uc, schema, volume_factory):
++        vol = volume_factory(VolumeType.MANAGED)
++        assert vol.volume_type == VolumeType.MANAGED
++        # Server generates the location for MANAGED volumes.
++        assert vol.storage_location and vol.storage_location.startswith("s3://")
++
++    def test_get_by_full_name(self, uc, volume_factory):
++        vol = volume_factory(VolumeType.MANAGED)
++        got = uc.run(uc.volumes.get_volume(vol.full_name))
++        assert got.volume_id == vol.volume_id
++        assert got.full_name == vol.full_name
++
++    def test_list_and_pagination(self, uc, schema, volume_factory):
++        names = {volume_factory(VolumeType.MANAGED).name for _ in range(2)}
++        seen, token = [], None
++        for _ in range(50):
++            resp = uc.run(
++                uc.volumes.list_volumes(
++                    catalog_name=schema["catalog_name"],
++                    schema_name=schema["name"],
++                    max_results=1,
++                    page_token=token,
++                )
++            )
++            assert len(resp.volumes) <= 1
++            seen += [v.name for v in resp.volumes]
++            token = resp.next_page_token
++            if not token:
++                break
++        assert names <= set(seen)
++
++    def test_patch_comment(self, uc, volume_factory):
++        vol = volume_factory(VolumeType.MANAGED)
++        updated = uc.run(
++            uc.volumes.update_volume(
++                vol.full_name, UpdateVolumeRequestContent(comment="patched")
++            )
++        )
++        assert updated.comment == "patched"
++
++    def test_patch_new_name_rejected(self, uc, volume_factory):
++        # v1 scope cut: renames are rejected with 400 INVALID_ARGUMENT.
++        vol = volume_factory(VolumeType.MANAGED)
++        with pytest.raises(ApiException) as ei:
++            uc.run(
++                uc.volumes.update_volume(
++                    vol.full_name,
++                    UpdateVolumeRequestContent(new_name=unique_name("renamed")),
++                )
++            )
++        assert_uc_error(ei, 400, "INVALID_ARGUMENT")
++
++    def test_name_conflict_409(self, uc, schema, volume_factory):
++        vol = volume_factory(VolumeType.MANAGED)
++        with pytest.raises(ApiException) as ei:
++            uc.run(
++                uc.volumes.create_volume(
++                    CreateVolumeRequestContent(
++                        catalog_name=schema["catalog_name"],
++                        schema_name=schema["name"],
++                        name=vol.name,
++                        volume_type=VolumeType.MANAGED,
++                    )
++                )
++            )
++        assert_uc_error(ei, 409, "ALREADY_EXISTS")
++
++    def test_delete_then_404(self, uc, schema):
++        vol = uc.run(
++            uc.volumes.create_volume(
++                CreateVolumeRequestContent(
++                    catalog_name=schema["catalog_name"],
++                    schema_name=schema["name"],
++                    name=unique_name("vol"),
++                    volume_type=VolumeType.MANAGED,
++                )
++            )
++        )
++        deleted = uc.run(uc.volumes.delete_volume(vol.full_name))
++        assert deleted in ({}, None)  # 200 + `{}` per contract
++        with pytest.raises(NotFoundException) as ei:
++            uc.run(uc.volumes.get_volume(vol.full_name))
++        assert_uc_error(ei, 404, "NOT_FOUND")
++
++    def test_get_missing_volume_404(self, uc, schema):
++        with pytest.raises(NotFoundException) as ei:
++            uc.run(uc.volumes.get_volume(f"{schema['full_name']}.{unique_name('v')}"))
++        assert_uc_error(ei, 404, "NOT_FOUND")
++
++    def test_delete_schema_containing_volume_fails(self, uc, schema, volume_factory):
++        # UC delete-schema on a non-empty schema must 400 (design D2).
++        volume_factory(VolumeType.MANAGED)
++        with pytest.raises(ApiException) as ei:
++            uc.run(uc.schemas.delete_schema(schema["full_name"]))
++        assert ei.value.status == 400
++
++
++class TestVolumeCredentials:
++    def _creds(self, uc, volume_id, operation):
++        return uc.run(
++            uc.temp_creds.generate_temporary_volume_credentials(
++                GenerateTemporaryVolumeCredential(
++                    volume_id=volume_id, operation=operation
++                )
++            )
++        )
++
++    def test_read_credentials_shape(self, uc, volume_factory):
++        vol = volume_factory(VolumeType.MANAGED)
++        creds = self._creds(uc, vol.volume_id, VolumeOperation.READ_VOLUME)
++        aws = creds.aws_temp_credentials
++        assert aws is not None
++        assert aws.access_key_id and aws.secret_access_key and aws.session_token
++        # expiration_time is top-level epoch millis (present for STS creds).
++        if creds.expiration_time is not None:
++            assert creds.expiration_time > 10**12  # millis, not seconds
++
++    def test_write_then_read_via_boto3(self, uc, volume_factory):
++        vol = volume_factory(VolumeType.MANAGED)
++        bucket, prefix = split_s3_uri(vol.storage_location)
++        key = f"{prefix}/hello.txt"
++        payload = b"uc-volume-e2e"
++
++        write_creds = self._creds(uc, vol.volume_id, VolumeOperation.WRITE_VOLUME)
++        s3w = s3_client_from_creds(write_creds)
++        s3w.put_object(Bucket=bucket, Key=key, Body=payload)
++
++        read_creds = self._creds(uc, vol.volume_id, VolumeOperation.READ_VOLUME)
++        s3r = s3_client_from_creds(read_creds)
++        body = s3r.get_object(Bucket=bucket, Key=key)["Body"].read()
++        assert body == payload
++
++    def test_read_credentials_cannot_write(self, uc, volume_factory):
++        # Best-effort: relies on MinIO enforcing the STS session policy that
++        # downscopes READ_VOLUME credentials. Skip (not fail) if the store
++        # does not enforce it.
++        vol = volume_factory(VolumeType.MANAGED)
++        bucket, prefix = split_s3_uri(vol.storage_location)
++        read_creds = self._creds(uc, vol.volume_id, VolumeOperation.READ_VOLUME)
++        s3r = s3_client_from_creds(read_creds)
++        try:
++            s3r.put_object(Bucket=bucket, Key=f"{prefix}/nope.txt", Body=b"x")
++        except Exception:
++            return  # denied as expected
++        pytest.skip("MinIO did not enforce read-only downscoping (session policy)")
++
++    def test_creds_for_unknown_volume_404(self, uc, warehouse):
++        with pytest.raises(ApiException) as ei:
++            uc.run(
++                uc.temp_creds.generate_temporary_volume_credentials(
++                    GenerateTemporaryVolumeCredential(
++                        volume_id=str(uuid.uuid4()),
++                        operation=VolumeOperation.READ_VOLUME,
++                    )
++                )
++            )
++        assert ei.value.status in (400, 404)
++
++
++class TestVolumeEngineAccess:
++    """Engine-connection proof: parquet in a volume read through DuckDB httpfs
++    with vended credentials."""
++
++    def test_duckdb_reads_parquet_with_vended_creds(self, uc, volume_factory):
++        import pyarrow as pa
++        import pyarrow.parquet as pq
++
++        vol = volume_factory(VolumeType.MANAGED)
++        bucket, prefix = split_s3_uri(vol.storage_location)
++        key = f"{prefix}/data/rows.parquet"
++
++        # Write parquet via boto3 with WRITE_VOLUME vended creds.
++        table = pa.table({"id": list(range(100)), "val": [f"v{i}" for i in range(100)]})
++        buf = io.BytesIO()
++        pq.write_table(table, buf)
++        write_creds = uc.run(
++            uc.temp_creds.generate_temporary_volume_credentials(
++                GenerateTemporaryVolumeCredential(
++                    volume_id=vol.volume_id, operation=VolumeOperation.WRITE_VOLUME
++                )
++            )
++        )
++        s3_client_from_creds(write_creds).put_object(
++            Bucket=bucket, Key=key, Body=buf.getvalue()
++        )
++
++        # Read it back through DuckDB httpfs with READ_VOLUME vended creds.
++        import duckdb
++
++        from conftest import S3_ENDPOINT, S3_REGION
++
++        read_creds = uc.run(
++            uc.temp_creds.generate_temporary_volume_credentials(
++                GenerateTemporaryVolumeCredential(
++                    volume_id=vol.volume_id, operation=VolumeOperation.READ_VOLUME
++                )
++            )
++        )
++        aws = read_creds.aws_temp_credentials
++
++        con = duckdb.connect()
++        try:
++            try:
++                con.execute("INSTALL httpfs; LOAD httpfs;")
++            except Exception as e:
++                pytest.skip(f"duckdb httpfs extension unavailable offline: {e}")
++            endpoint = S3_ENDPOINT.split("://", 1)[1]
++            con.execute(f"SET s3_region='{S3_REGION}';")
++            con.execute(f"SET s3_endpoint='{endpoint}';")
++            con.execute("SET s3_use_ssl=false;")
++            con.execute("SET s3_url_style='path';")
++            con.execute(f"SET s3_access_key_id='{aws.access_key_id}';")
++            con.execute(f"SET s3_secret_access_key='{aws.secret_access_key}';")
++            con.execute(f"SET s3_session_token='{aws.session_token}';")
++            (count,) = con.execute(
++                f"SELECT count(*) FROM read_parquet('s3://{bucket}/{key}')"
++            ).fetchone()
++            assert count == 100
++        finally:
++            con.close()
+-- 
+2.43.0
+

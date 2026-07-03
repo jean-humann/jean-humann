@@ -1,0 +1,441 @@
+From f1a1049a4f0d650427b6e0e17fdd440cc7da4204 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 3 Jul 2026 00:41:39 +0000
+Subject: [PATCH 6/7] fix(uc-compat): block non-recursive namespace drop when
+ UC entities exist
+
+Namespace emptiness checks only counted tabulars and child namespaces,
+so dropping a schema silently cascade-deleted contained volumes,
+functions and models. Count live UC entities in the drop guard; add
+fork docs (docs/docs/uc-compat.md) and default the e2e unitycatalog-ai
+executor to local mode (subprocess sandbox rlimits trip in CI
+containers).
+---
+ ...89bca54edfece6fc2a0a529d3efd7e5aa84e.json} |  37 ++--
+ README.md                                     |   4 +
+ .../src/namespace.rs                          |  20 +-
+ docs/docs/uc-compat.md                        | 178 ++++++++++++++++++
+ docs/mkdocs.yml                               |   1 +
+ tests/uc-compat/conftest.py                   |   5 +-
+ 6 files changed, 227 insertions(+), 18 deletions(-)
+ rename .sqlx/{query-06ca94be2995c097d4d947acf075168d5af5e05a3ba2100dbab723e8bbb1d054.json => query-17930d56ba4c73603d8aa271b03289bca54edfece6fc2a0a529d3efd7e5aa84e.json} (62%)
+ create mode 100644 docs/docs/uc-compat.md
+
+diff --git a/.sqlx/query-06ca94be2995c097d4d947acf075168d5af5e05a3ba2100dbab723e8bbb1d054.json b/.sqlx/query-17930d56ba4c73603d8aa271b03289bca54edfece6fc2a0a529d3efd7e5aa84e.json
+similarity index 62%
+rename from .sqlx/query-06ca94be2995c097d4d947acf075168d5af5e05a3ba2100dbab723e8bbb1d054.json
+rename to .sqlx/query-17930d56ba4c73603d8aa271b03289bca54edfece6fc2a0a529d3efd7e5aa84e.json
+index e1cd9a36..b78cf343 100644
+--- a/.sqlx/query-06ca94be2995c097d4d947acf075168d5af5e05a3ba2100dbab723e8bbb1d054.json
++++ b/.sqlx/query-17930d56ba4c73603d8aa271b03289bca54edfece6fc2a0a529d3efd7e5aa84e.json
+@@ -1,10 +1,16 @@
+ {
+   "db_name": "PostgreSQL",
+-  "query": "\n        WITH namespace_info AS (\n            SELECT namespace_name, namespace_id, protected\n            FROM namespace\n            WHERE warehouse_id = $1 AND namespace_id = $2\n        ),\n        child_namespaces AS (\n            SELECT n.protected, n.namespace_id, n.namespace_name\n            FROM namespace n\n            INNER JOIN namespace_info ni ON n.namespace_name[1:array_length(ni.namespace_name, 1)] = ni.namespace_name\n            WHERE n.warehouse_id = $1 AND n.namespace_id != $2\n        ),\n        tabulars AS (\n            SELECT ta.tabular_id, ta.name as table_name, COALESCE(ni.namespace_name, cn.namespace_name) as namespace_name, fs_location, fs_protocol, ta.typ, ta.protected, deleted_at\n            FROM tabular ta\n            LEFT JOIN namespace_info ni ON ta.namespace_id = ni.namespace_id\n            LEFT JOIN child_namespaces cn ON ta.namespace_id = cn.namespace_id\n            WHERE warehouse_id = $1 AND (metadata_location IS NOT NULL OR ta.typ = 'generic-table') AND (ta.namespace_id = $2 OR (ta.namespace_id = ANY (SELECT namespace_id FROM child_namespaces)))\n        ),\n        tasks AS (\n            SELECT t.task_id, t.queue_name, t.status as task_status from task t\n            WHERE t.entity_id = ANY (SELECT tabular_id FROM tabulars) AND t.warehouse_id = $1 AND t.entity_type in ('table', 'view', 'generic-table')\n        )\n        SELECT\n            ni.protected AS \"is_protected!\",\n            ni.namespace_name AS \"namespace_name: Vec<String>\",\n            EXISTS (SELECT 1 FROM child_namespaces WHERE protected = true) AS \"has_protected_namespaces!\",\n            EXISTS (SELECT 1 FROM tabulars WHERE protected = true) AS \"has_protected_tabulars!\",\n            EXISTS (SELECT 1 FROM tasks WHERE task_status = 'running' AND queue_name IN ('soft_deletion', 'tabular_expiration')) AS \"has_running_expiration!\",\n            ARRAY(SELECT tabular_id FROM tabulars where deleted_at is NULL) AS \"child_tabulars!\",\n            ARRAY(SELECT to_jsonb(namespace_name) FROM tabulars where deleted_at is NULL) AS \"child_tabulars_namespace_names!: Vec<serde_json::Value>\",\n            ARRAY(SELECT table_name FROM tabulars where deleted_at is NULL) AS \"child_tabulars_table_names!\",\n            ARRAY(SELECT fs_protocol FROM tabulars where deleted_at is NULL) AS \"child_tabular_fs_protocol!\",\n            ARRAY(SELECT fs_location FROM tabulars where deleted_at is NULL) AS \"child_tabular_fs_location!\",\n            ARRAY(SELECT typ FROM tabulars where deleted_at is NULL) AS \"child_tabular_typ!: Vec<TabularType>\",\n            ARRAY(SELECT tabular_id FROM tabulars where deleted_at is not NULL) AS \"child_tabulars_deleted!\",\n            ARRAY(SELECT namespace_id FROM child_namespaces) AS \"child_namespaces!\",\n            ARRAY(SELECT task_id FROM tasks) AS \"child_tabular_task_id!: Vec<Uuid>\"\n        FROM namespace_info ni\n",
++  "query": "\n        WITH namespace_info AS (\n            SELECT namespace_name, namespace_id, protected\n            FROM namespace\n            WHERE warehouse_id = $1 AND namespace_id = $2\n        ),\n        child_namespaces AS (\n            SELECT n.protected, n.namespace_id, n.namespace_name\n            FROM namespace n\n            INNER JOIN namespace_info ni ON n.namespace_name[1:array_length(ni.namespace_name, 1)] = ni.namespace_name\n            WHERE n.warehouse_id = $1 AND n.namespace_id != $2\n        ),\n        tabulars AS (\n            SELECT ta.tabular_id, ta.name as table_name, COALESCE(ni.namespace_name, cn.namespace_name) as namespace_name, fs_location, fs_protocol, ta.typ, ta.protected, deleted_at\n            FROM tabular ta\n            LEFT JOIN namespace_info ni ON ta.namespace_id = ni.namespace_id\n            LEFT JOIN child_namespaces cn ON ta.namespace_id = cn.namespace_id\n            WHERE warehouse_id = $1 AND (metadata_location IS NOT NULL OR ta.typ = 'generic-table') AND (ta.namespace_id = $2 OR (ta.namespace_id = ANY (SELECT namespace_id FROM child_namespaces)))\n        ),\n        tasks AS (\n            SELECT t.task_id, t.queue_name, t.status as task_status from task t\n            WHERE t.entity_id = ANY (SELECT tabular_id FROM tabulars) AND t.warehouse_id = $1 AND t.entity_type in ('table', 'view', 'generic-table')\n        ),\n        uc_entities AS (\n            SELECT\n                (SELECT count(*) FROM uc_volume v\n                    WHERE v.warehouse_id = $1 AND v.deleted_at IS NULL\n                    AND (v.namespace_id = $2 OR v.namespace_id = ANY (SELECT namespace_id FROM child_namespaces)))\n                + (SELECT count(*) FROM uc_function f\n                    WHERE f.warehouse_id = $1 AND f.deleted_at IS NULL\n                    AND (f.namespace_id = $2 OR f.namespace_id = ANY (SELECT namespace_id FROM child_namespaces)))\n                + (SELECT count(*) FROM uc_model m\n                    WHERE m.warehouse_id = $1 AND m.deleted_at IS NULL\n                    AND (m.namespace_id = $2 OR m.namespace_id = ANY (SELECT namespace_id FROM child_namespaces)))\n                AS cnt\n        )\n        SELECT\n            (SELECT cnt FROM uc_entities) AS \"uc_entity_count!\",\n            ni.protected AS \"is_protected!\",\n            ni.namespace_name AS \"namespace_name: Vec<String>\",\n            EXISTS (SELECT 1 FROM child_namespaces WHERE protected = true) AS \"has_protected_namespaces!\",\n            EXISTS (SELECT 1 FROM tabulars WHERE protected = true) AS \"has_protected_tabulars!\",\n            EXISTS (SELECT 1 FROM tasks WHERE task_status = 'running' AND queue_name IN ('soft_deletion', 'tabular_expiration')) AS \"has_running_expiration!\",\n            ARRAY(SELECT tabular_id FROM tabulars where deleted_at is NULL) AS \"child_tabulars!\",\n            ARRAY(SELECT to_jsonb(namespace_name) FROM tabulars where deleted_at is NULL) AS \"child_tabulars_namespace_names!: Vec<serde_json::Value>\",\n            ARRAY(SELECT table_name FROM tabulars where deleted_at is NULL) AS \"child_tabulars_table_names!\",\n            ARRAY(SELECT fs_protocol FROM tabulars where deleted_at is NULL) AS \"child_tabular_fs_protocol!\",\n            ARRAY(SELECT fs_location FROM tabulars where deleted_at is NULL) AS \"child_tabular_fs_location!\",\n            ARRAY(SELECT typ FROM tabulars where deleted_at is NULL) AS \"child_tabular_typ!: Vec<TabularType>\",\n            ARRAY(SELECT tabular_id FROM tabulars where deleted_at is not NULL) AS \"child_tabulars_deleted!\",\n            ARRAY(SELECT namespace_id FROM child_namespaces) AS \"child_namespaces!\",\n            ARRAY(SELECT task_id FROM tasks) AS \"child_tabular_task_id!: Vec<Uuid>\"\n        FROM namespace_info ni\n",
+   "describe": {
+     "columns": [
+       {
+         "ordinal": 0,
++        "name": "uc_entity_count!",
++        "type_info": "Int8",
++        "origin": "Expression"
++      },
++      {
++        "ordinal": 1,
+         "name": "is_protected!",
+         "type_info": "Bool",
+         "origin": {
+@@ -15,7 +21,7 @@
+         }
+       },
+       {
+-        "ordinal": 1,
++        "ordinal": 2,
+         "name": "namespace_name: Vec<String>",
+         "type_info": "TextArray",
+         "origin": {
+@@ -26,55 +32,55 @@
+         }
+       },
+       {
+-        "ordinal": 2,
++        "ordinal": 3,
+         "name": "has_protected_namespaces!",
+         "type_info": "Bool",
+         "origin": "Expression"
+       },
+       {
+-        "ordinal": 3,
++        "ordinal": 4,
+         "name": "has_protected_tabulars!",
+         "type_info": "Bool",
+         "origin": "Expression"
+       },
+       {
+-        "ordinal": 4,
++        "ordinal": 5,
+         "name": "has_running_expiration!",
+         "type_info": "Bool",
+         "origin": "Expression"
+       },
+       {
+-        "ordinal": 5,
++        "ordinal": 6,
+         "name": "child_tabulars!",
+         "type_info": "UuidArray",
+         "origin": "Expression"
+       },
+       {
+-        "ordinal": 6,
++        "ordinal": 7,
+         "name": "child_tabulars_namespace_names!: Vec<serde_json::Value>",
+         "type_info": "JsonbArray",
+         "origin": "Expression"
+       },
+       {
+-        "ordinal": 7,
++        "ordinal": 8,
+         "name": "child_tabulars_table_names!",
+         "type_info": "TextArray",
+         "origin": "Expression"
+       },
+       {
+-        "ordinal": 8,
++        "ordinal": 9,
+         "name": "child_tabular_fs_protocol!",
+         "type_info": "TextArray",
+         "origin": "Expression"
+       },
+       {
+-        "ordinal": 9,
++        "ordinal": 10,
+         "name": "child_tabular_fs_location!",
+         "type_info": "TextArray",
+         "origin": "Expression"
+       },
+       {
+-        "ordinal": 10,
++        "ordinal": 11,
+         "name": "child_tabular_typ!: Vec<TabularType>",
+         "type_info": {
+           "Custom": {
+@@ -98,19 +104,19 @@
+         "origin": "Expression"
+       },
+       {
+-        "ordinal": 11,
++        "ordinal": 12,
+         "name": "child_tabulars_deleted!",
+         "type_info": "UuidArray",
+         "origin": "Expression"
+       },
+       {
+-        "ordinal": 12,
++        "ordinal": 13,
+         "name": "child_namespaces!",
+         "type_info": "UuidArray",
+         "origin": "Expression"
+       },
+       {
+-        "ordinal": 13,
++        "ordinal": 14,
+         "name": "child_tabular_task_id!: Vec<Uuid>",
+         "type_info": "UuidArray",
+         "origin": "Expression"
+@@ -123,6 +129,7 @@
+       ]
+     },
+     "nullable": [
++      null,
+       false,
+       false,
+       null,
+@@ -139,5 +146,5 @@
+       null
+     ]
+   },
+-  "hash": "06ca94be2995c097d4d947acf075168d5af5e05a3ba2100dbab723e8bbb1d054"
++  "hash": "17930d56ba4c73603d8aa271b03289bca54edfece6fc2a0a529d3efd7e5aa84e"
+ }
+diff --git a/README.md b/README.md
+index 10acc421..902fe27e 100644
+--- a/README.md
++++ b/README.md
+@@ -60,6 +60,9 @@ The Iceberg Catalog REST interface has become the standard for catalogs in open
+ 
+ If you are missing something, we would love to hear about it in a [GitHub Issue](https://github.com/lakekeeper/lakekeeper/issues/new).
+ 
++## Unity Catalog compatible API (fork)
++
++This fork (branch `multimodal-uc-objects`) additionally serves a **Unity Catalog-compatible REST API** at `/api/2.1/unity-catalog` — a fork extension, not part of upstream Lakekeeper. It lets unmodified UC clients (`unitycatalog-client`, `unitycatalog-ai` + LangChain/OpenAI adapters) manage **Volumes**, **Functions**, and **Registered Models + Model Versions**, and obtain **temporary storage credentials** for volume files and model artifacts. UC catalogs/schemas map read-mostly onto Warehouses/top-level Namespaces; the new entities are governed by the same per-action OpenFGA authorization as tables (authorization model v4.8). Enabled by default; disable with `LAKEKEEPER__ENABLE_UC_COMPAT_API=false`. See the [Unity Catalog Compatibility docs](docs/docs/uc-compat.md) for the concept mapping, endpoint reference, authorization model, credential vending, and v1 limitations.
+ 
+ # Status
+ 
+@@ -111,6 +114,7 @@ Operations outside of the Iceberg REST specification that are supported by Lakek
+ | User Management       | ![done] | User discovery and management for permission assignment. Includes fuzzy search functionality. Note: Lakekeeper does not serve as an identity provider |
+ | Role Management       | ![done] |                                            |
+ | Permission Management | ![done] | Table level, Requires OpenFGA              |
++| Unity Catalog compat API | ![done] | Fork extension: Volumes, Functions, Registered Models + Versions, temporary credentials at `/api/2.1/unity-catalog` ([docs](docs/docs/uc-compat.md)) |
+ 
+ ### Auth(N/Z) Handlers
+ 
+diff --git a/crates/lakekeeper-storage-postgres/src/namespace.rs b/crates/lakekeeper-storage-postgres/src/namespace.rs
+index f853091a..1352cc67 100644
+--- a/crates/lakekeeper-storage-postgres/src/namespace.rs
++++ b/crates/lakekeeper-storage-postgres/src/namespace.rs
+@@ -680,8 +680,22 @@ pub(crate) async fn drop_namespace(
+         tasks AS (
+             SELECT t.task_id, t.queue_name, t.status as task_status from task t
+             WHERE t.entity_id = ANY (SELECT tabular_id FROM tabulars) AND t.warehouse_id = $1 AND t.entity_type in ('table', 'view', 'generic-table')
++        ),
++        uc_entities AS (
++            SELECT
++                (SELECT count(*) FROM uc_volume v
++                    WHERE v.warehouse_id = $1 AND v.deleted_at IS NULL
++                    AND (v.namespace_id = $2 OR v.namespace_id = ANY (SELECT namespace_id FROM child_namespaces)))
++                + (SELECT count(*) FROM uc_function f
++                    WHERE f.warehouse_id = $1 AND f.deleted_at IS NULL
++                    AND (f.namespace_id = $2 OR f.namespace_id = ANY (SELECT namespace_id FROM child_namespaces)))
++                + (SELECT count(*) FROM uc_model m
++                    WHERE m.warehouse_id = $1 AND m.deleted_at IS NULL
++                    AND (m.namespace_id = $2 OR m.namespace_id = ANY (SELECT namespace_id FROM child_namespaces)))
++                AS cnt
+         )
+         SELECT
++            (SELECT cnt FROM uc_entities) AS "uc_entity_count!",
+             ni.protected AS "is_protected!",
+             ni.namespace_name AS "namespace_name: Vec<String>",
+             EXISTS (SELECT 1 FROM child_namespaces WHERE protected = true) AS "has_protected_namespaces!",
+@@ -716,12 +730,14 @@ pub(crate) async fn drop_namespace(
+     if !recursive
+         && (!info.child_tabulars.is_empty()
+             || !info.child_tabulars_deleted.is_empty()
+-            || !info.child_namespaces.is_empty())
++            || !info.child_namespaces.is_empty()
++            || info.uc_entity_count > 0)
+     {
+         return Err(
+-            NamespaceNotEmpty::new(warehouse_id, namespace_ident.clone()).append_detail(format!("Contains {} tables/views/generic tables, {} soft-deleted tables/views/generic tables and {} child namespaces.",
++            NamespaceNotEmpty::new(warehouse_id, namespace_ident.clone()).append_detail(format!("Contains {} tables/views/generic tables, {} soft-deleted tables/views/generic tables, {} volumes/functions/models and {} child namespaces.",
+                 info.child_tabulars.len(),
+                 info.child_tabulars_deleted.len(),
++                info.uc_entity_count,
+                 info.child_namespaces.len()
+         )
+ 
+diff --git a/docs/docs/uc-compat.md b/docs/docs/uc-compat.md
+new file mode 100644
+index 00000000..a5ba0edd
+--- /dev/null
++++ b/docs/docs/uc-compat.md
+@@ -0,0 +1,178 @@
++# Unity Catalog Compatibility
++
++!!! note
++    The Unity Catalog compatibility API is a **fork extension** (branch `multimodal-uc-objects`), not part of upstream Lakekeeper.
++
++This fork serves a **Unity Catalog-compatible REST surface** at `/api/2.1/unity-catalog` so that unmodified Unity Catalog clients can manage **Volumes**, **Functions**, and **Registered Models + Model Versions** — and obtain **temporary storage credentials** for volume files and model artifacts — against Lakekeeper. UC Catalogs and Schemas are mapped read-mostly onto existing Lakekeeper concepts: a UC *catalog* is a Lakekeeper **Warehouse** (in the caller's default project) and a UC *schema* is a **top-level Namespace** in that warehouse.
++
++The new entities are first-class Lakekeeper objects: they live in dedicated Postgres tables, participate in location-overlap checks alongside Iceberg tables, and are governed by the same per-action OpenFGA authorization model as tables and views (new object types `lakekeeper_volume`, `lakekeeper_function`, `lakekeeper_model` in authorization model v4.8).
++
++## Clients
++
++The compatibility surface is exercised end-to-end (see [Testing](#testing)) with:
++
++- **`unitycatalog-client` 0.4.1** — full CRUD for catalogs (read-only), schemas, volumes, functions, registered models and model versions, plus both temporary-credentials endpoints.
++- **`unitycatalog-ai` 0.4.0** and its framework adapters (**`unitycatalog-langchain`**, **`unitycatalog-openai`**) — `create_python_function`, function retrieval and client-side `execute_function`, LangChain `UCFunctionToolkit` tools, OpenAI tool-schema generation.
++- **Storage engines via vended credentials** — `boto3`, DuckDB (`httpfs`), and `pyarrow` reading/writing volume files and model artifacts directly on object storage with credentials from the temporary-credentials endpoints.
++
++Any client that speaks the Unity Catalog 0.x REST wire format for these resources (including the `uc` CLI's `catalog`/`schema`/`volume`/`function`/`registered_model`/`model_version` commands) should work for the operations listed below; operations the compatibility API deliberately does not support (catalog create, renames, path credentials) return a well-formed UC `INVALID_ARGUMENT` error instead of an unexpected failure.
++
++## Concept mapping
++
++| Unity Catalog | Lakekeeper | Notes |
++|---------------|------------|-------|
++| Catalog | Warehouse (in the caller's default project) | Read-only via UC API; manage warehouses via `/management/v1/warehouse`. |
++| Schema | Top-level Namespace of that warehouse | Full CRUD. The UC `comment` is stored as the namespace property `comment`. Only depth-1 namespaces are visible through the UC API. |
++| Volume | `uc_volume` entity in a namespace | `MANAGED` or `EXTERNAL`, see below. |
++| Function | `uc_function` entity in a namespace | The client's `function_info` JSON is stored verbatim (byte-fidelity round-trip). |
++| Registered Model / Model Version | `uc_model` / `uc_model_version` entities | Versions are server-assigned integers with a `PENDING_REGISTRATION → READY` lifecycle. |
++| `full_name` | `<warehouse-name>.<top-level-namespace>.<name>` | For schemas: `<warehouse-name>.<namespace>`. |
++
++**Volume locations.** `MANAGED` volumes must not carry a `storage_location`; the server derives one under the namespace location: `<namespace-location>/__uc_volumes/<volume_id>`. `EXTERNAL` volumes require a `storage_location`, which must pass the warehouse storage profile's allowed-location check. Both are validated against the warehouse-wide location-overlap check that spans Iceberg tables, views, generic tables, volumes, and model versions.
++
++**Model artifact layout.** Registered models get a managed location `<namespace-location>/__uc_models/<model_id>`; each version's artifacts live below it at `<model-location>/versions/<model_version_id>`. Clients never choose these paths — they upload artifacts directly to the version's `storage_location` using vended credentials.
++
++**Timestamps** are epoch **milliseconds** (UC convention). Errors use the UC envelope `{"error_code", "message", "details":[{"@type":"google.rpc.ErrorInfo","reason":...}]}` with statuses mapped as 400→`INVALID_ARGUMENT`, 401→`UNAUTHENTICATED`, 403→`PERMISSION_DENIED`, 404→`NOT_FOUND`, 409→`ALREADY_EXISTS`, 5xx→`INTERNAL`. Successful `DELETE`s return `{}` with HTTP 200. List endpoints paginate with `max_results`/`page_token` in and `next_page_token` out (omitted on the last page).
++
++## Endpoint reference
++
++All paths are relative to `/api/2.1/unity-catalog`.
++
++### Catalogs (read-only warehouse mapping)
++
++| Method | Path | Notes |
++|--------|------|-------|
++| GET | `/catalogs` | Lists warehouses of the caller's project, name-sorted. |
++| GET | `/catalogs/{name}` | `id` is the warehouse ID; `created_at` is omitted (warehouses do not track one). |
++| POST | `/catalogs` | **400** `INVALID_ARGUMENT` — manage warehouses via the management API. |
++| PATCH | `/catalogs/{name}` | **400** `INVALID_ARGUMENT`. |
++| DELETE | `/catalogs/{name}` | **400** `INVALID_ARGUMENT`. |
++
++### Schemas (top-level namespaces)
++
++| Method | Path | Notes |
++|--------|------|-------|
++| POST | `/schemas` | Delegates to the Iceberg namespace handlers (identical authorization, idempotency and authorizer bookkeeping). `storage_root` is rejected with **400**. |
++| GET | `/schemas?catalog_name=...` | |
++| GET | `/schemas/{full_name}` | |
++| PATCH | `/schemas/{full_name}` | `comment` and `properties` updates; `new_name` (rename) is rejected with **400**. |
++| DELETE | `/schemas/{full_name}[?force=true]` | Non-recursive drop; a non-empty schema fails with **400** (UC convention) rather than Lakekeeper's 409. |
++
++### Volumes
++
++| Method | Path | Notes |
++|--------|------|-------|
++| POST | `/volumes` | `volume_type` `MANAGED` (no `storage_location` allowed) or `EXTERNAL` (`storage_location` required). |
++| GET | `/volumes?catalog_name=...&schema_name=...` | `include_browse` is accepted and ignored. |
++| GET | `/volumes/{full_name}` | Response includes `volume_id` — the input to credential vending. |
++| PATCH | `/volumes/{full_name}` | `comment` only; `new_name` (rename) is rejected with **400**. |
++| DELETE | `/volumes/{full_name}` | Hard delete of the catalog entry; files are not purged. |
++
++### Functions
++
++| Method | Path | Notes |
++|--------|------|-------|
++| POST | `/functions` | Body is a wrapper: fields nest under `function_info` (not flat). The 14 required UC create fields are validated for presence; everything else round-trips byte-identically (`routine_definition`, `input_params.parameters` order and per-parameter fields, the `properties` JSON-string quirk). |
++| GET | `/functions?catalog_name=...&schema_name=...` | |
++| GET | `/functions/{full_name}` | Stored spec merged with server fields (`function_id`, `full_name`, `created_at`, ...). |
++| DELETE | `/functions/{full_name}` | |
++
++There is deliberately no `PATCH /functions/{full_name}`: the UC spec has no function update endpoint.
++
++### Registered Models and Model Versions
++
++| Method | Path | Notes |
++|--------|------|-------|
++| POST | `/models` | Returns the model's managed `storage_location` and stable `id`. |
++| GET | `/models` | `catalog_name`/`schema_name` are optional (list-all); `schema_name` without `catalog_name` is rejected. |
++| GET | `/models/{full_name}` | |
++| PATCH | `/models/{full_name}` | `comment` only; `new_name` is rejected with **400**. |
++| DELETE | `/models/{full_name}[?force=true]` | Without `force`, deleting a model that still has versions fails. |
++| POST | `/models/versions` | **Flat path** (UC quirk): the model is identified by body fields. Version numbers are server-assigned (`MAX(version)+1`, serialized via row locks). New versions start as `PENDING_REGISTRATION`. |
++| GET | `/models/{full_name}/versions` | |
++| GET | `/models/{full_name}/versions/{version}` | |
++| PATCH | `/models/{full_name}/versions/{version}` | `comment` only. |
++| PATCH | `/models/{full_name}/versions/{version}/finalize` | `PENDING_REGISTRATION → READY`. The body repeats `full_name` + `version` (UC contract). |
++| DELETE | `/models/{full_name}/versions/{version}` | |
++
++### Temporary credentials
++
++| Method | Path | Notes |
++|--------|------|-------|
++| POST | `/temporary-volume-credentials` | Body: `{volume_id, operation: READ_VOLUME\|WRITE_VOLUME}`. Note: takes the `volume_id` UUID, not a name. |
++| POST | `/temporary-model-version-credentials` | Body: `{catalog_name, schema_name, model_name, version, operation: READ_MODEL_VERSION\|READ_WRITE_MODEL_VERSION}`. |
++| POST | `/temporary-path-credentials` | **400** `INVALID_ARGUMENT` — not supported; use volume credentials instead. |
++
++## Credential vending
++
++Volume and model-version credentials reuse Lakekeeper's [storage profile](storage.md) vending machinery (the same code path as Iceberg and [generic table](generic-tables.md) credential vending), downscoped to the volume location or the version's artifact location:
++
++- `READ_VOLUME` / `READ_MODEL_VERSION` vend read-only credentials; `WRITE_VOLUME` / `READ_WRITE_MODEL_VERSION` vend read-write-delete credentials.
++- The response carries exactly one cloud-specific member — `aws_temp_credentials` (`access_key_id`, `secret_access_key`, `session_token`), `azure_user_delegation_sas` (`sas_token`), or `gcp_oauth_token` (`oauth_token`) — plus a top-level `expiration_time` in epoch milliseconds. `expiration_time` is omitted when the vended credentials do not expire, and credential-less profiles return an empty envelope `{}`.
++
++**Model-version lifecycle rule:** `READ_WRITE_MODEL_VERSION` credentials are only vended while the version is `PENDING_REGISTRATION` — after `finalize` the artifacts are immutable and a read-write request returns **400**. `READ_MODEL_VERSION` credentials are vended for pending and `READY` versions, but never for `FAILED_REGISTRATION`.
++
++The intended MLflow-style flow: create a version (pending) → obtain `READ_WRITE` credentials → upload artifacts to the version's `storage_location` → `finalize` → consumers obtain `READ` credentials and download.
++
++## Authorization
++
++Each entity gets its own action enum, checked through the pluggable `Authorizer` (see [Authorization](authorization.md)); `get_metadata` is the *can-see* permission, and entities the caller cannot see are masked as **404** to hide their existence:
++
++| Entity | Actions |
++|--------|---------|
++| Volume (`CatalogVolumeAction`) | `get_metadata`, `read_data`, `write_data`, `drop`, `include_in_list` |
++| Function (`CatalogFunctionAction`) | `get_metadata`, `execute`, `drop`, `include_in_list` |
++| Model (`CatalogModelAction`) | `get_metadata`, `read_data`, `write_data`, `drop`, `include_in_list`, `create_version` |
++| Namespace (additions) | `create_volume`, `list_volumes`, `create_function`, `list_functions`, `create_model`, `list_models` |
++
++**Data-plane rule.** `read_data`/`write_data` on volumes and models gate *file access* (credential vending), and are excluded from the instance-admin bypass: being a Lakekeeper administrator does not by itself grant access to volume file contents or model artifacts, mirroring the behavior for table data. All other actions are control-plane. No function action is data-plane: UC function *execution happens client-side* (the client reconstructs the callable from the stored `routine_definition`), so `execute` only gates retrieving the definition — which `get_metadata` already reveals. Treat function definition visibility as execution capability.
++
++**Model versions have no authorization identity of their own** — version operations authorize on the parent model: create/finalize/comment-update → `create_version`; version delete → `drop`; `READ` credentials → `read_data`; `READ_WRITE` credentials → `read_data` + `write_data`.
++
++### OpenFGA model (v4.8)
++
++Authorization model v4.8 adds the object types `lakekeeper_volume`, `lakekeeper_function` and `lakekeeper_model` (patterned on `lakekeeper_generic_table`), with the familiar assignable relations `ownership`, `pass_grants`, `manage_grants`, `describe`, `select`, `modify` — functions additionally have `execute` (implied by `ownership`, `modify`, or `select` on the parent namespace). Action relations derive as usual: `can_read_data` from `select`, `can_write_data`/`can_drop` from `modify`, `can_get_metadata` from `describe`, `can_create_version` from `modify`, `can_execute` from `execute`. Namespaces gain the three child types plus `can_create_volume`/`can_create_function`/`can_create_model` (from `create`) and the matching `can_list_*` relations, so permissions inherit from Namespace and Warehouse exactly like tables.
++
++Permission management uses Lakekeeper's management API (not UC "permissions" endpoints):
++
++- `GET`/`POST /management/v1/permissions/warehouse/{warehouse_id}/volume/{volume_id}/assignments`
++- `GET /management/v1/permissions/warehouse/{warehouse_id}/volume/{volume_id}/authorizer-actions`
++- ...and the same pair under `.../function/{function_id}/...` and `.../model/{model_id}/...`.
++
++Authentication is unchanged: the UC router sits inside the same authenticator middleware stack as `/catalog` and `/management`, so UC clients send the usual `Authorization: Bearer <token>`.
++
++## Configuration
++
++| Variable | Default | Description |
++|----------|---------|-------------|
++| `LAKEKEEPER__ENABLE_UC_COMPAT_API` | `true` | Serve the Unity Catalog-compatible REST API at `/api/2.1/unity-catalog`. Set to `false` to disable the surface entirely. |
++
++## Limitations (v1)
++
++Deliberate scope cuts of the first version:
++
++- **No events, idempotency records, or endpoint statistics** for UC-specific endpoints: UC requests do not emit change events, are not covered by idempotency-key replay, and do not appear in the [endpoint statistics](monitoring.md) registry (the UC router is mounted outside the statistics middleware). Schemas are the exception — they delegate to the Iceberg namespace handlers and behave identically to that surface.
++- **Hard deletes.** UC `DELETE` on volumes, functions, models and versions removes the catalog entry immediately — no [soft-deletion](concepts.md#soft-deletion)/undrop, and no storage purge (files at the location are left in place).
++- **No `temporary-path-credentials`** (returns `INVALID_ARGUMENT`); credentials are vended per volume or model version only.
++- **No renames** of volumes, models, or schemas via the UC API (`new_name` returns `INVALID_ARGUMENT`).
++- **Catalogs are read-only**: create/update/delete return `INVALID_ARGUMENT` pointing to the management API.
++- **No UC metastore or UC-native permissions endpoints** — Lakekeeper's management API is the permission surface.
++- **JSON object key order is normalized** for stored function specs (JSONB storage): all values — strings, numbers, array order — round-trip byte-identically, but the order of keys inside JSON objects may differ from the create request. This is semantically irrelevant to JSON clients.
++- **Functions execute client-side.** Lakekeeper stores and serves the definition; it never runs function code. Consequently, anyone with `get_metadata` can read the definition (see [Authorization](#authorization)).
++
++## Testing
++
++The end-to-end suite lives in `tests/uc-compat` of the fork repository:
++
++```bash
++# full suite (MODE=allowall: authn disabled, allow-all authorizer)
++bash tests/uc-compat/run.sh
++
++# catalogs/schemas only
++bash tests/uc-compat/run.sh -m smoke
++
++# OpenFGA stack verification (migration writes the v4.8 model, authz matrix)
++MODE=openfga bash tests/uc-compat/run.sh
++```
++
++`run.sh` builds the fork binary, starts Postgres, OpenFGA and MinIO (with a non-root vending user) via docker-compose, migrates, bootstraps, creates a warehouse with an S3 storage profile pointing at MinIO, and runs pytest. The suite proves: catalog/schema read-mapping and error envelope; volume CRUD with MANAGED location derivation and EXTERNAL validation; boto3 and DuckDB access to volume files with vended (and downscoped) credentials; `unitycatalog-ai` function create + local execution and LangChain/OpenAI tool generation with byte-fidelity spec round-trips; the full model version lifecycle including the pending-only `READ_WRITE` credential rule; and, in `openfga` mode, that migration installs the v4.8 authorization model and anonymous bootstrap is rejected. See `tests/uc-compat/README.md` for modes and environment variables.
+diff --git a/docs/mkdocs.yml b/docs/mkdocs.yml
+index 0e9fe534..a7572fac 100644
+--- a/docs/mkdocs.yml
++++ b/docs/mkdocs.yml
+@@ -20,6 +20,7 @@ nav:
+           - Python Client: generic-tables-pylakekeeper.md
+           - Apache Spark (PySpark): generic-tables-spark.md
+           - Apache Flink (Java): generic-tables-flink.md
++    - Unity Catalog Compatibility: uc-compat.md
+     - User Guide:
+           - bootstrap.md
+           - storage.md
+diff --git a/tests/uc-compat/conftest.py b/tests/uc-compat/conftest.py
+index f254da38..064998ae 100644
+--- a/tests/uc-compat/conftest.py
++++ b/tests/uc-compat/conftest.py
+@@ -164,7 +164,10 @@ def uc_ai():
+             result = uc_ai(scenario)
+     """
+ 
+-    def runner(fn, execution_mode: str = "sandbox"):
++    # "local" instead of "sandbox": the sandbox subprocess enforces rlimits
++    # that trip in constrained CI containers; the server contract under test
++    # (definition round-trip + client-side execution) is identical.
++    def runner(fn, execution_mode: str = "local"):
+         async def amain():
+             from unitycatalog.ai.core.client import UnitycatalogFunctionClient
+             from unitycatalog.client import ApiClient, Configuration
+-- 
+2.43.0
+

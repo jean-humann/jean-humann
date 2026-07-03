@@ -1,0 +1,4890 @@
+From fea6364ee3704a8f88db27ae83793aed4637db88 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 2 Jul 2026 23:40:54 +0000
+Subject: [PATCH 4/7] feat(uc-compat): functions with byte-fidelity spec
+ round-trip
+
+Add uc_function entity storing the client's function_info verbatim as
+JSONB so routine_definition, parameter type metadata and properties
+survive byte-identically (the unitycatalog-ai execution contract).
+CatalogFunctionAction authorization with Execute relation in OpenFGA,
+UC-compatible /functions endpoints (create/list/get/delete, no PATCH
+per spec), and permission management endpoints.
+---
+ ...eae2096fc49c4e7d14423838cf911e93b79d5.json | 137 ++++
+ ...9124b2c01760e9915dcb59948b988c521127a.json | 104 +++
+ ...64567d03fcafcade80c680e740e6556d1b55f.json | 138 ++++
+ ...89b81dc445932414eb6c6460784ea4389476f.json | 140 ++++
+ ...1354e39d448630bbc989fe3c1975d18a4dd82.json |  30 +
+ crates/authz-openfga/src/api.rs               | 193 +++++-
+ crates/authz-openfga/src/authorizer.rs        | 104 ++-
+ crates/authz-openfga/src/entities.rs          |  16 +-
+ crates/authz-openfga/src/lib.rs               |   2 +
+ crates/authz-openfga/src/models.rs            |  10 +-
+ crates/authz-openfga/src/reconcile.rs         |  11 +-
+ crates/authz-openfga/src/relations.rs         | 242 ++++++-
+ crates/authz-openfga/src/tuples.rs            |  37 +-
+ .../tests/server_uc_functions.rs              | 423 ++++++++++++
+ .../20260703000002_add_uc_function.sql        |  40 ++
+ .../src/catalog.rs                            | 105 ++-
+ .../src/uc/function.rs                        | 622 ++++++++++++++++++
+ .../lakekeeper-storage-postgres/src/uc/mod.rs |   1 +
+ crates/lakekeeper/src/api/uc/v1/functions.rs  | 246 +++++++
+ crates/lakekeeper/src/api/uc/v1/mod.rs        |  36 +
+ crates/lakekeeper/src/server/uc/functions.rs  | 569 ++++++++++++++++
+ crates/lakekeeper/src/server/uc/mod.rs        |  38 +-
+ .../lakekeeper/src/service/authz/function.rs  | 445 +++++++++++++
+ .../authz/implementations/allow_all.rs        |  34 +-
+ crates/lakekeeper/src/service/authz/mod.rs    | 200 +++++-
+ .../lakekeeper/src/service/catalog_store.rs   |  41 +-
+ .../src/service/catalog_store/function.rs     | 258 ++++++++
+ .../src/service/identifier/generic.rs         |   8 +
+ 28 files changed, 4146 insertions(+), 84 deletions(-)
+ create mode 100644 .sqlx/query-0a18d2d02677e03c3966467f6b2eae2096fc49c4e7d14423838cf911e93b79d5.json
+ create mode 100644 .sqlx/query-3c9a57e972f0b79b8a57f6b1e7a9124b2c01760e9915dcb59948b988c521127a.json
+ create mode 100644 .sqlx/query-7e54751173d982ddce4bc94b62964567d03fcafcade80c680e740e6556d1b55f.json
+ create mode 100644 .sqlx/query-ba2bda56fe02143992838d711d089b81dc445932414eb6c6460784ea4389476f.json
+ create mode 100644 .sqlx/query-c42da7aef0c4ca32c3d3d0377041354e39d448630bbc989fe3c1975d18a4dd82.json
+ create mode 100644 crates/lakekeeper-integration-tests/tests/server_uc_functions.rs
+ create mode 100644 crates/lakekeeper-storage-postgres/migrations/20260703000002_add_uc_function.sql
+ create mode 100644 crates/lakekeeper-storage-postgres/src/uc/function.rs
+ create mode 100644 crates/lakekeeper/src/api/uc/v1/functions.rs
+ create mode 100644 crates/lakekeeper/src/server/uc/functions.rs
+ create mode 100644 crates/lakekeeper/src/service/authz/function.rs
+ create mode 100644 crates/lakekeeper/src/service/catalog_store/function.rs
+
+diff --git a/.sqlx/query-0a18d2d02677e03c3966467f6b2eae2096fc49c4e7d14423838cf911e93b79d5.json b/.sqlx/query-0a18d2d02677e03c3966467f6b2eae2096fc49c4e7d14423838cf911e93b79d5.json
+new file mode 100644
+index 00000000..f830e598
+--- /dev/null
++++ b/.sqlx/query-0a18d2d02677e03c3966467f6b2eae2096fc49c4e7d14423838cf911e93b79d5.json
+@@ -0,0 +1,137 @@
++{
++  "db_name": "PostgreSQL",
++  "query": "\n        SELECT\n            f.function_id,\n            f.warehouse_id,\n            w.version as \"warehouse_version!\",\n            f.namespace_id,\n            n.version as \"namespace_version!\",\n            n.namespace_name as \"namespace_name!\",\n            f.name,\n            f.spec,\n            f.created_at,\n            f.updated_at\n        FROM uc_function f\n        INNER JOIN warehouse w ON w.warehouse_id = f.warehouse_id AND w.status = 'active'\n        INNER JOIN namespace n ON n.namespace_id = f.namespace_id AND n.warehouse_id = f.warehouse_id\n        WHERE f.warehouse_id = $1\n          AND f.function_id = $2\n          AND f.deleted_at IS NULL\n        ",
++  "describe": {
++    "columns": [
++      {
++        "ordinal": 0,
++        "name": "function_id",
++        "type_info": "Uuid",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "function_id"
++          }
++        }
++      },
++      {
++        "ordinal": 1,
++        "name": "warehouse_id",
++        "type_info": "Uuid",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "warehouse_id"
++          }
++        }
++      },
++      {
++        "ordinal": 2,
++        "name": "warehouse_version!",
++        "type_info": "Int8",
++        "origin": {
++          "Table": {
++            "table": "warehouse",
++            "name": "version"
++          }
++        }
++      },
++      {
++        "ordinal": 3,
++        "name": "namespace_id",
++        "type_info": "Uuid",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "namespace_id"
++          }
++        }
++      },
++      {
++        "ordinal": 4,
++        "name": "namespace_version!",
++        "type_info": "Int8",
++        "origin": {
++          "Table": {
++            "table": "namespace",
++            "name": "version"
++          }
++        }
++      },
++      {
++        "ordinal": 5,
++        "name": "namespace_name!",
++        "type_info": "TextArray",
++        "origin": {
++          "Table": {
++            "table": "namespace",
++            "name": "namespace_name"
++          }
++        }
++      },
++      {
++        "ordinal": 6,
++        "name": "name",
++        "type_info": "Text",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "name"
++          }
++        }
++      },
++      {
++        "ordinal": 7,
++        "name": "spec",
++        "type_info": "Jsonb",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "spec"
++          }
++        }
++      },
++      {
++        "ordinal": 8,
++        "name": "created_at",
++        "type_info": "Timestamptz",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "created_at"
++          }
++        }
++      },
++      {
++        "ordinal": 9,
++        "name": "updated_at",
++        "type_info": "Timestamptz",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "updated_at"
++          }
++        }
++      }
++    ],
++    "parameters": {
++      "Left": [
++        "Uuid",
++        "Uuid"
++      ]
++    },
++    "nullable": [
++      false,
++      false,
++      false,
++      false,
++      false,
++      false,
++      false,
++      false,
++      false,
++      true
++    ]
++  },
++  "hash": "0a18d2d02677e03c3966467f6b2eae2096fc49c4e7d14423838cf911e93b79d5"
++}
+diff --git a/.sqlx/query-3c9a57e972f0b79b8a57f6b1e7a9124b2c01760e9915dcb59948b988c521127a.json b/.sqlx/query-3c9a57e972f0b79b8a57f6b1e7a9124b2c01760e9915dcb59948b988c521127a.json
+new file mode 100644
+index 00000000..109371a3
+--- /dev/null
++++ b/.sqlx/query-3c9a57e972f0b79b8a57f6b1e7a9124b2c01760e9915dcb59948b988c521127a.json
+@@ -0,0 +1,104 @@
++{
++  "db_name": "PostgreSQL",
++  "query": "\n        SELECT\n            f.function_id,\n            f.warehouse_id,\n            f.namespace_id,\n            f.name,\n            f.spec,\n            f.created_at,\n            f.updated_at\n        FROM uc_function f\n        INNER JOIN warehouse w ON w.warehouse_id = f.warehouse_id AND w.status = 'active'\n        WHERE f.warehouse_id = $1\n          AND f.namespace_id = $2\n          AND f.deleted_at IS NULL\n          AND (\n            ($3::timestamptz IS NULL)\n            OR (f.created_at, f.function_id) > ($3, $4)\n          )\n        ORDER BY f.created_at ASC, f.function_id ASC\n        LIMIT $5\n        ",
++  "describe": {
++    "columns": [
++      {
++        "ordinal": 0,
++        "name": "function_id",
++        "type_info": "Uuid",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "function_id"
++          }
++        }
++      },
++      {
++        "ordinal": 1,
++        "name": "warehouse_id",
++        "type_info": "Uuid",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "warehouse_id"
++          }
++        }
++      },
++      {
++        "ordinal": 2,
++        "name": "namespace_id",
++        "type_info": "Uuid",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "namespace_id"
++          }
++        }
++      },
++      {
++        "ordinal": 3,
++        "name": "name",
++        "type_info": "Text",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "name"
++          }
++        }
++      },
++      {
++        "ordinal": 4,
++        "name": "spec",
++        "type_info": "Jsonb",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "spec"
++          }
++        }
++      },
++      {
++        "ordinal": 5,
++        "name": "created_at",
++        "type_info": "Timestamptz",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "created_at"
++          }
++        }
++      },
++      {
++        "ordinal": 6,
++        "name": "updated_at",
++        "type_info": "Timestamptz",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "updated_at"
++          }
++        }
++      }
++    ],
++    "parameters": {
++      "Left": [
++        "Uuid",
++        "Uuid",
++        "Timestamptz",
++        "Uuid",
++        "Int8"
++      ]
++    },
++    "nullable": [
++      false,
++      false,
++      false,
++      false,
++      false,
++      false,
++      true
++    ]
++  },
++  "hash": "3c9a57e972f0b79b8a57f6b1e7a9124b2c01760e9915dcb59948b988c521127a"
++}
+diff --git a/.sqlx/query-7e54751173d982ddce4bc94b62964567d03fcafcade80c680e740e6556d1b55f.json b/.sqlx/query-7e54751173d982ddce4bc94b62964567d03fcafcade80c680e740e6556d1b55f.json
+new file mode 100644
+index 00000000..a27991a7
+--- /dev/null
++++ b/.sqlx/query-7e54751173d982ddce4bc94b62964567d03fcafcade80c680e740e6556d1b55f.json
+@@ -0,0 +1,138 @@
++{
++  "db_name": "PostgreSQL",
++  "query": "\n        SELECT\n            f.function_id,\n            f.warehouse_id,\n            w.version as \"warehouse_version!\",\n            f.namespace_id,\n            n.version as \"namespace_version!\",\n            n.namespace_name as \"namespace_name!\",\n            f.name,\n            f.spec,\n            f.created_at,\n            f.updated_at\n        FROM uc_function f\n        INNER JOIN warehouse w ON w.warehouse_id = f.warehouse_id AND w.status = 'active'\n        INNER JOIN namespace n ON n.namespace_id = f.namespace_id AND n.warehouse_id = f.warehouse_id\n        WHERE f.warehouse_id = $1\n          AND f.namespace_id = $2\n          AND f.name = $3\n          AND f.deleted_at IS NULL\n        ",
++  "describe": {
++    "columns": [
++      {
++        "ordinal": 0,
++        "name": "function_id",
++        "type_info": "Uuid",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "function_id"
++          }
++        }
++      },
++      {
++        "ordinal": 1,
++        "name": "warehouse_id",
++        "type_info": "Uuid",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "warehouse_id"
++          }
++        }
++      },
++      {
++        "ordinal": 2,
++        "name": "warehouse_version!",
++        "type_info": "Int8",
++        "origin": {
++          "Table": {
++            "table": "warehouse",
++            "name": "version"
++          }
++        }
++      },
++      {
++        "ordinal": 3,
++        "name": "namespace_id",
++        "type_info": "Uuid",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "namespace_id"
++          }
++        }
++      },
++      {
++        "ordinal": 4,
++        "name": "namespace_version!",
++        "type_info": "Int8",
++        "origin": {
++          "Table": {
++            "table": "namespace",
++            "name": "version"
++          }
++        }
++      },
++      {
++        "ordinal": 5,
++        "name": "namespace_name!",
++        "type_info": "TextArray",
++        "origin": {
++          "Table": {
++            "table": "namespace",
++            "name": "namespace_name"
++          }
++        }
++      },
++      {
++        "ordinal": 6,
++        "name": "name",
++        "type_info": "Text",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "name"
++          }
++        }
++      },
++      {
++        "ordinal": 7,
++        "name": "spec",
++        "type_info": "Jsonb",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "spec"
++          }
++        }
++      },
++      {
++        "ordinal": 8,
++        "name": "created_at",
++        "type_info": "Timestamptz",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "created_at"
++          }
++        }
++      },
++      {
++        "ordinal": 9,
++        "name": "updated_at",
++        "type_info": "Timestamptz",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "updated_at"
++          }
++        }
++      }
++    ],
++    "parameters": {
++      "Left": [
++        "Uuid",
++        "Uuid",
++        "Text"
++      ]
++    },
++    "nullable": [
++      false,
++      false,
++      false,
++      false,
++      false,
++      false,
++      false,
++      false,
++      false,
++      true
++    ]
++  },
++  "hash": "7e54751173d982ddce4bc94b62964567d03fcafcade80c680e740e6556d1b55f"
++}
+diff --git a/.sqlx/query-ba2bda56fe02143992838d711d089b81dc445932414eb6c6460784ea4389476f.json b/.sqlx/query-ba2bda56fe02143992838d711d089b81dc445932414eb6c6460784ea4389476f.json
+new file mode 100644
+index 00000000..a697b61e
+--- /dev/null
++++ b/.sqlx/query-ba2bda56fe02143992838d711d089b81dc445932414eb6c6460784ea4389476f.json
+@@ -0,0 +1,140 @@
++{
++  "db_name": "PostgreSQL",
++  "query": "\n        WITH inserted AS (\n            INSERT INTO uc_function (warehouse_id, function_id, namespace_id, name, spec)\n            SELECT $1, $2, $3, $4, $5\n            FROM namespace n\n            WHERE n.namespace_id = $3 AND n.warehouse_id = $1\n            RETURNING function_id, warehouse_id, namespace_id, name, spec, created_at, updated_at\n        )\n        SELECT\n            i.function_id,\n            i.warehouse_id,\n            w.version as \"warehouse_version!\",\n            i.namespace_id,\n            n.version as \"namespace_version!\",\n            n.namespace_name as \"namespace_name!\",\n            i.name,\n            i.spec,\n            i.created_at,\n            i.updated_at\n        FROM inserted i\n        INNER JOIN warehouse w ON w.warehouse_id = $1 AND w.status = 'active'\n        INNER JOIN namespace n ON n.namespace_id = $3 AND n.warehouse_id = $1\n        ",
++  "describe": {
++    "columns": [
++      {
++        "ordinal": 0,
++        "name": "function_id",
++        "type_info": "Uuid",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "function_id"
++          }
++        }
++      },
++      {
++        "ordinal": 1,
++        "name": "warehouse_id",
++        "type_info": "Uuid",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "warehouse_id"
++          }
++        }
++      },
++      {
++        "ordinal": 2,
++        "name": "warehouse_version!",
++        "type_info": "Int8",
++        "origin": {
++          "Table": {
++            "table": "warehouse",
++            "name": "version"
++          }
++        }
++      },
++      {
++        "ordinal": 3,
++        "name": "namespace_id",
++        "type_info": "Uuid",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "namespace_id"
++          }
++        }
++      },
++      {
++        "ordinal": 4,
++        "name": "namespace_version!",
++        "type_info": "Int8",
++        "origin": {
++          "Table": {
++            "table": "namespace",
++            "name": "version"
++          }
++        }
++      },
++      {
++        "ordinal": 5,
++        "name": "namespace_name!",
++        "type_info": "TextArray",
++        "origin": {
++          "Table": {
++            "table": "namespace",
++            "name": "namespace_name"
++          }
++        }
++      },
++      {
++        "ordinal": 6,
++        "name": "name",
++        "type_info": "Text",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "name"
++          }
++        }
++      },
++      {
++        "ordinal": 7,
++        "name": "spec",
++        "type_info": "Jsonb",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "spec"
++          }
++        }
++      },
++      {
++        "ordinal": 8,
++        "name": "created_at",
++        "type_info": "Timestamptz",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "created_at"
++          }
++        }
++      },
++      {
++        "ordinal": 9,
++        "name": "updated_at",
++        "type_info": "Timestamptz",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "updated_at"
++          }
++        }
++      }
++    ],
++    "parameters": {
++      "Left": [
++        "Uuid",
++        "Uuid",
++        "Uuid",
++        "Text",
++        "Jsonb"
++      ]
++    },
++    "nullable": [
++      false,
++      false,
++      false,
++      false,
++      false,
++      false,
++      false,
++      false,
++      false,
++      true
++    ]
++  },
++  "hash": "ba2bda56fe02143992838d711d089b81dc445932414eb6c6460784ea4389476f"
++}
+diff --git a/.sqlx/query-c42da7aef0c4ca32c3d3d0377041354e39d448630bbc989fe3c1975d18a4dd82.json b/.sqlx/query-c42da7aef0c4ca32c3d3d0377041354e39d448630bbc989fe3c1975d18a4dd82.json
+new file mode 100644
+index 00000000..c7942c59
+--- /dev/null
++++ b/.sqlx/query-c42da7aef0c4ca32c3d3d0377041354e39d448630bbc989fe3c1975d18a4dd82.json
+@@ -0,0 +1,30 @@
++{
++  "db_name": "PostgreSQL",
++  "query": "\n        DELETE FROM uc_function f\n        USING warehouse w\n        WHERE w.warehouse_id = f.warehouse_id\n          AND w.status = 'active'\n          AND f.warehouse_id = $1\n          AND f.namespace_id = $2\n          AND f.name = $3\n          AND f.deleted_at IS NULL\n        RETURNING f.function_id\n        ",
++  "describe": {
++    "columns": [
++      {
++        "ordinal": 0,
++        "name": "function_id",
++        "type_info": "Uuid",
++        "origin": {
++          "Table": {
++            "table": "uc_function",
++            "name": "function_id"
++          }
++        }
++      }
++    ],
++    "parameters": {
++      "Left": [
++        "Uuid",
++        "Uuid",
++        "Text"
++      ]
++    },
++    "nullable": [
++      false
++    ]
++  },
++  "hash": "c42da7aef0c4ca32c3d3d0377041354e39d448630bbc989fe3c1975d18a4dd82"
++}
+diff --git a/crates/authz-openfga/src/api.rs b/crates/authz-openfga/src/api.rs
+index 630924bf..59a8e0dd 100644
+--- a/crates/authz-openfga/src/api.rs
++++ b/crates/authz-openfga/src/api.rs
+@@ -21,8 +21,8 @@ use lakekeeper::{
+         routing::{get, post},
+     },
+     service::{
+-        Actor, CatalogStore, GenericTableId, NamespaceId, Result, RoleId, SecretStore, State,
+-        TableId, ViewId, VolumeId,
++        Actor, CatalogStore, FunctionId, GenericTableId, NamespaceId, Result, RoleId, SecretStore,
++        State, TableId, ViewId, VolumeId,
+         authz::ActionDescriptor,
+         events::{
+             APIEventContext,
+@@ -41,17 +41,19 @@ use utoipa::OpenApi;
+ use super::{
+     check::check,
+     relations::{
+-        APIGenericTableRelation as GenericTableRelation, APINamespaceAction as NamespaceAction,
+-        APINamespaceRelation as NamespaceRelation, APIProjectAction as ProjectAction,
+-        APIProjectRelation as ProjectRelation, APIRoleAction as RoleAction,
+-        APIRoleRelation as RoleRelation, APIServerAction as ServerAction,
+-        APIServerRelation as ServerRelation, APITableAction as TableAction,
+-        APITableRelation as TableRelation, APIViewAction as ViewAction,
+-        APIViewRelation as ViewRelation, APIVolumeRelation as VolumeRelation,
+-        APIWarehouseAction as WarehouseAction, APIWarehouseRelation as WarehouseRelation,
+-        Assignment, GenericTableAssignment, GenericTableRelation as AllGenericTableRelations,
+-        GrantableRelation, NamespaceAssignment, NamespaceRelation as AllNamespaceRelations,
+-        ProjectAssignment, ProjectRelation as AllProjectRelations, ReducedRelation, RoleAssignment,
++        APIFunctionRelation as FunctionRelation, APIGenericTableRelation as GenericTableRelation,
++        APINamespaceAction as NamespaceAction, APINamespaceRelation as NamespaceRelation,
++        APIProjectAction as ProjectAction, APIProjectRelation as ProjectRelation,
++        APIRoleAction as RoleAction, APIRoleRelation as RoleRelation,
++        APIServerAction as ServerAction, APIServerRelation as ServerRelation,
++        APITableAction as TableAction, APITableRelation as TableRelation,
++        APIViewAction as ViewAction, APIViewRelation as ViewRelation,
++        APIVolumeRelation as VolumeRelation, APIWarehouseAction as WarehouseAction,
++        APIWarehouseRelation as WarehouseRelation, Assignment, FunctionAssignment,
++        FunctionRelation as AllFunctionRelations, GenericTableAssignment,
++        GenericTableRelation as AllGenericTableRelations, GrantableRelation, NamespaceAssignment,
++        NamespaceRelation as AllNamespaceRelations, ProjectAssignment,
++        ProjectRelation as AllProjectRelations, ReducedRelation, RoleAssignment,
+         RoleRelation as AllRoleRelations, ServerAssignment, ServerRelation as AllServerAction,
+         TableAssignment, TableRelation as AllTableRelations, ViewAssignment,
+         ViewRelation as AllViewRelations, VolumeAssignment, VolumeRelation as AllVolumeRelations,
+@@ -64,9 +66,9 @@ use crate::{
+     OpenFGAAuthorizer, OpenFGAError, OpenFGAResult,
+     entities::OpenFgaEntity,
+     relations::{
+-        OpenFGAGenericTableAction, OpenFGANamespaceAction, OpenFGAProjectAction, OpenFGARoleAction,
+-        OpenFGAServerAction, OpenFGATableAction, OpenFGAViewAction, OpenFGAVolumeAction,
+-        OpenFGAWarehouseAction,
++        OpenFGAFunctionAction, OpenFGAGenericTableAction, OpenFGANamespaceAction,
++        OpenFGAProjectAction, OpenFGARoleAction, OpenFGAServerAction, OpenFGATableAction,
++        OpenFGAViewAction, OpenFGAVolumeAction, OpenFGAWarehouseAction,
+     },
+ };
+ 
+@@ -95,6 +97,7 @@ access_response!(
+     OpenFGAGenericTableAction
+ );
+ access_response!(GetOpenFGAVolumeActionsResponse, OpenFGAVolumeAction);
++access_response!(GetOpenFGAFunctionActionsResponse, OpenFGAFunctionAction);
+ 
+ #[derive(Debug, Clone, Serialize, PartialEq)]
+ #[cfg_attr(feature = "open-api", derive(utoipa::ToSchema))]
+@@ -300,6 +303,23 @@ struct GetVolumeAssignmentsResponse {
+     assignments: Vec<VolumeAssignment>,
+ }
+ 
++#[derive(Debug, Deserialize)]
++#[cfg_attr(feature = "open-api", derive(utoipa::IntoParams))]
++#[serde(rename_all = "camelCase")]
++pub(super) struct GetFunctionAssignmentsQuery {
++    /// Relations to be loaded. If not specified, all relations are returned.
++    #[serde(default)]
++    #[cfg_attr(feature = "open-api", param(nullable = false, required = false))]
++    relations: Option<Vec<FunctionRelation>>,
++}
++
++#[derive(Debug, Clone, Serialize, PartialEq)]
++#[cfg_attr(feature = "open-api", derive(utoipa::ToSchema))]
++#[serde(rename_all = "kebab-case")]
++struct GetFunctionAssignmentsResponse {
++    assignments: Vec<FunctionAssignment>,
++}
++
+ #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+ #[cfg_attr(feature = "open-api", derive(utoipa::ToSchema))]
+ #[serde(rename_all = "kebab-case")]
+@@ -443,6 +463,16 @@ struct UpdateVolumeAssignmentsRequest {
+     deletes: Vec<VolumeAssignment>,
+ }
+ 
++#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
++#[cfg_attr(feature = "open-api", derive(utoipa::ToSchema))]
++#[serde(rename_all = "kebab-case")]
++struct UpdateFunctionAssignmentsRequest {
++    #[serde(default)]
++    writes: Vec<FunctionAssignment>,
++    #[serde(default)]
++    deletes: Vec<FunctionAssignment>,
++}
++
+ #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+ #[cfg_attr(feature = "open-api", derive(utoipa::ToSchema))]
+ #[serde(rename_all = "kebab-case")]
+@@ -1546,6 +1576,50 @@ async fn get_authorizer_volume_actions<C: CatalogStore, S: SecretStore>(
+     ))
+ }
+ 
++/// Get allowed Authorizer actions on a Unity Catalog function
++///
++/// Returns Authorizer permissions (OpenFGA relations) for the specified function.
++#[cfg_attr(feature = "open-api", utoipa::path(
++    get,
++    tag = "permissions-openfga",
++    path = "/management/v1/permissions/warehouse/{warehouse_id}/function/{function_id}/authorizer-actions",
++    params(
++        GetAccessQuery,
++        ("warehouse_id" = Uuid, Path, description = "Warehouse ID"),
++        ("function_id" = Uuid, Path, description = "Function ID")
++    ),
++    responses(
++            (status = 200, description = "Function Authorizer Actions", body = GetOpenFGAFunctionActionsResponse),
++    )
++))]
++async fn get_authorizer_function_actions<C: CatalogStore, S: SecretStore>(
++    Path((warehouse_id, function_id)): Path<(WarehouseId, FunctionId)>,
++    AxumState(api_context): AxumState<ApiContext<State<OpenFGAAuthorizer, C, S>>>,
++    Extension(metadata): Extension<RequestMetadata>,
++    Query(query): Query<GetAccessQuery>,
++) -> Result<(StatusCode, Json<GetOpenFGAFunctionActionsResponse>)> {
++    let authorizer = api_context.v1_state.authz;
++    let query = ParsedAccessQuery::try_from(query)?;
++
++    // UC entities have no events integration in v1 (design D7), so unlike the
++    // generic-table endpoint above no APIEventContext is emitted here.
++    let relations = get_allowed_actions(
++        authorizer,
++        metadata.actor(),
++        &(warehouse_id, function_id).to_openfga(),
++        query.principal.as_ref(),
++    )
++    .await
++    .map_err(authz_to_error_no_audit)?;
++
++    Ok((
++        StatusCode::OK,
++        Json(GetOpenFGAFunctionActionsResponse {
++            allowed_actions: relations,
++        }),
++    ))
++}
++
+ /// Get user and role assignments of a role
+ #[cfg_attr(feature = "open-api", utoipa::path(
+     get,
+@@ -2378,6 +2452,81 @@ async fn update_volume_assignments_by_id<C: CatalogStore, S: SecretStore>(
+     Ok(StatusCode::NO_CONTENT)
+ }
+ 
++/// Get user and role assignments for a Unity Catalog function
++#[cfg_attr(feature = "open-api", utoipa::path(
++    get,
++    tag = "permissions-openfga",
++    path = "/management/v1/permissions/warehouse/{warehouse_id}/function/{function_id}/assignments",
++    params(
++        GetFunctionAssignmentsQuery,
++        ("warehouse_id" = Uuid, Path, description = "Warehouse ID"),
++        ("function_id" = Uuid, Path, description = "Function ID"),
++    ),
++    responses(
++            (status = 200, body = GetFunctionAssignmentsResponse),
++    )
++))]
++async fn get_function_assignments_by_id<C: CatalogStore, S: SecretStore>(
++    Path((warehouse_id, function_id)): Path<(WarehouseId, FunctionId)>,
++    AxumState(api_context): AxumState<ApiContext<State<OpenFGAAuthorizer, C, S>>>,
++    Extension(metadata): Extension<RequestMetadata>,
++    Query(query): Query<GetFunctionAssignmentsQuery>,
++) -> Result<(StatusCode, Json<GetFunctionAssignmentsResponse>)> {
++    let authorizer = api_context.v1_state.authz;
++    let object = (warehouse_id, function_id).to_openfga();
++
++    // No events integration for UC entities in v1 (design D7).
++    authorizer
++        .require_action(&metadata, AllFunctionRelations::CanReadAssignments, &object)
++        .await
++        .map_err(authz_to_error_no_audit)?;
++
++    let assignments = get_relations(authorizer, query.relations, &object)
++        .await
++        .map_err(authz_to_error_no_audit)?;
++
++    Ok((
++        StatusCode::OK,
++        Json(GetFunctionAssignmentsResponse { assignments }),
++    ))
++}
++
++/// Update permissions for a Unity Catalog function
++#[cfg_attr(feature = "open-api", utoipa::path(
++    post,
++    tag = "permissions-openfga",
++    path = "/management/v1/permissions/warehouse/{warehouse_id}/function/{function_id}/assignments",
++    request_body = UpdateFunctionAssignmentsRequest,
++    params(
++        ("warehouse_id" = Uuid, Path, description = "Warehouse ID"),
++        ("function_id" = Uuid, Path, description = "Function ID"),
++    ),
++    responses(
++            (status = 204, description = "Permissions updated successfully"),
++    )
++))]
++async fn update_function_assignments_by_id<C: CatalogStore, S: SecretStore>(
++    Path((warehouse_id, function_id)): Path<(WarehouseId, FunctionId)>,
++    AxumState(api_context): AxumState<ApiContext<State<OpenFGAAuthorizer, C, S>>>,
++    Extension(metadata): Extension<RequestMetadata>,
++    Json(request): Json<UpdateFunctionAssignmentsRequest>,
++) -> Result<StatusCode> {
++    let authorizer = api_context.v1_state.authz;
++
++    // No events integration for UC entities in v1 (design D7).
++    checked_write(
++        authorizer,
++        metadata.actor(),
++        request.writes,
++        request.deletes,
++        &(warehouse_id, function_id).to_openfga(),
++    )
++    .await
++    .map_err(authz_to_error_no_audit)?;
++
++    Ok(StatusCode::NO_CONTENT)
++}
++
+ // Update permissions for a role
+ #[cfg_attr(feature = "open-api", utoipa::path(
+     post,
+@@ -2439,6 +2588,7 @@ async fn update_role_assignments_by_id<C: CatalogStore, S: SecretStore>(
+         check,
+         get_authorizer_generic_table_actions,
+         get_authorizer_volume_actions,
++        get_authorizer_function_actions,
+         get_authorizer_namespace_actions,
+         get_authorizer_project_actions,
+         get_authorizer_role_actions,
+@@ -2448,6 +2598,7 @@ async fn update_role_assignments_by_id<C: CatalogStore, S: SecretStore>(
+         get_authorizer_warehouse_actions,
+         get_generic_table_assignments_by_id,
+         get_volume_assignments_by_id,
++        get_function_assignments_by_id,
+         get_namespace_access_by_id,
+         get_namespace_assignments_by_id,
+         get_namespace_by_id,
+@@ -2470,6 +2621,7 @@ async fn update_role_assignments_by_id<C: CatalogStore, S: SecretStore>(
+         set_warehouse_managed_access,
+         update_generic_table_assignments_by_id,
+         update_volume_assignments_by_id,
++        update_function_assignments_by_id,
+         update_namespace_assignments_by_id,
+         update_project_assignments_by_id,
+         update_project_assignments,
+@@ -2482,6 +2634,7 @@ async fn update_role_assignments_by_id<C: CatalogStore, S: SecretStore>(
+     // auto-discovery seems to be broken for these
+     components(schemas(GenericTableRelation,
+                        VolumeRelation,
++                       FunctionRelation,
+                        NamespaceRelation,
+                        ProjectRelation,
+                        RoleRelation,
+@@ -2580,6 +2733,10 @@ pub(super) fn new_v1_router<C: CatalogStore, S: SecretStore>()
+             "/permissions/warehouse/{warehouse_id}/volume/{volume_id}/authorizer-actions",
+             get(get_authorizer_volume_actions),
+         )
++        .route(
++            "/permissions/warehouse/{warehouse_id}/function/{function_id}/authorizer-actions",
++            get(get_authorizer_function_actions),
++        )
+         .route(
+             "/permissions/role/{role_id}/assignments",
+             get(get_role_assignments_by_id).post(update_role_assignments_by_id),
+@@ -2616,6 +2773,10 @@ pub(super) fn new_v1_router<C: CatalogStore, S: SecretStore>()
+             "/permissions/warehouse/{warehouse_id}/volume/{volume_id}/assignments",
+             get(get_volume_assignments_by_id).post(update_volume_assignments_by_id),
+         )
++        .route(
++            "/permissions/warehouse/{warehouse_id}/function/{function_id}/assignments",
++            get(get_function_assignments_by_id).post(update_function_assignments_by_id),
++        )
+         .route("/permissions/check", post(check))
+ }
+ 
+diff --git a/crates/authz-openfga/src/authorizer.rs b/crates/authz-openfga/src/authorizer.rs
+index 96e7d4bd..b378f15b 100644
+--- a/crates/authz-openfga/src/authorizer.rs
++++ b/crates/authz-openfga/src/authorizer.rs
+@@ -10,12 +10,12 @@ use lakekeeper::{
+     async_trait,
+     axum::Router,
+     service::{
+-        Actor, ArcProjectId, AuthZGenericTableInfo, AuthZNamespaceInfo, AuthZTableInfo,
+-        AuthZViewInfo, AuthZVolumeInfo, CatalogStore, ErrorModel, GenericTableId,
+-        InternalErrorMessage, NamespaceId, NamespaceWithParent, ResolvedWarehouse, Role, RoleId,
+-        SecretStore, ServerId, State, TableId, UserId, ViewId, VolumeId,
++        Actor, ArcProjectId, AuthZFunctionInfo, AuthZGenericTableInfo, AuthZNamespaceInfo,
++        AuthZTableInfo, AuthZViewInfo, AuthZVolumeInfo, CatalogStore, ErrorModel, FunctionId,
++        GenericTableId, InternalErrorMessage, NamespaceId, NamespaceWithParent, ResolvedWarehouse,
++        Role, RoleId, SecretStore, ServerId, State, TableId, UserId, ViewId, VolumeId,
+         authz::{
+-            ActionOnGenericTable, ActionOnTable, ActionOnView, ActionOnVolume,
++            ActionOnFunction, ActionOnGenericTable, ActionOnTable, ActionOnView, ActionOnVolume,
+             AddRoleAssignmentsError, AuthorizationBackendUnavailable, AuthorizationDecision,
+             Authorizer, AuthzBackendErrorOrBadRequest, CannotInspectPermissions,
+             CatalogProjectAction, CatalogUserAction, IsAllowedActionError, ListProjectsResponse,
+@@ -48,9 +48,9 @@ use crate::{
+     },
+     models::OpenFgaType,
+     relations::{
+-        self, GenericTableRelation, NamespaceRelation, OpenFgaRelation, ProjectRelation,
+-        ReducedRelation, RoleRelation, ServerRelation, TableRelation, ViewRelation, VolumeRelation,
+-        WarehouseRelation,
++        self, FunctionRelation, GenericTableRelation, NamespaceRelation, OpenFgaRelation,
++        ProjectRelation, ReducedRelation, RoleRelation, ServerRelation, TableRelation,
++        ViewRelation, VolumeRelation, WarehouseRelation,
+     },
+ };
+ 
+@@ -97,6 +97,7 @@ impl Authorizer for OpenFGAAuthorizer {
+     type ViewAction = ViewRelation;
+     type GenericTableAction = GenericTableRelation;
+     type VolumeAction = VolumeRelation;
++    type FunctionAction = FunctionRelation;
+     type UserAction = CatalogUserAction;
+     type RoleAction = RoleRelation;
+ 
+@@ -819,6 +820,93 @@ impl Authorizer for OpenFGAAuthorizer {
+         self.delete_all_relations(&(warehouse_id, volume_id)).await
+     }
+ 
++    async fn are_allowed_function_actions_impl<
++        A: Into<Self::FunctionAction> + Send + Clone + Sync,
++    >(
++        &self,
++        metadata: &RequestMetadata,
++        _warehouse: &ResolvedWarehouse,
++        _parent_namespaces: &HashMap<NamespaceId, NamespaceWithParent>,
++        actions: &[(
++            &NamespaceWithParent,
++            ActionOnFunction<'_, '_, impl AuthZFunctionInfo, A>,
++        )],
++    ) -> Result<Vec<AuthorizationDecision>, IsAllowedActionError> {
++        // Build check requests with per-action user handling
++        let items: Vec<_> = actions
++            .iter()
++            .map(|(_, action)| {
++                let user = action
++                    .user
++                    .map_or_else(|| metadata.actor().to_openfga(), OpenFgaEntity::to_openfga);
++                CheckRequestTupleKey {
++                    user,
++                    relation: action.action.clone().into().to_string(),
++                    object: (action.info.warehouse_id(), action.info.function_id()).to_openfga(),
++                }
++            })
++            .collect();
++
++        // Collect guard tuples for actions with explicit for_user. Functions
++        // are not part of DEFINER view chains, so there is no
++        // delegated-execution exemption.
++        let mut guard_tuples = Vec::new();
++        let unique_functions_needing_guards: HashSet<_> = actions
++            .iter()
++            .filter(|(_, action)| action.user.is_some())
++            .map(|(_, action)| (action.info.warehouse_id(), action.info.function_id()).to_openfga())
++            .collect();
++
++        guard_tuples.extend(
++            unique_functions_needing_guards
++                .into_iter()
++                .map(|function_obj| CheckRequestTupleKey {
++                    user: metadata.actor().to_openfga(),
++                    relation: FunctionRelation::CanReadAssignments.to_string(),
++                    object: function_obj,
++                }),
++        );
++
++        self.check_actions_with_permission_guard(metadata.actor(), items, guard_tuples)
++            .await
++    }
++
++    async fn create_function(
++        &self,
++        metadata: &RequestMetadata,
++        warehouse_id: WarehouseId,
++        function_id: FunctionId,
++        parent: NamespaceId,
++    ) -> AuthorizerResult<()> {
++        let actor = metadata.actor();
++
++        // Higher consistency: any stale relations from a previously deleted
++        // object with the same id must be gone before we (re-)create it.
++        self.require_no_relations(&(warehouse_id, function_id))
++            .await?;
++
++        let mut tuples =
++            crate::tuples::hierarchy_tuples_for_function(warehouse_id, function_id, parent);
++        tuples.extend(crate::tuples::ownership_tuples_for_function(
++            actor,
++            warehouse_id,
++            function_id,
++        ));
++        self.write_higher_consistency(Some(tuples), None)
++            .await
++            .map_err(authz_to_error_no_audit)
++            .map_err(Into::into)
++    }
++
++    async fn delete_function(
++        &self,
++        warehouse_id: WarehouseId,
++        function_id: FunctionId,
++    ) -> AuthorizerResult<()> {
++        self.delete_all_relations(&(warehouse_id, function_id))
++            .await
++    }
++
+     async fn delete_user(
+         &self,
+         _metadata: &RequestMetadata,
+diff --git a/crates/authz-openfga/src/entities.rs b/crates/authz-openfga/src/entities.rs
+index 313ea84c..b34596cf 100644
+--- a/crates/authz-openfga/src/entities.rs
++++ b/crates/authz-openfga/src/entities.rs
+@@ -3,8 +3,8 @@ use std::str::FromStr;
+ use lakekeeper::{
+     api::management::v1::check::RoleAssignee,
+     service::{
+-        GenericTableId, NamespaceId, ProjectId, RoleId, ServerId, TableId, ViewId, VolumeId,
+-        WarehouseId,
++        FunctionId, GenericTableId, NamespaceId, ProjectId, RoleId, ServerId, TableId, ViewId,
++        VolumeId, WarehouseId,
+         authn::{Actor, UserId},
+         authz::{
+             RoleAssignee as AuthzRoleAssignee, UserOrRole as AuthzUserOrRole,
+@@ -306,6 +306,18 @@ impl OpenFgaEntity for (WarehouseId, VolumeId) {
+     }
+ }
+ 
++/// Adds warehouse context to the `OpenFga` entity for `function`. Object ids
++/// must be warehouse-scoped: entity ids can repeat across warehouses.
++impl OpenFgaEntity for (WarehouseId, FunctionId) {
++    fn to_openfga(&self) -> String {
++        format!("{}:{}/{}", self.openfga_type(), self.0, self.1)
++    }
++
++    fn openfga_type(&self) -> FgaType {
++        FgaType::Function
++    }
++}
++
+ impl OpenFgaEntity for NamespaceId {
+     fn to_openfga(&self) -> String {
+         format!("{}:{self}", self.openfga_type())
+diff --git a/crates/authz-openfga/src/lib.rs b/crates/authz-openfga/src/lib.rs
+index 8d4cc810..9a042377 100644
+--- a/crates/authz-openfga/src/lib.rs
++++ b/crates/authz-openfga/src/lib.rs
+@@ -84,6 +84,8 @@ pub enum FgaType {
+     GenericTable,
+     #[strum(serialize = "lakekeeper_volume")]
+     Volume,
++    #[strum(serialize = "lakekeeper_function")]
++    Function,
+     ModelVersion,
+     AuthModelId,
+ }
+diff --git a/crates/authz-openfga/src/models.rs b/crates/authz-openfga/src/models.rs
+index 10ce8c12..33221100 100644
+--- a/crates/authz-openfga/src/models.rs
++++ b/crates/authz-openfga/src/models.rs
+@@ -20,6 +20,7 @@ impl OpenFgaType for FgaType {
+                 FgaType::View,
+                 FgaType::GenericTable,
+                 FgaType::Volume,
++                FgaType::Function,
+             ],
+             FgaType::Project => &[FgaType::Server, FgaType::Warehouse],
+             FgaType::Warehouse => &[FgaType::Project, FgaType::Namespace],
+@@ -30,10 +31,13 @@ impl OpenFgaType for FgaType {
+                 FgaType::View,
+                 FgaType::GenericTable,
+                 FgaType::Volume,
++                FgaType::Function,
+             ],
+-            FgaType::View | FgaType::Table | FgaType::GenericTable | FgaType::Volume => {
+-                &[FgaType::Namespace]
+-            }
++            FgaType::View
++            | FgaType::Table
++            | FgaType::GenericTable
++            | FgaType::Volume
++            | FgaType::Function => &[FgaType::Namespace],
+             FgaType::ModelVersion => &[],
+             FgaType::AuthModelId => &[FgaType::ModelVersion],
+         }
+diff --git a/crates/authz-openfga/src/reconcile.rs b/crates/authz-openfga/src/reconcile.rs
+index b920fb73..9aa47e77 100644
+--- a/crates/authz-openfga/src/reconcile.rs
++++ b/crates/authz-openfga/src/reconcile.rs
+@@ -504,9 +504,14 @@ impl CatalogIndex {
+                     .map(GenericTableId::new)
+                     .map(|g| self.generic_tables.contains_key(&g))
+             }
+-            // UC volumes are not indexed by the reconciler in v1: their
+-            // tuples are left alone (create/delete hooks manage them).
+-            FgaType::User | FgaType::ModelVersion | FgaType::AuthModelId | FgaType::Volume => None,
++            // UC volumes and functions are not indexed by the reconciler in
++            // v1: their tuples are left alone (create/delete hooks manage
++            // them).
++            FgaType::User
++            | FgaType::ModelVersion
++            | FgaType::AuthModelId
++            | FgaType::Volume
++            | FgaType::Function => None,
+         }
+     }
+ }
+diff --git a/crates/authz-openfga/src/relations.rs b/crates/authz-openfga/src/relations.rs
+index 66e62546..52d4d151 100644
+--- a/crates/authz-openfga/src/relations.rs
++++ b/crates/authz-openfga/src/relations.rs
+@@ -3,11 +3,11 @@ use lakekeeper::{
+     service::{
+         authn::UserId,
+         authz::{
+-            ActionDescriptor, CatalogAction, CatalogGenericTableAction, CatalogNamespaceAction,
+-            CatalogProjectAction, CatalogRoleAction, CatalogServerAction, CatalogTableAction,
+-            CatalogViewAction, CatalogVolumeAction, CatalogWarehouseAction, GenericTableAction,
+-            NamespaceAction, ProjectAction, RoleAction, ServerAction, TableAction, ViewAction,
+-            VolumeAction, WarehouseAction,
++            ActionDescriptor, CatalogAction, CatalogFunctionAction, CatalogGenericTableAction,
++            CatalogNamespaceAction, CatalogProjectAction, CatalogRoleAction, CatalogServerAction,
++            CatalogTableAction, CatalogViewAction, CatalogVolumeAction, CatalogWarehouseAction,
++            FunctionAction, GenericTableAction, NamespaceAction, ProjectAction, RoleAction,
++            ServerAction, TableAction, ViewAction, VolumeAction, WarehouseAction,
+         },
+     },
+ };
+@@ -1087,6 +1087,8 @@ pub enum NamespaceRelation {
+     CanListGenericTables,
+     CanCreateVolume,
+     CanListVolumes,
++    CanCreateFunction,
++    CanListFunctions,
+     CanListEverything,
+     CanIncludeInList,
+     CanReadAssignments,
+@@ -1239,6 +1241,8 @@ pub(super) enum APINamespaceAction {
+     CreateGenericTable,
+     CreateVolume,
+     ListVolumes,
++    CreateFunction,
++    ListFunctions,
+     CreateNamespace,
+     Delete,
+     UpdateProperties,
+@@ -1292,6 +1296,8 @@ impl ReducedRelation for APINamespaceAction {
+             APINamespaceAction::CreateGenericTable => NamespaceRelation::CanCreateGenericTable,
+             APINamespaceAction::CreateVolume => NamespaceRelation::CanCreateVolume,
+             APINamespaceAction::ListVolumes => NamespaceRelation::CanListVolumes,
++            APINamespaceAction::CreateFunction => NamespaceRelation::CanCreateFunction,
++            APINamespaceAction::ListFunctions => NamespaceRelation::CanListFunctions,
+             APINamespaceAction::CreateNamespace => NamespaceRelation::CanCreateNamespace,
+             APINamespaceAction::Delete => NamespaceRelation::CanDelete,
+             APINamespaceAction::UpdateProperties => NamespaceRelation::CanUpdateProperties,
+@@ -1333,6 +1339,8 @@ impl ReducedRelation for CatalogNamespaceAction {
+             CatalogNamespaceAction::ListGenericTables => NamespaceRelation::CanListGenericTables,
+             CatalogNamespaceAction::CreateVolume { .. } => NamespaceRelation::CanCreateVolume,
+             CatalogNamespaceAction::ListVolumes => NamespaceRelation::CanListVolumes,
++            CatalogNamespaceAction::CreateFunction { .. } => NamespaceRelation::CanCreateFunction,
++            CatalogNamespaceAction::ListFunctions => NamespaceRelation::CanListFunctions,
+         }
+     }
+ }
+@@ -2372,6 +2380,230 @@ impl ReducedRelation for OpenFGAVolumeAction {
+     }
+ }
+ 
++// =================== Function Relations (Unity Catalog compat) ===================
++
++#[derive(
++    Debug, Clone, Copy, Hash, Eq, PartialEq, strum_macros::Display, IntoStaticStr, EnumIter,
++)]
++#[strum(serialize_all = "snake_case")]
++pub enum FunctionRelation {
++    // -- Hierarchical relations --
++    Parent,
++    // -- Direct relations --
++    Ownership,
++    PassGrants,
++    ManageGrants,
++    Describe,
++    Select,
++    Modify,
++    Execute,
++    // -- Actions --
++    CanDrop,
++    CanGetMetadata,
++    CanIncludeInList,
++    CanExecute,
++    // -- Read assignments / grant actions --
++    CanReadAssignments,
++    CanGrantPassGrants,
++    CanGrantManageGrants,
++    CanGrantDescribe,
++    CanGrantSelect,
++    CanGrantModify,
++    CanGrantExecute,
++    CanChangeOwnership,
++}
++
++impl FunctionAction for FunctionRelation {
++    fn is_data_plane(&self) -> bool {
++        // Function execution is client-side; no relation touches a data
++        // plane.
++        false
++    }
++}
++impl CatalogAction for FunctionRelation {
++    fn action_descriptor(&self) -> ActionDescriptor {
++        ActionDescriptor::builder().action_name(self.into()).build()
++    }
++}
++impl OpenFgaRelation for FunctionRelation {}
++
++impl From<CatalogFunctionAction> for FunctionRelation {
++    fn from(action: CatalogFunctionAction) -> Self {
++        action.to_openfga()
++    }
++}
++
++impl From<&CatalogFunctionAction> for FunctionRelation {
++    fn from(action: &CatalogFunctionAction) -> Self {
++        action.to_openfga()
++    }
++}
++
++impl ReducedRelation for CatalogFunctionAction {
++    type OpenFgaRelation = FunctionRelation;
++
++    fn to_openfga(&self) -> Self::OpenFgaRelation {
++        match self {
++            CatalogFunctionAction::GetMetadata => FunctionRelation::CanGetMetadata,
++            CatalogFunctionAction::Execute => FunctionRelation::CanExecute,
++            CatalogFunctionAction::Drop => FunctionRelation::CanDrop,
++            CatalogFunctionAction::IncludeInList => FunctionRelation::CanIncludeInList,
++        }
++    }
++}
++
++#[derive(Debug, Clone, Deserialize, Copy, Eq, PartialEq, EnumIter)]
++#[cfg_attr(feature = "open-api", derive(utoipa::ToSchema))]
++#[serde(rename_all = "snake_case")]
++#[cfg_attr(feature = "open-api", schema(as=FunctionRelation))]
++pub(super) enum APIFunctionRelation {
++    Ownership,
++    PassGrants,
++    ManageGrants,
++    Describe,
++    Select,
++    Modify,
++    Execute,
++}
++
++#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
++#[cfg_attr(feature = "open-api", derive(utoipa::ToSchema))]
++#[serde(tag = "type", rename_all = "snake_case")]
++pub(super) enum FunctionAssignment {
++    #[cfg_attr(feature = "open-api", schema(title = "FunctionAssignmentOwnership"))]
++    Ownership(UserOrRole),
++    #[cfg_attr(feature = "open-api", schema(title = "FunctionAssignmentPassGrants"))]
++    PassGrants(UserOrRole),
++    #[cfg_attr(feature = "open-api", schema(title = "FunctionAssignmentManageGrants"))]
++    ManageGrants(UserOrRole),
++    #[cfg_attr(feature = "open-api", schema(title = "FunctionAssignmentDescribe"))]
++    Describe(UserOrRole),
++    #[cfg_attr(feature = "open-api", schema(title = "FunctionAssignmentSelect"))]
++    Select(UserOrRole),
++    #[cfg_attr(feature = "open-api", schema(title = "FunctionAssignmentModify"))]
++    Modify(UserOrRole),
++    #[cfg_attr(feature = "open-api", schema(title = "FunctionAssignmentExecute"))]
++    Execute(UserOrRole),
++}
++
++impl GrantableRelation for APIFunctionRelation {
++    fn grant_relation(&self) -> FunctionRelation {
++        match self {
++            APIFunctionRelation::Ownership => FunctionRelation::CanChangeOwnership,
++            APIFunctionRelation::PassGrants => FunctionRelation::CanGrantPassGrants,
++            APIFunctionRelation::ManageGrants => FunctionRelation::CanGrantManageGrants,
++            APIFunctionRelation::Describe => FunctionRelation::CanGrantDescribe,
++            APIFunctionRelation::Select => FunctionRelation::CanGrantSelect,
++            APIFunctionRelation::Modify => FunctionRelation::CanGrantModify,
++            APIFunctionRelation::Execute => FunctionRelation::CanGrantExecute,
++        }
++    }
++}
++
++impl Assignment for FunctionAssignment {
++    type Relation = APIFunctionRelation;
++
++    fn try_from_user(
++        user: &str,
++        relation: &Self::Relation,
++    ) -> Result<Self, ParseOpenFgaEntityError> {
++        match relation {
++            APIFunctionRelation::Ownership => {
++                UserOrRole::parse_from_openfga(user).map(FunctionAssignment::Ownership)
++            }
++            APIFunctionRelation::PassGrants => {
++                UserOrRole::parse_from_openfga(user).map(FunctionAssignment::PassGrants)
++            }
++            APIFunctionRelation::ManageGrants => {
++                UserOrRole::parse_from_openfga(user).map(FunctionAssignment::ManageGrants)
++            }
++            APIFunctionRelation::Describe => {
++                UserOrRole::parse_from_openfga(user).map(FunctionAssignment::Describe)
++            }
++            APIFunctionRelation::Select => {
++                UserOrRole::parse_from_openfga(user).map(FunctionAssignment::Select)
++            }
++            APIFunctionRelation::Modify => {
++                UserOrRole::parse_from_openfga(user).map(FunctionAssignment::Modify)
++            }
++            APIFunctionRelation::Execute => {
++                UserOrRole::parse_from_openfga(user).map(FunctionAssignment::Execute)
++            }
++        }
++    }
++
++    fn openfga_user(&self) -> String {
++        match self {
++            FunctionAssignment::Ownership(user)
++            | FunctionAssignment::PassGrants(user)
++            | FunctionAssignment::ManageGrants(user)
++            | FunctionAssignment::Describe(user)
++            | FunctionAssignment::Select(user)
++            | FunctionAssignment::Modify(user)
++            | FunctionAssignment::Execute(user) => user.to_openfga(),
++        }
++    }
++
++    fn relation(&self) -> Self::Relation {
++        match self {
++            FunctionAssignment::Ownership(_) => APIFunctionRelation::Ownership,
++            FunctionAssignment::PassGrants(_) => APIFunctionRelation::PassGrants,
++            FunctionAssignment::ManageGrants(_) => APIFunctionRelation::ManageGrants,
++            FunctionAssignment::Describe(_) => APIFunctionRelation::Describe,
++            FunctionAssignment::Select(_) => APIFunctionRelation::Select,
++            FunctionAssignment::Modify(_) => APIFunctionRelation::Modify,
++            FunctionAssignment::Execute(_) => APIFunctionRelation::Execute,
++        }
++    }
++}
++
++#[derive(Copy, Debug, Clone, Eq, PartialEq, Serialize, Deserialize, EnumIter)]
++#[cfg_attr(feature = "open-api", derive(utoipa::ToSchema))]
++#[serde(rename_all = "snake_case")]
++pub(super) enum OpenFGAFunctionAction {
++    ReadAssignments,
++    GrantPassGrants,
++    GrantManageGrants,
++    GrantDescribe,
++    GrantSelect,
++    GrantModify,
++    GrantExecute,
++    ChangeOwnership,
++}
++
++impl ReducedRelation for APIFunctionRelation {
++    type OpenFgaRelation = FunctionRelation;
++
++    fn to_openfga(&self) -> Self::OpenFgaRelation {
++        match self {
++            APIFunctionRelation::Ownership => FunctionRelation::Ownership,
++            APIFunctionRelation::PassGrants => FunctionRelation::PassGrants,
++            APIFunctionRelation::ManageGrants => FunctionRelation::ManageGrants,
++            APIFunctionRelation::Describe => FunctionRelation::Describe,
++            APIFunctionRelation::Select => FunctionRelation::Select,
++            APIFunctionRelation::Modify => FunctionRelation::Modify,
++            APIFunctionRelation::Execute => FunctionRelation::Execute,
++        }
++    }
++}
++
++impl ReducedRelation for OpenFGAFunctionAction {
++    type OpenFgaRelation = FunctionRelation;
++
++    fn to_openfga(&self) -> Self::OpenFgaRelation {
++        match self {
++            OpenFGAFunctionAction::ReadAssignments => FunctionRelation::CanReadAssignments,
++            OpenFGAFunctionAction::GrantPassGrants => FunctionRelation::CanGrantPassGrants,
++            OpenFGAFunctionAction::GrantManageGrants => FunctionRelation::CanGrantManageGrants,
++            OpenFGAFunctionAction::GrantDescribe => FunctionRelation::CanGrantDescribe,
++            OpenFGAFunctionAction::GrantSelect => FunctionRelation::CanGrantSelect,
++            OpenFGAFunctionAction::GrantModify => FunctionRelation::CanGrantModify,
++            OpenFGAFunctionAction::GrantExecute => FunctionRelation::CanGrantExecute,
++            OpenFGAFunctionAction::ChangeOwnership => FunctionRelation::CanChangeOwnership,
++        }
++    }
++}
++
+ #[cfg(test)]
+ pub(crate) mod test {
+     use super::*;
+diff --git a/crates/authz-openfga/src/tuples.rs b/crates/authz-openfga/src/tuples.rs
+index e7d83c3e..708a8cf2 100644
+--- a/crates/authz-openfga/src/tuples.rs
++++ b/crates/authz-openfga/src/tuples.rs
+@@ -15,7 +15,7 @@
+ use lakekeeper::{
+     ProjectId, WarehouseId,
+     service::{
+-        Actor, GenericTableId, NamespaceId, RoleId, TableId, ViewId, VolumeId,
++        Actor, FunctionId, GenericTableId, NamespaceId, RoleId, TableId, ViewId, VolumeId,
+         authz::NamespaceParent,
+     },
+ };
+@@ -24,8 +24,8 @@ use openfga_client::client::TupleKey;
+ use crate::{
+     entities::OpenFgaEntity,
+     relations::{
+-        GenericTableRelation, NamespaceRelation, ProjectRelation, RoleRelation, ServerRelation,
+-        TableRelation, ViewRelation, VolumeRelation, WarehouseRelation,
++        FunctionRelation, GenericTableRelation, NamespaceRelation, ProjectRelation, RoleRelation,
++        ServerRelation, TableRelation, ViewRelation, VolumeRelation, WarehouseRelation,
+     },
+ };
+ 
+@@ -225,6 +225,37 @@ pub(crate) fn ownership_tuples_for_volume(
+     )]
+ }
+ 
++/// Hierarchy tuples for a function: `namespace ↔ function`.
++pub(crate) fn hierarchy_tuples_for_function(
++    warehouse: WarehouseId,
++    function: FunctionId,
++    parent_namespace: NamespaceId,
++) -> Vec<TupleKey> {
++    let parent_id = parent_namespace.to_openfga();
++    let this_id = (warehouse, function).to_openfga();
++    vec![
++        tuple(
++            parent_id.clone(),
++            FunctionRelation::Parent.to_string(),
++            this_id.clone(),
++        ),
++        tuple(this_id, NamespaceRelation::Child.to_string(), parent_id),
++    ]
++}
++
++/// Ownership tuple for a function.
++pub(crate) fn ownership_tuples_for_function(
++    actor: &Actor,
++    warehouse: WarehouseId,
++    function: FunctionId,
++) -> Vec<TupleKey> {
++    vec![tuple(
++        actor.to_openfga(),
++        FunctionRelation::Ownership.to_string(),
++        (warehouse, function).to_openfga(),
++    )]
++}
++
+ /// Hierarchy tuples for a view: `namespace ↔ view`.
+ pub(crate) fn hierarchy_tuples_for_view(
+     warehouse: WarehouseId,
+diff --git a/crates/lakekeeper-integration-tests/tests/server_uc_functions.rs b/crates/lakekeeper-integration-tests/tests/server_uc_functions.rs
+new file mode 100644
+index 00000000..228dc0ae
+--- /dev/null
++++ b/crates/lakekeeper-integration-tests/tests/server_uc_functions.rs
+@@ -0,0 +1,423 @@
++//! Unity Catalog compatibility API (Phase C): Functions, driven through the
++//! `UcCatalogService` trait on `CatalogServer` (same harness as
++//! `server_uc_volumes.rs`).
++//!
++//! The payloads mirror what unitycatalog-ai's `create_python_function` sends
++//! (uc-api-contract.md §8); the assertions check the byte-fidelity guarantees
++//! client-side execution depends on.
++
++use std::collections::HashMap;
++
++use lakekeeper::{
++    api::{
++        ApiContext,
++        uc::v1::{
++            CreateFunctionRequest, CreateSchemaRequest, ListFunctionsQuery, UcCatalogService as _,
++        },
++    },
++    server::CatalogServer,
++    service::{
++        CatalogStore, CatalogWarehouseOps as _, State, Transaction as _,
++        authz::AllowAllAuthorizer,
++        storage::{MemoryProfile, StorageProfile},
++    },
++};
++use lakekeeper_integration_tests::{get_api_context, random_request_metadata};
++use lakekeeper_storage_postgres::{
++    PostgresBackend, SecretsState, warehouse::test::initialize_warehouse,
++};
++use sqlx::PgPool;
++
++type Ctx = ApiContext<State<AllowAllAuthorizer, PostgresBackend, SecretsState>>;
++
++const SCHEMA: &str = "fns_schema";
++
++/// Returns `(ctx, catalog_name)` with the schema `SCHEMA` pre-created.
++async fn setup(pool: PgPool) -> (Ctx, String) {
++    lakekeeper_storage_postgres::migrations::migrate_core_only(&pool)
++        .await
++        .unwrap();
++    let api_context = get_api_context(&pool, AllowAllAuthorizer::default()).await;
++    let state = api_context.v1_state.catalog.clone();
++
++    let profile = StorageProfile::Memory(MemoryProfile::default());
++    let (_project_id, warehouse_id) =
++        initialize_warehouse(state.clone(), Some(profile), None, None, true).await;
++
++    // Unique warehouse name: the name→id cache is process-global while each
++    // `#[sqlx::test]` runs against its own database.
++    let catalog_name = format!("uc_wh_{}", uuid::Uuid::now_v7().simple());
++    let mut t = <PostgresBackend as CatalogStore>::Transaction::begin_write(state)
++        .await
++        .unwrap();
++    PostgresBackend::rename_warehouse(warehouse_id, &catalog_name, t.transaction())
++        .await
++        .unwrap();
++    t.commit().await.unwrap();
++
++    CatalogServer::create_schema(
++        CreateSchemaRequest {
++            name: SCHEMA.to_string(),
++            catalog_name: catalog_name.clone(),
++            comment: None,
++            properties: HashMap::new(),
++            storage_root: None,
++        },
++        api_context.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap();
++
++    (api_context, catalog_name)
++}
++
++/// A realistic `function_info` as sent by unitycatalog-ai's
++/// `create_python_function(add_numbers, ...)`: EXTERNAL PYTHON routine with a
++/// multi-line body, `properties` as the literal string `"null"`, and
++/// parameters carrying embedded-JSON `type_json` strings.
++fn ai_function_info(catalog: &str, name: &str) -> serde_json::Value {
++    serde_json::json!({
++        "name": name,
++        "catalog_name": catalog,
++        "schema_name": SCHEMA,
++        "input_params": {
++            "parameters": [
++                {
++                    "name": "a",
++                    "type_text": "long",
++                    "type_json": "{\"name\": \"a\", \"type\": \"long\", \"nullable\": false, \"metadata\": {\"comment\": \"The first number.\"}}",
++                    "type_name": "LONG",
++                    "position": 0,
++                    "parameter_mode": "IN",
++                    "parameter_type": "PARAM",
++                    "comment": "The first number."
++                },
++                {
++                    "name": "b",
++                    "type_text": "array<string>",
++                    "type_json": "{\"name\": \"b\", \"type\": \"array<string>\", \"nullable\": true, \"metadata\": {}}",
++                    "type_name": "ARRAY",
++                    "position": 1,
++                    "parameter_default": "NULL",
++                    "comment": "The second number."
++                }
++            ]
++        },
++        "data_type": "LONG",
++        "full_data_type": "LONG",
++        "routine_body": "EXTERNAL",
++        "routine_definition": "result = a + len(b or [])\nreturn result",
++        "external_language": "PYTHON",
++        "parameter_style": "S",
++        "is_deterministic": true,
++        "sql_data_access": "NO_SQL",
++        "is_null_call": false,
++        "security_type": "DEFINER",
++        "specific_name": name,
++        "comment": "Adds two numbers and returns the result.\n\nArgs:\n    a: The first number.",
++        "properties": "null"
++    })
++}
++
++fn create_request(catalog: &str, name: &str) -> CreateFunctionRequest {
++    CreateFunctionRequest {
++        function_info: ai_function_info(catalog, name),
++    }
++}
++
++#[sqlx::test]
++async fn test_create_get_roundtrip_byte_fidelity(pool: PgPool) {
++    let (ctx, catalog) = setup(pool).await;
++    let sent = ai_function_info(&catalog, "add_numbers");
++
++    let created = CatalogServer::create_function(
++        create_request(&catalog, "add_numbers"),
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap();
++    let created = created.0;
++
++    // Server fields.
++    assert_eq!(created["name"], "add_numbers");
++    assert_eq!(created["catalog_name"], catalog.as_str());
++    assert_eq!(created["schema_name"], SCHEMA);
++    assert_eq!(
++        created["full_name"],
++        format!("{catalog}.{SCHEMA}.add_numbers")
++    );
++    uuid::Uuid::parse_str(created["function_id"].as_str().unwrap())
++        .expect("function_id must be a UUID");
++    assert!(created["created_at"].is_i64());
++
++    // Fetch and compare byte-fidelity of every client-supplied field.
++    let fetched = CatalogServer::get_function(
++        format!("{catalog}.{SCHEMA}.add_numbers"),
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap();
++    let fetched = fetched.0;
++    assert_eq!(fetched, created, "get must return exactly what create did");
++
++    for field in [
++        "routine_definition",
++        "external_language",
++        "routine_body",
++        "data_type",
++        "full_data_type",
++        "parameter_style",
++        "is_deterministic",
++        "sql_data_access",
++        "is_null_call",
++        "security_type",
++        "specific_name",
++        "comment",
++        "properties",
++        "input_params",
++    ] {
++        assert_eq!(fetched[field], sent[field], "field {field} must round-trip");
++    }
++    // The critical unitycatalog-ai quirks, spelled out:
++    assert_eq!(fetched["properties"], serde_json::json!("null"));
++    assert_eq!(
++        fetched["routine_definition"].as_str().unwrap(),
++        "result = a + len(b or [])\nreturn result"
++    );
++    let params = fetched["input_params"]["parameters"].as_array().unwrap();
++    assert_eq!(params.len(), 2);
++    assert_eq!(params[0]["name"], "a");
++    assert_eq!(params[0]["position"], 0);
++    assert_eq!(params[1]["name"], "b");
++    assert_eq!(params[1]["position"], 1);
++    assert_eq!(params[1]["type_name"], "ARRAY");
++    assert_eq!(params[1]["type_text"], "array<string>");
++    assert_eq!(params[1]["parameter_default"], "NULL");
++    assert_eq!(
++        params[0]["type_json"].as_str().unwrap(),
++        "{\"name\": \"a\", \"type\": \"long\", \"nullable\": false, \"metadata\": {\"comment\": \"The first number.\"}}"
++    );
++}
++
++#[sqlx::test]
++async fn test_list_functions_with_pagination(pool: PgPool) {
++    let (ctx, catalog) = setup(pool).await;
++    for name in ["fa", "fb", "fc"] {
++        CatalogServer::create_function(
++            create_request(&catalog, name),
++            ctx.clone(),
++            random_request_metadata(),
++        )
++        .await
++        .unwrap();
++    }
++
++    let query = |max_results, page_token| ListFunctionsQuery {
++        catalog_name: catalog.clone(),
++        schema_name: SCHEMA.to_string(),
++        max_results,
++        page_token,
++    };
++
++    let all =
++        CatalogServer::list_functions(query(None, None), ctx.clone(), random_request_metadata())
++            .await
++            .unwrap();
++    assert_eq!(all.functions.len(), 3);
++    // List returns full FunctionInfo objects, not stubs.
++    assert_eq!(all.functions[0].0["routine_body"], "EXTERNAL");
++    assert!(all.functions[0].0["function_id"].is_string());
++
++    let page1 =
++        CatalogServer::list_functions(query(Some(2), None), ctx.clone(), random_request_metadata())
++            .await
++            .unwrap();
++    assert_eq!(page1.functions.len(), 2);
++    let token = page1.next_page_token.expect("more pages");
++
++    let page2 = CatalogServer::list_functions(
++        query(Some(2), Some(token)),
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap();
++    assert_eq!(page2.functions.len(), 1);
++
++    let names: Vec<_> = page1
++        .functions
++        .iter()
++        .chain(page2.functions.iter())
++        .map(|f| f.0["name"].as_str().unwrap().to_string())
++        .collect();
++    assert_eq!(names, ["fa", "fb", "fc"]);
++
++    // Negative max_results is INVALID_ARGUMENT.
++    let err = CatalogServer::list_functions(query(Some(-1), None), ctx, random_request_metadata())
++        .await
++        .unwrap_err();
++    assert_eq!(err.status, 400);
++    assert_eq!(err.error_code, "INVALID_ARGUMENT");
++}
++
++#[sqlx::test]
++async fn test_delete_function(pool: PgPool) {
++    let (ctx, catalog) = setup(pool).await;
++    let full_name = format!("{catalog}.{SCHEMA}.gone");
++    CatalogServer::create_function(
++        create_request(&catalog, "gone"),
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap();
++
++    CatalogServer::delete_function(full_name.clone(), ctx.clone(), random_request_metadata())
++        .await
++        .unwrap();
++
++    let err =
++        CatalogServer::get_function(full_name.clone(), ctx.clone(), random_request_metadata())
++            .await
++            .unwrap_err();
++    assert_eq!(err.status, 404);
++    assert_eq!(err.error_code, "NOT_FOUND");
++
++    // unitycatalog-ai `replace=True` flow: name is free again after delete.
++    CatalogServer::create_function(
++        create_request(&catalog, "gone"),
++        ctx,
++        random_request_metadata(),
++    )
++    .await
++    .expect("name must be reusable after hard delete");
++}
++
++#[sqlx::test]
++async fn test_name_conflict_is_409(pool: PgPool) {
++    let (ctx, catalog) = setup(pool).await;
++    CatalogServer::create_function(
++        create_request(&catalog, "dup"),
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap();
++
++    // Case-insensitive conflict.
++    let err = CatalogServer::create_function(
++        create_request(&catalog, "DUP"),
++        ctx,
++        random_request_metadata(),
++    )
++    .await
++    .unwrap_err();
++    assert_eq!(err.status, 409, "{err:?}");
++    assert_eq!(err.error_code, "ALREADY_EXISTS");
++}
++
++#[sqlx::test]
++async fn test_missing_required_field_is_400(pool: PgPool) {
++    let (ctx, catalog) = setup(pool).await;
++
++    for field in [
++        "name",
++        "input_params",
++        "routine_definition",
++        "specific_name",
++        "is_deterministic",
++    ] {
++        let mut info = ai_function_info(&catalog, "bad");
++        info.as_object_mut().unwrap().remove(field);
++        let err = CatalogServer::create_function(
++            CreateFunctionRequest {
++                function_info: info,
++            },
++            ctx.clone(),
++            random_request_metadata(),
++        )
++        .await
++        .unwrap_err();
++        assert_eq!(err.status, 400, "{field}");
++        assert_eq!(err.error_code, "INVALID_ARGUMENT", "{field}");
++        assert!(err.message.contains(field), "{field}: {}", err.message);
++    }
++
++    // Invalid function names.
++    for bad_name in ["", "a.b", "a/b"] {
++        let err = CatalogServer::create_function(
++            create_request(&catalog, bad_name),
++            ctx.clone(),
++            random_request_metadata(),
++        )
++        .await
++        .unwrap_err();
++        assert_eq!(err.status, 400, "{bad_name}");
++        assert_eq!(err.error_code, "INVALID_ARGUMENT", "{bad_name}");
++    }
++}
++
++#[sqlx::test]
++async fn test_three_part_name_parsing(pool: PgPool) {
++    let (ctx, _catalog) = setup(pool).await;
++    for bad in ["", "cat", "cat.schema", "cat.schema.fn.extra", "a..b"] {
++        let err =
++            CatalogServer::get_function(bad.to_string(), ctx.clone(), random_request_metadata())
++                .await
++                .unwrap_err();
++        assert_eq!(err.status, 400, "{bad}");
++        assert_eq!(err.error_code, "INVALID_ARGUMENT", "{bad}");
++    }
++}
++
++#[sqlx::test]
++async fn test_404_masking_for_missing_function(pool: PgPool) {
++    let (ctx, catalog) = setup(pool).await;
++
++    // Missing function in an existing schema.
++    let err = CatalogServer::get_function(
++        format!("{catalog}.{SCHEMA}.ghost"),
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap_err();
++    assert_eq!(err.status, 404);
++    assert_eq!(err.error_code, "NOT_FOUND");
++
++    // Missing schema.
++    let err = CatalogServer::get_function(
++        format!("{catalog}.no_such_schema.ghost"),
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap_err();
++    assert_eq!(err.status, 404);
++    assert_eq!(err.error_code, "NOT_FOUND");
++
++    // Missing catalog.
++    let err = CatalogServer::get_function(
++        "no_such_catalog.schema.ghost".to_string(),
++        ctx.clone(),
++        random_request_metadata(),
++    )
++    .await
++    .unwrap_err();
++    assert_eq!(err.status, 404);
++    assert_eq!(err.error_code, "NOT_FOUND");
++
++    // Delete of a missing function is a masked 404 too.
++    let err = CatalogServer::delete_function(
++        format!("{catalog}.{SCHEMA}.ghost"),
++        ctx,
++        random_request_metadata(),
++    )
++    .await
++    .unwrap_err();
++    assert_eq!(err.status, 404);
++    assert_eq!(err.error_code, "NOT_FOUND");
++}
+diff --git a/crates/lakekeeper-storage-postgres/migrations/20260703000002_add_uc_function.sql b/crates/lakekeeper-storage-postgres/migrations/20260703000002_add_uc_function.sql
+new file mode 100644
+index 00000000..5b12790f
+--- /dev/null
++++ b/crates/lakekeeper-storage-postgres/migrations/20260703000002_add_uc_function.sql
+@@ -0,0 +1,40 @@
++-- Unity Catalog compatibility: functions.
++--
++-- Functions are a dedicated entity (no `tabular` piggyback). The client's
++-- `function_info` JSON is stored verbatim in `spec` (design D3 wire
++-- fidelity): the server only parses out `name`/`catalog_name`/`schema_name`
++-- and merges server-generated fields (function_id, full_name, timestamps)
++-- back in on read. UC DELETE is a hard delete in v1; `deleted_at` is
++-- reserved for future soft-delete support. UC has no function PATCH, so
++-- rows are immutable after insert (the version trigger is installed for
++-- consistency with other entities).
++
++CREATE TABLE uc_function (
++    warehouse_id UUID NOT NULL,
++    function_id  UUID NOT NULL,
++    namespace_id UUID NOT NULL,
++    name         TEXT COLLATE "case_insensitive" NOT NULL,
++    -- The client's `function_info` JSON, verbatim. Capped at 1 MiB.
++    spec         JSONB NOT NULL CHECK (octet_length(spec::text) <= 1048576),
++    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
++    updated_at   TIMESTAMPTZ,
++    deleted_at   TIMESTAMPTZ,
++    version      BIGINT NOT NULL DEFAULT 0,
++    PRIMARY KEY (warehouse_id, function_id),
++    -- `unique_namespace_id_per_warehouse` on namespace backs this FK.
++    FOREIGN KEY (warehouse_id, namespace_id)
++        REFERENCES namespace (warehouse_id, namespace_id) ON DELETE CASCADE
++);
++
++SELECT trigger_updated_at_and_version_if_distinct('"uc_function"');
++
++-- Case-insensitive name uniqueness per namespace (name column uses the
++-- `case_insensitive` collation, mirroring uc_volume), scoped to live rows.
++CREATE UNIQUE INDEX uc_function_unique_name_per_namespace_idx
++    ON uc_function (warehouse_id, namespace_id, name)
++    WHERE deleted_at IS NULL;
++
++-- Keyset pagination (created_at, function_id).
++CREATE INDEX uc_function_created_at_function_id_idx
++    ON uc_function (warehouse_id, namespace_id, created_at, function_id)
++    WHERE deleted_at IS NULL;
+diff --git a/crates/lakekeeper-storage-postgres/src/catalog.rs b/crates/lakekeeper-storage-postgres/src/catalog.rs
+index ae53289b..8bdf15db 100644
+--- a/crates/lakekeeper-storage-postgres/src/catalog.rs
++++ b/crates/lakekeeper-storage-postgres/src/catalog.rs
+@@ -31,30 +31,32 @@ use lakekeeper::{
+         CatalogSearchTabularResponse, CatalogSetNamespaceProtectedError, CatalogStore,
+         CatalogUpdateNamespacePropertiesError, CatalogUserRoleAssignmentUser, CatalogView,
+         ClearTabularDeletedAtError, CommitTableTransactionError, CommitViewError,
+-        CreateGenericTableError, CreateNamespaceRequest, CreateOrUpdateUserResponse,
+-        CreateRoleError, CreateTableError, CreateViewError, CreateVolumeError,
+-        DropGenericTableError, DropTabularError, DropVolumeError, EnsureWarehouseSpecMutableError,
+-        GenericTableCreation, GenericTableId, GenericTableInfo, GenericTableListEntry,
+-        GetProjectResponse, GetTabularInfoByLocationError, GetTabularInfoError,
+-        GetTaskDetailsError, ListCatalogRoleMembersPage, ListGenericTablesError,
+-        ListNamespacesQuery, ListRoleMembersResult, ListRolesError, ListRolesPage,
+-        ListRolesResponse, ListTabularsError, ListUserRoleAssignmentsResult, ListVolumesError,
+-        LoadGenericTableError, LoadTableError, LoadTableResponse, LoadViewError, LoadVolumeError,
+-        ManagedBy, MarkTabularAsDeletedError, NamespaceDropInfo, NamespaceId, NamespaceWithParent,
+-        ProjectId, RemoveRoleMembersError, RemoveRoleMembersResult, RemoveUserRoleAssignmentsError,
+-        RemoveUserRoleAssignmentsResult, RenameTabularError, ResolveTasksError, ResolvedTask,
+-        ResolvedWarehouse, Result, Role, RoleId, RoleIdent, RoleMemberKind,
+-        RoleMembershipDirection, RoleMembershipEntry, RoleProviderId, SearchRoleResponse,
+-        SearchRolesError, SearchTabularError, ServerId, ServerInfo, SetTabularProtectionError,
+-        SetWarehouseDeletionProfileError, SetWarehouseFormatVersionPolicyError,
+-        SetWarehouseManagedByError, SetWarehouseProtectedError, SetWarehouseStatusError,
+-        StagedTableId, SyncRoleMembersError, SyncRoleMembersResult, SyncUserRoleAssignmentsError,
+-        SyncUserRoleAssignmentsResult, TableCommit, TableCreation, TableId, TableIdent, TableInfo,
+-        TabularId, TabularIdentBorrowed, TabularListFlags, TaskDetails, TaskList, Transaction,
+-        UniqueMembers, UniqueRoles, UpdateRoleError, UpdateVolumeError,
+-        UpdateWarehouseStorageProfileError, UserMembershipEntry, UserUpsertMode, ViewCommit,
+-        ViewId, ViewInfo, ViewOrTableDeletionInfo, ViewOrTableInfo, VolumeCreation, VolumeId,
+-        VolumeInfo, VolumeListEntry, WarehouseFormatVersionPolicy, WarehouseId, WarehouseStatus,
++        CreateFunctionError, CreateGenericTableError, CreateNamespaceRequest,
++        CreateOrUpdateUserResponse, CreateRoleError, CreateTableError, CreateViewError,
++        CreateVolumeError, DropFunctionError, DropGenericTableError, DropTabularError,
++        DropVolumeError, EnsureWarehouseSpecMutableError, FunctionCreation, FunctionId,
++        FunctionInfo, FunctionListEntry, GenericTableCreation, GenericTableId, GenericTableInfo,
++        GenericTableListEntry, GetProjectResponse, GetTabularInfoByLocationError,
++        GetTabularInfoError, GetTaskDetailsError, ListCatalogRoleMembersPage, ListFunctionsError,
++        ListGenericTablesError, ListNamespacesQuery, ListRoleMembersResult, ListRolesError,
++        ListRolesPage, ListRolesResponse, ListTabularsError, ListUserRoleAssignmentsResult,
++        ListVolumesError, LoadFunctionError, LoadGenericTableError, LoadTableError,
++        LoadTableResponse, LoadViewError, LoadVolumeError, ManagedBy, MarkTabularAsDeletedError,
++        NamespaceDropInfo, NamespaceId, NamespaceWithParent, ProjectId, RemoveRoleMembersError,
++        RemoveRoleMembersResult, RemoveUserRoleAssignmentsError, RemoveUserRoleAssignmentsResult,
++        RenameTabularError, ResolveTasksError, ResolvedTask, ResolvedWarehouse, Result, Role,
++        RoleId, RoleIdent, RoleMemberKind, RoleMembershipDirection, RoleMembershipEntry,
++        RoleProviderId, SearchRoleResponse, SearchRolesError, SearchTabularError, ServerId,
++        ServerInfo, SetTabularProtectionError, SetWarehouseDeletionProfileError,
++        SetWarehouseFormatVersionPolicyError, SetWarehouseManagedByError,
++        SetWarehouseProtectedError, SetWarehouseStatusError, StagedTableId, SyncRoleMembersError,
++        SyncRoleMembersResult, SyncUserRoleAssignmentsError, SyncUserRoleAssignmentsResult,
++        TableCommit, TableCreation, TableId, TableIdent, TableInfo, TabularId,
++        TabularIdentBorrowed, TabularListFlags, TaskDetails, TaskList, Transaction, UniqueMembers,
++        UniqueRoles, UpdateRoleError, UpdateVolumeError, UpdateWarehouseStorageProfileError,
++        UserMembershipEntry, UserUpsertMode, ViewCommit, ViewId, ViewInfo, ViewOrTableDeletionInfo,
++        ViewOrTableInfo, VolumeCreation, VolumeId, VolumeInfo, VolumeListEntry,
++        WarehouseFormatVersionPolicy, WarehouseId, WarehouseStatus,
+         authn::UserId,
+         idempotency::{IdempotencyCheck, IdempotencyInfo, IdempotencyKey},
+         storage::StorageProfile,
+@@ -1242,4 +1244,59 @@ impl CatalogStore for super::PostgresBackend {
+     ) -> std::result::Result<VolumeId, DropVolumeError> {
+         super::uc::volume::drop_volume(warehouse_id, namespace_id, volume_name, transaction).await
+     }
++
++    // ---------------- Function Management (Unity Catalog compat) ----------------
++    async fn create_function_impl<'a>(
++        creation: FunctionCreation,
++        transaction: <Self::Transaction as Transaction<Self::State>>::Transaction<'a>,
++    ) -> std::result::Result<FunctionInfo, CreateFunctionError> {
++        super::uc::function::create_function(creation, transaction).await
++    }
++
++    async fn load_function_impl<'a>(
++        warehouse_id: WarehouseId,
++        namespace_id: NamespaceId,
++        function_name: &str,
++        transaction: <Self::Transaction as Transaction<Self::State>>::Transaction<'a>,
++    ) -> std::result::Result<FunctionInfo, LoadFunctionError> {
++        super::uc::function::load_function(warehouse_id, namespace_id, function_name, transaction)
++            .await
++    }
++
++    async fn load_function_by_id_impl<'a>(
++        warehouse_id: WarehouseId,
++        function_id: FunctionId,
++        transaction: <Self::Transaction as Transaction<Self::State>>::Transaction<'a>,
++    ) -> std::result::Result<FunctionInfo, LoadFunctionError> {
++        super::uc::function::load_function_by_id(warehouse_id, function_id, transaction).await
++    }
++
++    async fn list_functions_impl<'a>(
++        warehouse_id: WarehouseId,
++        namespace_id: NamespaceId,
++        namespace_ident: &iceberg::NamespaceIdent,
++        page_size: Option<i64>,
++        page_token: Option<&str>,
++        transaction: <Self::Transaction as Transaction<Self::State>>::Transaction<'a>,
++    ) -> std::result::Result<(Vec<FunctionListEntry>, Option<String>), ListFunctionsError> {
++        super::uc::function::list_functions(
++            warehouse_id,
++            namespace_id,
++            namespace_ident,
++            page_size,
++            page_token,
++            transaction,
++        )
++        .await
++    }
++
++    async fn drop_function_impl<'a>(
++        warehouse_id: WarehouseId,
++        namespace_id: NamespaceId,
++        function_name: &str,
++        transaction: <Self::Transaction as Transaction<Self::State>>::Transaction<'a>,
++    ) -> std::result::Result<FunctionId, DropFunctionError> {
++        super::uc::function::drop_function(warehouse_id, namespace_id, function_name, transaction)
++            .await
++    }
+ }
+diff --git a/crates/lakekeeper-storage-postgres/src/uc/function.rs b/crates/lakekeeper-storage-postgres/src/uc/function.rs
+new file mode 100644
+index 00000000..bdbe5516
+--- /dev/null
++++ b/crates/lakekeeper-storage-postgres/src/uc/function.rs
+@@ -0,0 +1,622 @@
++//! Unity Catalog function queries (`uc_function` table).
++//!
++//! Functions are a dedicated entity: name uniqueness is case-insensitive per
++//! namespace. The client's `function_info` JSON lives verbatim in the `spec`
++//! JSONB column; JSONB preserves all JSON *values* exactly (strings byte for
++//! byte, array order, numbers) while normalizing object key order — which is
++//! semantically irrelevant on the wire. There is no update path: UC has no
++//! function PATCH endpoint.
++
++use iceberg::TableIdent;
++use lakekeeper::{
++    CONFIG, WarehouseId,
++    service::{
++        CatalogBackendError, CreateFunctionError, DropFunctionError, FunctionAlreadyExists,
++        FunctionCreation, FunctionId, FunctionInfo, FunctionListEntry, FunctionNotFound,
++        ListFunctionsError, LoadFunctionError, NamespaceId, NamespaceVersion, WarehouseVersion,
++    },
++};
++use uuid::Uuid;
++
++use crate::{
++    dbutils::DBErrorHandler as _,
++    namespace::parse_namespace_identifier_from_vec,
++    pagination::{PaginateToken, V1PaginateToken},
++};
++
++struct FunctionFullRow {
++    function_id: Uuid,
++    warehouse_id: Uuid,
++    warehouse_version: i64,
++    namespace_id: Uuid,
++    namespace_version: i64,
++    namespace_name: Vec<String>,
++    name: String,
++    spec: serde_json::Value,
++    created_at: chrono::DateTime<chrono::Utc>,
++    updated_at: Option<chrono::DateTime<chrono::Utc>>,
++}
++
++struct FunctionListRow {
++    function_id: Uuid,
++    warehouse_id: Uuid,
++    namespace_id: Uuid,
++    name: String,
++    spec: serde_json::Value,
++    created_at: chrono::DateTime<chrono::Utc>,
++    updated_at: Option<chrono::DateTime<chrono::Utc>>,
++}
++
++fn full_row_to_info(row: FunctionFullRow) -> Result<FunctionInfo, CatalogBackendError> {
++    let warehouse_id = WarehouseId::from(row.warehouse_id);
++    let namespace_ident = parse_namespace_identifier_from_vec(
++        &row.namespace_name,
++        warehouse_id,
++        Some(row.namespace_id),
++    )
++    .map_err(CatalogBackendError::new_unexpected)?;
++
++    let name = row.name;
++    let function_ident = TableIdent {
++        namespace: namespace_ident.clone(),
++        name: name.clone(),
++    };
++
++    Ok(FunctionInfo {
++        function_id: row.function_id.into(),
++        warehouse_id,
++        warehouse_version: WarehouseVersion::new(row.warehouse_version),
++        namespace_id: row.namespace_id.into(),
++        namespace_version: NamespaceVersion::new(row.namespace_version),
++        namespace_ident,
++        name,
++        function_ident,
++        spec: row.spec,
++        created_at: row.created_at,
++        updated_at: row.updated_at,
++    })
++}
++
++pub(crate) async fn create_function(
++    creation: FunctionCreation,
++    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
++) -> Result<FunctionInfo, CreateFunctionError> {
++    let function_id: Uuid = *creation.function_id;
++    let warehouse_id: Uuid = *creation.warehouse_id;
++    let namespace_id: Uuid = *creation.namespace_id;
++
++    let row = sqlx::query_as!(
++        FunctionFullRow,
++        r#"
++        WITH inserted AS (
++            INSERT INTO uc_function (warehouse_id, function_id, namespace_id, name, spec)
++            SELECT $1, $2, $3, $4, $5
++            FROM namespace n
++            WHERE n.namespace_id = $3 AND n.warehouse_id = $1
++            RETURNING function_id, warehouse_id, namespace_id, name, spec, created_at, updated_at
++        )
++        SELECT
++            i.function_id,
++            i.warehouse_id,
++            w.version as "warehouse_version!",
++            i.namespace_id,
++            n.version as "namespace_version!",
++            n.namespace_name as "namespace_name!",
++            i.name,
++            i.spec,
++            i.created_at,
++            i.updated_at
++        FROM inserted i
++        INNER JOIN warehouse w ON w.warehouse_id = $1 AND w.status = 'active'
++        INNER JOIN namespace n ON n.namespace_id = $3 AND n.warehouse_id = $1
++        "#,
++        warehouse_id,
++        function_id,
++        namespace_id,
++        &creation.name,
++        &creation.spec,
++    )
++    .fetch_optional(&mut **transaction)
++    .await
++    .map_err(|e| match &e {
++        sqlx::Error::Database(db_err)
++            if [
++                Some("uc_function_unique_name_per_namespace_idx"),
++                Some("uc_function_pkey"),
++            ]
++            .contains(&db_err.constraint()) =>
++        {
++            CreateFunctionError::from(FunctionAlreadyExists::new())
++        }
++        _ => e.into_catalog_backend_error().into(),
++    })?
++    .ok_or_else(|| {
++        CreateFunctionError::from(CatalogBackendError::new_unexpected(
++            lakekeeper::service::InternalErrorMessage(format!(
++                "Namespace {namespace_id} not found in warehouse {warehouse_id} or warehouse not active while creating function"
++            )),
++        ))
++    })?;
++
++    full_row_to_info(row).map_err(CreateFunctionError::from)
++}
++
++pub(crate) async fn load_function(
++    warehouse_id: WarehouseId,
++    namespace_id: NamespaceId,
++    function_name: &str,
++    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
++) -> Result<FunctionInfo, LoadFunctionError> {
++    let row = sqlx::query_as!(
++        FunctionFullRow,
++        r#"
++        SELECT
++            f.function_id,
++            f.warehouse_id,
++            w.version as "warehouse_version!",
++            f.namespace_id,
++            n.version as "namespace_version!",
++            n.namespace_name as "namespace_name!",
++            f.name,
++            f.spec,
++            f.created_at,
++            f.updated_at
++        FROM uc_function f
++        INNER JOIN warehouse w ON w.warehouse_id = f.warehouse_id AND w.status = 'active'
++        INNER JOIN namespace n ON n.namespace_id = f.namespace_id AND n.warehouse_id = f.warehouse_id
++        WHERE f.warehouse_id = $1
++          AND f.namespace_id = $2
++          AND f.name = $3
++          AND f.deleted_at IS NULL
++        "#,
++        *warehouse_id,
++        *namespace_id,
++        function_name,
++    )
++    .fetch_optional(&mut **transaction)
++    .await
++    .map_err(|e| LoadFunctionError::from(e.into_catalog_backend_error()))?
++    .ok_or_else(|| LoadFunctionError::from(FunctionNotFound::new()))?;
++
++    full_row_to_info(row).map_err(LoadFunctionError::from)
++}
++
++/// Load a function by its stable id (TOCTOU-safe follow-up reads after an
++/// authorization check).
++pub(crate) async fn load_function_by_id(
++    warehouse_id: WarehouseId,
++    function_id: FunctionId,
++    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
++) -> Result<FunctionInfo, LoadFunctionError> {
++    let row = sqlx::query_as!(
++        FunctionFullRow,
++        r#"
++        SELECT
++            f.function_id,
++            f.warehouse_id,
++            w.version as "warehouse_version!",
++            f.namespace_id,
++            n.version as "namespace_version!",
++            n.namespace_name as "namespace_name!",
++            f.name,
++            f.spec,
++            f.created_at,
++            f.updated_at
++        FROM uc_function f
++        INNER JOIN warehouse w ON w.warehouse_id = f.warehouse_id AND w.status = 'active'
++        INNER JOIN namespace n ON n.namespace_id = f.namespace_id AND n.warehouse_id = f.warehouse_id
++        WHERE f.warehouse_id = $1
++          AND f.function_id = $2
++          AND f.deleted_at IS NULL
++        "#,
++        *warehouse_id,
++        *function_id,
++    )
++    .fetch_optional(&mut **transaction)
++    .await
++    .map_err(|e| LoadFunctionError::from(e.into_catalog_backend_error()))?
++    .ok_or_else(|| LoadFunctionError::from(FunctionNotFound::new()))?;
++
++    full_row_to_info(row).map_err(LoadFunctionError::from)
++}
++
++pub(crate) async fn list_functions(
++    warehouse_id: WarehouseId,
++    namespace_id: NamespaceId,
++    namespace_ident: &iceberg::NamespaceIdent,
++    page_size: Option<i64>,
++    page_token: Option<&str>,
++    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
++) -> Result<(Vec<FunctionListEntry>, Option<String>), ListFunctionsError> {
++    let page_size = CONFIG.page_size_or_pagination_default(page_size);
++
++    let token = page_token
++        .map(PaginateToken::<Uuid>::try_from)
++        .transpose()
++        .map_err(|e| ListFunctionsError::from(CatalogBackendError::new_unexpected(e)))?;
++
++    let (token_ts, token_id) = token
++        .as_ref()
++        .map(
++            |PaginateToken::V1(V1PaginateToken { created_at, id }): &PaginateToken<Uuid>| {
++                (created_at, id)
++            },
++        )
++        .map_or((None, None), |(ts, id)| (Some(*ts), Some(*id)));
++
++    let rows = sqlx::query_as!(
++        FunctionListRow,
++        r#"
++        SELECT
++            f.function_id,
++            f.warehouse_id,
++            f.namespace_id,
++            f.name,
++            f.spec,
++            f.created_at,
++            f.updated_at
++        FROM uc_function f
++        INNER JOIN warehouse w ON w.warehouse_id = f.warehouse_id AND w.status = 'active'
++        WHERE f.warehouse_id = $1
++          AND f.namespace_id = $2
++          AND f.deleted_at IS NULL
++          AND (
++            ($3::timestamptz IS NULL)
++            OR (f.created_at, f.function_id) > ($3, $4)
++          )
++        ORDER BY f.created_at ASC, f.function_id ASC
++        LIMIT $5
++        "#,
++        *warehouse_id,
++        *namespace_id,
++        token_ts,
++        token_id,
++        page_size,
++    )
++    .fetch_all(&mut **transaction)
++    .await
++    .map_err(|e| ListFunctionsError::from(e.into_catalog_backend_error()))?;
++
++    let mut entries = Vec::with_capacity(rows.len());
++    let mut next_page_token = None;
++
++    for row in rows {
++        next_page_token = Some(
++            PaginateToken::V1(V1PaginateToken {
++                created_at: row.created_at,
++                id: row.function_id,
++            })
++            .to_string(),
++        );
++
++        let function_ident = TableIdent::new(namespace_ident.clone(), row.name.clone());
++        entries.push(FunctionListEntry {
++            function_id: row.function_id.into(),
++            warehouse_id: row.warehouse_id.into(),
++            namespace_id: row.namespace_id.into(),
++            name: row.name,
++            function_ident,
++            namespace_ident: namespace_ident.clone(),
++            spec: row.spec,
++            created_at: row.created_at,
++            updated_at: row.updated_at,
++        });
++    }
++
++    Ok((entries, next_page_token))
++}
++
++/// Hard delete (UC DELETE semantics in v1).
++pub(crate) async fn drop_function(
++    warehouse_id: WarehouseId,
++    namespace_id: NamespaceId,
++    function_name: &str,
++    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
++) -> Result<FunctionId, DropFunctionError> {
++    let row = sqlx::query!(
++        r#"
++        DELETE FROM uc_function f
++        USING warehouse w
++        WHERE w.warehouse_id = f.warehouse_id
++          AND w.status = 'active'
++          AND f.warehouse_id = $1
++          AND f.namespace_id = $2
++          AND f.name = $3
++          AND f.deleted_at IS NULL
++        RETURNING f.function_id
++        "#,
++        *warehouse_id,
++        *namespace_id,
++        function_name,
++    )
++    .fetch_optional(&mut **transaction)
++    .await
++    .map_err(|e| DropFunctionError::from(e.into_catalog_backend_error()))?
++    .ok_or_else(|| DropFunctionError::from(FunctionNotFound::new()))?;
++
++    Ok(row.function_id.into())
++}
++
++#[cfg(test)]
++mod tests {
++    use iceberg::NamespaceIdent;
++    use lakekeeper::service::{FunctionCreation, FunctionId};
++    use sqlx::PgPool;
++    use uuid::Uuid;
++
++    use super::*;
++    use crate::{
++        CatalogState, namespace::tests::initialize_namespace, warehouse::test::initialize_warehouse,
++    };
++
++    async fn setup(pool: PgPool) -> (CatalogState, PgPool, WarehouseId, NamespaceId) {
++        let state = CatalogState::from_pools(pool.clone(), pool.clone());
++        let (_project_id, warehouse_id) =
++            initialize_warehouse(state.clone(), None, None, None, true).await;
++        let namespace = NamespaceIdent::new(Uuid::now_v7().to_string());
++        let ns = initialize_namespace(state.clone(), warehouse_id, &namespace, None).await;
++        let namespace_id = ns.namespace_id();
++        (state, pool, warehouse_id, namespace_id)
++    }
++
++    /// A realistic unitycatalog-ai `function_info` payload with the quirks
++    /// the round-trip must preserve: `properties` as the literal string
++    /// `"null"`, embedded-JSON `type_json` strings, a multi-line
++    /// `routine_definition` and `parameter_default`.
++    fn ai_spec(name: &str) -> serde_json::Value {
++        serde_json::json!({
++            "name": name,
++            "catalog_name": "cat",
++            "schema_name": "sch",
++            "input_params": {
++                "parameters": [
++                    {
++                        "name": "a",
++                        "type_text": "long",
++                        "type_json": "{\"name\": \"a\", \"type\": \"long\", \"nullable\": false, \"metadata\": {\"comment\": \"The first number.\"}}",
++                        "type_name": "LONG",
++                        "position": 0,
++                        "parameter_mode": "IN",
++                        "parameter_type": "PARAM",
++                        "comment": "The first number."
++                    },
++                    {
++                        "name": "b",
++                        "type_text": "array<string>",
++                        "type_json": "{\"name\": \"b\", \"type\": \"array<string>\", \"nullable\": true, \"metadata\": {}}",
++                        "type_name": "ARRAY",
++                        "position": 1,
++                        "parameter_default": "NULL"
++                    }
++                ]
++            },
++            "data_type": "LONG",
++            "full_data_type": "LONG",
++            "routine_body": "EXTERNAL",
++            "routine_definition": "result = a + len(b or [])\nreturn result",
++            "external_language": "PYTHON",
++            "parameter_style": "S",
++            "is_deterministic": true,
++            "sql_data_access": "NO_SQL",
++            "is_null_call": false,
++            "security_type": "DEFINER",
++            "specific_name": name,
++            "comment": "Adds two numbers.\n\nArgs:\n    a: The first number.",
++            "properties": "null"
++        })
++    }
++
++    fn test_creation(
++        warehouse_id: WarehouseId,
++        namespace_id: NamespaceId,
++        name: &str,
++    ) -> FunctionCreation {
++        FunctionCreation {
++            function_id: FunctionId::from(Uuid::now_v7()),
++            namespace_id,
++            warehouse_id,
++            name: name.to_string(),
++            spec: ai_spec(name),
++        }
++    }
++
++    #[sqlx::test]
++    async fn test_create_and_load(pool: PgPool) {
++        let (_state, pool, warehouse_id, namespace_id) = setup(pool).await;
++        let creation = test_creation(warehouse_id, namespace_id, "add_numbers");
++
++        let mut t = pool.begin().await.unwrap();
++        let info = create_function(creation.clone(), &mut t).await.unwrap();
++        t.commit().await.unwrap();
++
++        assert_eq!(info.name, "add_numbers");
++        assert_eq!(info.spec, creation.spec);
++        assert_eq!(info.function_id, creation.function_id);
++
++        // Load by name
++        let mut t = pool.begin().await.unwrap();
++        let loaded = load_function(warehouse_id, namespace_id, "add_numbers", &mut t)
++            .await
++            .unwrap();
++        t.commit().await.unwrap();
++        assert_eq!(loaded.function_id, info.function_id);
++        assert_eq!(loaded.name, "add_numbers");
++
++        // Load by id
++        let mut t = pool.begin().await.unwrap();
++        let by_id = load_function_by_id(warehouse_id, info.function_id, &mut t)
++            .await
++            .unwrap();
++        t.commit().await.unwrap();
++        assert_eq!(by_id.function_id, info.function_id);
++        assert_eq!(by_id.spec, creation.spec);
++    }
++
++    #[sqlx::test]
++    async fn test_spec_roundtrip_fidelity(pool: PgPool) {
++        let (_state, pool, warehouse_id, namespace_id) = setup(pool).await;
++        let creation = test_creation(warehouse_id, namespace_id, "fidelity");
++        let original_spec = creation.spec.clone();
++
++        let mut t = pool.begin().await.unwrap();
++        create_function(creation, &mut t).await.unwrap();
++        t.commit().await.unwrap();
++
++        let mut t = pool.begin().await.unwrap();
++        let loaded = load_function(warehouse_id, namespace_id, "fidelity", &mut t)
++            .await
++            .unwrap();
++        t.commit().await.unwrap();
++
++        // Exact JSON equality of the whole stored document.
++        assert_eq!(loaded.spec, original_spec);
++
++        // The load-bearing string values must come back byte-identical:
++        // `properties` is the literal 4-char string "null" (not JSON null),
++        // `type_json` values are embedded-JSON strings, the routine body
++        // keeps its newlines.
++        assert_eq!(
++            loaded.spec["properties"],
++            serde_json::Value::String("null".to_string())
++        );
++        assert_eq!(
++            loaded.spec["routine_definition"].as_str().unwrap(),
++            "result = a + len(b or [])\nreturn result"
++        );
++        let params = loaded.spec["input_params"]["parameters"]
++            .as_array()
++            .unwrap();
++        assert_eq!(params.len(), 2);
++        assert_eq!(
++            params[0]["type_json"].as_str().unwrap(),
++            "{\"name\": \"a\", \"type\": \"long\", \"nullable\": false, \"metadata\": {\"comment\": \"The first number.\"}}"
++        );
++        assert_eq!(params[1]["type_name"], "ARRAY");
++        assert_eq!(params[1]["type_text"], "array<string>");
++        assert_eq!(params[1]["parameter_default"], "NULL");
++        assert_eq!(params[0]["position"], 0);
++        assert_eq!(params[1]["position"], 1);
++    }
++
++    #[sqlx::test]
++    async fn test_name_conflict(pool: PgPool) {
++        let (_state, pool, warehouse_id, namespace_id) = setup(pool).await;
++
++        let mut t = pool.begin().await.unwrap();
++        create_function(test_creation(warehouse_id, namespace_id, "dup"), &mut t)
++            .await
++            .unwrap();
++        t.commit().await.unwrap();
++
++        // Case-insensitive conflict.
++        let mut t = pool.begin().await.unwrap();
++        let err = create_function(test_creation(warehouse_id, namespace_id, "DUP"), &mut t)
++            .await
++            .expect_err("duplicate name should fail");
++        t.rollback().await.ok();
++
++        assert!(
++            matches!(err, CreateFunctionError::FunctionAlreadyExists(_)),
++            "expected AlreadyExists, got: {err:?}"
++        );
++    }
++
++    #[sqlx::test]
++    async fn test_list_with_pagination(pool: PgPool) {
++        let (_state, pool, warehouse_id, namespace_id) = setup(pool).await;
++        let ns_ident = NamespaceIdent::new("test".to_string());
++
++        for name in ["a", "b", "c"] {
++            let mut t = pool.begin().await.unwrap();
++            create_function(test_creation(warehouse_id, namespace_id, name), &mut t)
++                .await
++                .unwrap();
++            t.commit().await.unwrap();
++        }
++
++        let mut t = pool.begin().await.unwrap();
++        let (page1, token) =
++            list_functions(warehouse_id, namespace_id, &ns_ident, Some(2), None, &mut t)
++                .await
++                .unwrap();
++        t.commit().await.unwrap();
++        assert_eq!(page1.len(), 2);
++        assert!(token.is_some());
++        // List entries carry the full spec (UC list returns FunctionInfo).
++        assert_eq!(page1[0].spec, ai_spec("a"));
++
++        let mut t = pool.begin().await.unwrap();
++        let (page2, token2) = list_functions(
++            warehouse_id,
++            namespace_id,
++            &ns_ident,
++            Some(2),
++            token.as_deref(),
++            &mut t,
++        )
++        .await
++        .unwrap();
++        t.commit().await.unwrap();
++        assert_eq!(page2.len(), 1);
++
++        if token2.is_some() {
++            let mut t = pool.begin().await.unwrap();
++            let (page3, _) = list_functions(
++                warehouse_id,
++                namespace_id,
++                &ns_ident,
++                Some(2),
++                token2.as_deref(),
++                &mut t,
++            )
++            .await
++            .unwrap();
++            t.commit().await.unwrap();
++            assert!(page3.is_empty());
++        }
++    }
++
++    #[sqlx::test]
++    async fn test_drop_and_verify_gone(pool: PgPool) {
++        let (_state, pool, warehouse_id, namespace_id) = setup(pool).await;
++
++        let mut t = pool.begin().await.unwrap();
++        let info = create_function(test_creation(warehouse_id, namespace_id, "to-drop"), &mut t)
++            .await
++            .unwrap();
++        t.commit().await.unwrap();
++
++        let mut t = pool.begin().await.unwrap();
++        let dropped_id = drop_function(warehouse_id, namespace_id, "to-drop", &mut t)
++            .await
++            .unwrap();
++        t.commit().await.unwrap();
++        assert_eq!(dropped_id, info.function_id);
++
++        let mut t = pool.begin().await.unwrap();
++        let err = load_function(warehouse_id, namespace_id, "to-drop", &mut t)
++            .await
++            .expect_err("should be gone");
++        t.commit().await.unwrap();
++        assert!(matches!(err, LoadFunctionError::FunctionNotFound(_)));
++
++        // Hard delete: the name is free again.
++        let mut t = pool.begin().await.unwrap();
++        create_function(test_creation(warehouse_id, namespace_id, "to-drop"), &mut t)
++            .await
++            .expect("name is free after hard delete");
++        t.commit().await.unwrap();
++    }
++
++    #[sqlx::test]
++    async fn test_drop_not_found(pool: PgPool) {
++        let (_state, pool, warehouse_id, namespace_id) = setup(pool).await;
++
++        let mut t = pool.begin().await.unwrap();
++        let err = drop_function(warehouse_id, namespace_id, "ghost", &mut t)
++            .await
++            .expect_err("should not exist");
++        t.rollback().await.ok();
++        assert!(matches!(err, DropFunctionError::FunctionNotFound(_)));
++    }
++}
+diff --git a/crates/lakekeeper-storage-postgres/src/uc/mod.rs b/crates/lakekeeper-storage-postgres/src/uc/mod.rs
+index 23ed9436..2b319a24 100644
+--- a/crates/lakekeeper-storage-postgres/src/uc/mod.rs
++++ b/crates/lakekeeper-storage-postgres/src/uc/mod.rs
+@@ -1,4 +1,5 @@
+ //! Unity Catalog compatibility entities (dedicated tables, no `tabular`
+ //! piggyback).
+ 
++pub(crate) mod function;
+ pub(crate) mod volume;
+diff --git a/crates/lakekeeper/src/api/uc/v1/functions.rs b/crates/lakekeeper/src/api/uc/v1/functions.rs
+new file mode 100644
+index 00000000..a62676c7
+--- /dev/null
++++ b/crates/lakekeeper/src/api/uc/v1/functions.rs
+@@ -0,0 +1,246 @@
++//! UC Functions endpoints. A UC function is a stored routine definition
++//! (`uc_function` entity) inside a top-level namespace ("schema") of a
++//! warehouse ("catalog").
++//!
++//! Wire fidelity (design D3): the request's `function_info` is kept as an
++//! opaque [`serde_json::Value`] — the server never re-models the ~20 UC
++//! function fields, so `routine_definition`, `input_params.parameters` (array
++//! order and every per-parameter field), the `properties` JSON-string quirk
++//! (literal `"null"` from unitycatalog-ai) and all enum spellings round-trip
++//! unmodified. Responses are the stored spec with server fields merged in.
++//! There is no PATCH: UC has no function update endpoint.
++
++use axum::{
++    Extension, Json,
++    extract::{Path, Query, State},
++};
++use serde::{Deserialize, Serialize};
++
++use super::UcCatalogService;
++use crate::{
++    api::{
++        ApiContext,
++        uc::{UcEmptyResponse, UcErrorResponse, UcResult},
++    },
++    request_metadata::RequestMetadata,
++};
++
++/// UC `CreateFunctionRequest`: the body is a wrapper — the function fields
++/// are nested under `function_info`, NOT flat (compatibility trap).
++#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
++pub struct CreateFunctionRequest {
++    pub function_info: serde_json::Value,
++}
++
++/// UC `FunctionInfo` response: the stored `function_info` JSON with server
++/// fields merged in. Kept as raw JSON to guarantee byte-fidelity of all
++/// client-supplied fields.
++#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
++#[serde(transparent)]
++pub struct FunctionInfo(pub serde_json::Value);
++
++#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
++pub struct ListFunctionsResponse {
++    #[serde(default)]
++    pub functions: Vec<FunctionInfo>,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub next_page_token: Option<String>,
++}
++
++#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
++pub struct ListFunctionsQuery {
++    pub catalog_name: String,
++    pub schema_name: String,
++    #[serde(default)]
++    pub max_results: Option<i64>,
++    #[serde(default)]
++    pub page_token: Option<String>,
++}
++
++impl axum::response::IntoResponse for FunctionInfo {
++    fn into_response(self) -> axum::response::Response {
++        Json(self.0).into_response()
++    }
++}
++
++impl axum::response::IntoResponse for ListFunctionsResponse {
++    fn into_response(self) -> axum::response::Response {
++        Json(self).into_response()
++    }
++}
++
++/// The 14 required `CreateFunction` fields (uc-api-contract.md §4). Presence
++/// is validated; values (except the three name fields) are passed through
++/// verbatim.
++pub(crate) const REQUIRED_CREATE_FUNCTION_FIELDS: [&str; 14] = [
++    "name",
++    "catalog_name",
++    "schema_name",
++    "input_params",
++    "data_type",
++    "full_data_type",
++    "routine_body",
++    "routine_definition",
++    "parameter_style",
++    "is_deterministic",
++    "sql_data_access",
++    "is_null_call",
++    "security_type",
++    "specific_name",
++];
++
++/// Validate a `function_info` create payload and extract
++/// `(name, catalog_name, schema_name)`.
++pub(crate) fn validate_function_info(
++    function_info: &serde_json::Value,
++) -> UcResult<(String, String, String)> {
++    let obj = function_info
++        .as_object()
++        .ok_or_else(|| UcErrorResponse::invalid_argument("function_info must be a JSON object."))?;
++
++    for field in REQUIRED_CREATE_FUNCTION_FIELDS {
++        if !obj.contains_key(field) {
++            return Err(UcErrorResponse::invalid_argument(format!(
++                "Missing required field in function_info: {field}"
++            )));
++        }
++    }
++
++    let string_field = |field: &str| -> UcResult<String> {
++        obj.get(field)
++            .and_then(serde_json::Value::as_str)
++            .map(ToString::to_string)
++            .ok_or_else(|| {
++                UcErrorResponse::invalid_argument(format!(
++                    "function_info.{field} must be a non-null string."
++                ))
++            })
++    };
++
++    let name = string_field("name")?;
++    let catalog_name = string_field("catalog_name")?;
++    let schema_name = string_field("schema_name")?;
++
++    // `input_params` must be the `{"parameters": [...]}` object wrapper (not
++    // a bare array — another compatibility trap).
++    let input_params = &obj["input_params"];
++    if !input_params.is_object() {
++        return Err(UcErrorResponse::invalid_argument(
++            "function_info.input_params must be an object of the form {\"parameters\": [...]}.",
++        ));
++    }
++
++    Ok((name, catalog_name, schema_name))
++}
++
++pub(crate) async fn create_function<I: UcCatalogService<S>, S: crate::api::ThreadSafe>(
++    State(api_context): State<ApiContext<S>>,
++    Extension(metadata): Extension<RequestMetadata>,
++    Json(request): Json<CreateFunctionRequest>,
++) -> UcResult<FunctionInfo> {
++    I::create_function(request, api_context, metadata).await
++}
++
++pub(crate) async fn list_functions<I: UcCatalogService<S>, S: crate::api::ThreadSafe>(
++    Query(query): Query<ListFunctionsQuery>,
++    State(api_context): State<ApiContext<S>>,
++    Extension(metadata): Extension<RequestMetadata>,
++) -> UcResult<ListFunctionsResponse> {
++    I::list_functions(query, api_context, metadata).await
++}
++
++pub(crate) async fn get_function<I: UcCatalogService<S>, S: crate::api::ThreadSafe>(
++    Path(full_name): Path<String>,
++    State(api_context): State<ApiContext<S>>,
++    Extension(metadata): Extension<RequestMetadata>,
++) -> UcResult<FunctionInfo> {
++    I::get_function(full_name, api_context, metadata).await
++}
++
++pub(crate) async fn delete_function<I: UcCatalogService<S>, S: crate::api::ThreadSafe>(
++    Path(full_name): Path<String>,
++    State(api_context): State<ApiContext<S>>,
++    Extension(metadata): Extension<RequestMetadata>,
++) -> UcResult<UcEmptyResponse> {
++    I::delete_function(full_name, api_context, metadata)
++        .await
++        .map(|()| UcEmptyResponse {})
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn valid_info() -> serde_json::Value {
++        serde_json::json!({
++            "name": "fn1",
++            "catalog_name": "cat",
++            "schema_name": "sch",
++            "input_params": {"parameters": []},
++            "data_type": "LONG",
++            "full_data_type": "LONG",
++            "routine_body": "EXTERNAL",
++            "routine_definition": "return 1",
++            "parameter_style": "S",
++            "is_deterministic": true,
++            "sql_data_access": "NO_SQL",
++            "is_null_call": false,
++            "security_type": "DEFINER",
++            "specific_name": "fn1",
++            "properties": "null"
++        })
++    }
++
++    #[test]
++    fn test_create_function_request_is_wrapped() {
++        // The body nests everything under `function_info` (not flat).
++        let request: CreateFunctionRequest =
++            serde_json::from_value(serde_json::json!({"function_info": valid_info()})).unwrap();
++        assert_eq!(request.function_info["name"], "fn1");
++        assert!(serde_json::from_value::<CreateFunctionRequest>(valid_info()).is_err());
++    }
++
++    #[test]
++    fn test_validate_function_info_ok() {
++        let (name, catalog, schema) = validate_function_info(&valid_info()).unwrap();
++        assert_eq!(name, "fn1");
++        assert_eq!(catalog, "cat");
++        assert_eq!(schema, "sch");
++    }
++
++    #[test]
++    fn test_validate_function_info_missing_required_fields() {
++        for field in REQUIRED_CREATE_FUNCTION_FIELDS {
++            let mut info = valid_info();
++            info.as_object_mut().unwrap().remove(field);
++            let err = validate_function_info(&info).unwrap_err();
++            assert_eq!(err.status, 400, "{field}");
++            assert_eq!(err.error_code, "INVALID_ARGUMENT", "{field}");
++            assert!(err.message.contains(field), "{field}: {}", err.message);
++        }
++    }
++
++    #[test]
++    fn test_validate_function_info_rejects_bare_parameter_array() {
++        let mut info = valid_info();
++        info["input_params"] = serde_json::json!([]);
++        let err = validate_function_info(&info).unwrap_err();
++        assert_eq!(err.status, 400);
++        assert_eq!(err.error_code, "INVALID_ARGUMENT");
++    }
++
++    #[test]
++    fn test_validate_function_info_rejects_non_string_name() {
++        let mut info = valid_info();
++        info["name"] = serde_json::json!(42);
++        let err = validate_function_info(&info).unwrap_err();
++        assert_eq!(err.status, 400);
++        assert_eq!(err.error_code, "INVALID_ARGUMENT");
++    }
++
++    #[test]
++    fn test_function_info_serializes_transparently() {
++        let info = FunctionInfo(valid_info());
++        assert_eq!(serde_json::to_value(&info).unwrap(), valid_info());
++    }
++}
+diff --git a/crates/lakekeeper/src/api/uc/v1/mod.rs b/crates/lakekeeper/src/api/uc/v1/mod.rs
+index 32550864..423fb047 100644
+--- a/crates/lakekeeper/src/api/uc/v1/mod.rs
++++ b/crates/lakekeeper/src/api/uc/v1/mod.rs
+@@ -2,6 +2,7 @@
+ //! [`UcCatalogService`] trait implemented by `crate::server::CatalogServer`.
+ 
+ pub mod catalogs;
++pub mod functions;
+ pub mod schemas;
+ pub mod temporary_credentials;
+ pub mod volumes;
+@@ -14,6 +15,7 @@ use axum::{
+ 
+ pub use self::{
+     catalogs::{CatalogInfo, ListCatalogsResponse},
++    functions::{CreateFunctionRequest, FunctionInfo, ListFunctionsQuery, ListFunctionsResponse},
+     schemas::{
+         CreateSchemaRequest, DeleteSchemaQuery, ListSchemasQuery, ListSchemasResponse, SchemaInfo,
+         UpdateSchemaRequest,
+@@ -119,6 +121,31 @@ where
+         state: ApiContext<S>,
+         request_metadata: RequestMetadata,
+     ) -> UcResult<TemporaryCredentials>;
++
++    async fn create_function(
++        request: CreateFunctionRequest,
++        state: ApiContext<S>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<FunctionInfo>;
++
++    async fn list_functions(
++        query: ListFunctionsQuery,
++        state: ApiContext<S>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<ListFunctionsResponse>;
++
++    /// `full_name` is `<catalog>.<schema>.<function>`.
++    async fn get_function(
++        full_name: String,
++        state: ApiContext<S>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<FunctionInfo>;
++
++    async fn delete_function(
++        full_name: String,
++        state: ApiContext<S>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<()>;
+ }
+ 
+ pub fn router<I: UcCatalogService<S>, S: crate::api::ThreadSafe>() -> Router<ApiContext<S>> {
+@@ -153,6 +180,15 @@ pub fn router<I: UcCatalogService<S>, S: crate::api::ThreadSafe>() -> Router<Api
+                 .patch(volumes::update_volume::<I, S>)
+                 .delete(volumes::delete_volume::<I, S>),
+         )
++        // UC has no PATCH /functions/{name}: no update route on purpose.
++        .route(
++            "/functions",
++            post(functions::create_function::<I, S>).get(functions::list_functions::<I, S>),
++        )
++        .route(
++            "/functions/{full_name}",
++            get(functions::get_function::<I, S>).delete(functions::delete_function::<I, S>),
++        )
+         .route(
+             "/temporary-volume-credentials",
+             post(temporary_credentials::generate_temporary_volume_credentials::<I, S>),
+diff --git a/crates/lakekeeper/src/server/uc/functions.rs b/crates/lakekeeper/src/server/uc/functions.rs
+new file mode 100644
+index 00000000..6dd575ef
+--- /dev/null
++++ b/crates/lakekeeper/src/server/uc/functions.rs
+@@ -0,0 +1,569 @@
++//! UC Functions handlers. Functions are dedicated entities (`uc_function`)
++//! below a top-level namespace; authorization mirrors volumes (can-see =
++//! `GetMetadata`, 404-masking, `IncludeInList` filtering on list).
++//!
++//! Fidelity rule (design D3): the response is the STORED spec JSON merged
++//! with server fields. Server fields win only for `function_id`, `full_name`,
++//! timestamps and `catalog_name`/`schema_name`/`name` normalization —
++//! everything else (`routine_definition`, `external_language`,
++//! `input_params.parameters` order and contents, the `properties`
++//! JSON-string, enum spellings, ...) is passed through unmodified, which is
++//! what makes client-side execution by unitycatalog-ai work.
++
++use std::{collections::HashMap, sync::Arc};
++
++use crate::{
++    api::{
++        ApiContext,
++        uc::{
++            UcErrorResponse, UcResult, effective_page_size, to_epoch_millis,
++            v1::{
++                self as uc_v1, CreateFunctionRequest, ListFunctionsQuery, ListFunctionsResponse,
++                functions::validate_function_info,
++            },
++        },
++    },
++    request_metadata::RequestMetadata,
++    server::uc::resolve::{resolve_catalog_warehouse, resolve_schema_namespace, uc_err},
++    service::{
++        CachePolicy, CatalogFunctionOps, CatalogNamespaceOps, CatalogStore, FunctionCreation,
++        FunctionId, FunctionIdentOrId, FunctionInfo, LoadFunctionError, NamespaceHierarchy,
++        ResolvedWarehouse, SecretStore, State, Transaction,
++        authz::{
++            ActionOnFunction, AuthZFunctionOps, Authorizer, AuthzNamespaceOps,
++            CatalogFunctionAction, CatalogNamespaceAction, RequireFunctionActionError,
++        },
++        events::{AuthorizationFailureSource, context::authz_to_error_no_audit},
++    },
++};
++
++/// Merge the stored spec with server-generated fields. Server fields win
++/// only for identity/timestamps; every other key is byte-preserved.
++pub(crate) fn function_info_response(
++    catalog_name: &str,
++    schema_name: &str,
++    name: &str,
++    function_id: FunctionId,
++    spec: &serde_json::Value,
++    created_at: chrono::DateTime<chrono::Utc>,
++    updated_at: Option<chrono::DateTime<chrono::Utc>>,
++) -> uc_v1::FunctionInfo {
++    let mut merged = match spec {
++        serde_json::Value::Object(map) => map.clone(),
++        // Specs are validated to be objects on create; be defensive anyway.
++        _ => serde_json::Map::new(),
++    };
++    merged.insert("name".to_string(), serde_json::json!(name));
++    merged.insert("catalog_name".to_string(), serde_json::json!(catalog_name));
++    merged.insert("schema_name".to_string(), serde_json::json!(schema_name));
++    merged.insert(
++        "full_name".to_string(),
++        serde_json::json!(format!("{catalog_name}.{schema_name}.{name}")),
++    );
++    merged.insert(
++        "function_id".to_string(),
++        serde_json::json!(function_id.to_string()),
++    );
++    merged.insert(
++        "created_at".to_string(),
++        serde_json::json!(to_epoch_millis(created_at)),
++    );
++    match updated_at {
++        Some(ts) => {
++            merged.insert(
++                "updated_at".to_string(),
++                serde_json::json!(to_epoch_millis(ts)),
++            );
++        }
++        None => {
++            // Server fields win: drop any client-supplied stale value.
++            merged.remove("updated_at");
++        }
++    }
++    uc_v1::FunctionInfo(serde_json::Value::Object(merged))
++}
++
++/// Split a UC function `full_name` (`<catalog>.<schema>.<function>`).
++pub(crate) fn split_function_full_name(full_name: &str) -> UcResult<(&str, &str, &str)> {
++    let parts: Vec<&str> = full_name.split('.').collect();
++    match parts.as_slice() {
++        [catalog, schema, function]
++            if !catalog.is_empty() && !schema.is_empty() && !function.is_empty() =>
++        {
++            Ok((catalog, schema, function))
++        }
++        _ => Err(UcErrorResponse::invalid_argument(format!(
++            "Invalid function full name '{full_name}'. Expected '<catalog>.<schema>.<function>'."
++        ))),
++    }
++}
++
++pub(crate) fn function_not_found(full_name: impl std::fmt::Display) -> UcErrorResponse {
++    UcErrorResponse::not_found(format!("Function not found: {full_name}"))
++}
++
++pub(crate) fn require_authz_to_uc_err(e: RequireFunctionActionError) -> UcErrorResponse {
++    UcErrorResponse::from(e.into_error_model())
++}
++
++/// Guard to clean up authorizer state if function creation fails after the
++/// authorizer tuples were written (they are not transactional with Postgres).
++struct FunctionCreationGuard<A: Authorizer> {
++    authorizer: A,
++    warehouse_id: crate::WarehouseId,
++    function_id: FunctionId,
++    authorizer_created: bool,
++}
++
++impl<A: Authorizer> FunctionCreationGuard<A> {
++    fn new(authorizer: A, warehouse_id: crate::WarehouseId, function_id: FunctionId) -> Self {
++        Self {
++            authorizer,
++            warehouse_id,
++            function_id,
++            authorizer_created: false,
++        }
++    }
++
++    fn mark_authorizer_created(&mut self) {
++        self.authorizer_created = true;
++    }
++
++    fn success(&mut self) {
++        self.authorizer_created = false;
++    }
++
++    async fn cleanup(&mut self) {
++        if self.authorizer_created
++            && let Err(e) = self
++                .authorizer
++                .delete_function(self.warehouse_id, self.function_id)
++                .await
++        {
++            tracing::warn!(
++                "Failed to cleanup authorizer function {} in warehouse {} after failed transaction: {e}",
++                self.function_id,
++                self.warehouse_id
++            );
++        }
++    }
++}
++
++/// Load `function_name` in the schema namespace and authorize `action` on
++/// it. Missing namespaces, missing functions and non-visible functions all
++/// surface as `NOT_FOUND` (existence masking).
++pub(crate) async fn load_and_authorize_function<C: CatalogStore, A: Authorizer>(
++    authorizer: &A,
++    request_metadata: &RequestMetadata,
++    warehouse: &Arc<ResolvedWarehouse>,
++    schema_name: &str,
++    function_name: &str,
++    action: CatalogFunctionAction,
++    catalog_state: C::State,
++) -> UcResult<(NamespaceHierarchy, FunctionInfo)> {
++    let warehouse_id = warehouse.warehouse_id;
++    let full_name = format!("{}.{schema_name}.{function_name}", warehouse.name);
++    let namespace_ident = iceberg::NamespaceIdent::new(schema_name.to_string());
++
++    let namespace = C::get_namespace_cache_aware(
++        warehouse_id,
++        namespace_ident.clone(),
++        CachePolicy::Skip,
++        catalog_state.clone(),
++    )
++    .await
++    .map_err(uc_err)?
++    .ok_or_else(|| function_not_found(&full_name))?;
++
++    let mut t = C::Transaction::begin_read(catalog_state)
++        .await
++        .map_err(uc_err)?;
++    let load_result: Result<Option<FunctionInfo>, RequireFunctionActionError> =
++        match C::load_function(
++            warehouse_id,
++            namespace.namespace.namespace_id(),
++            function_name,
++            t.transaction(),
++        )
++        .await
++        {
++            Ok(info) => Ok(Some(info)),
++            Err(LoadFunctionError::FunctionNotFound(_)) => Ok(None),
++            Err(e) => return Err(uc_err(e)),
++        };
++    t.commit().await.map_err(uc_err)?;
++
++    let user_provided = FunctionIdentOrId::Ident(iceberg::TableIdent::new(
++        namespace_ident,
++        function_name.to_string(),
++    ));
++    let info = authorizer
++        .require_function_action(
++            request_metadata,
++            warehouse,
++            &namespace,
++            user_provided,
++            load_result,
++            action,
++        )
++        .await
++        .map_err(require_authz_to_uc_err)?;
++
++    Ok((namespace, info))
++}
++
++pub(crate) async fn create_function<C: CatalogStore, A: Authorizer + Clone, S: SecretStore>(
++    request: CreateFunctionRequest,
++    state: ApiContext<State<A, C, S>>,
++    request_metadata: RequestMetadata,
++) -> UcResult<uc_v1::FunctionInfo> {
++    let CreateFunctionRequest { function_info } = request;
++
++    let (name, catalog_name, schema_name) = validate_function_info(&function_info)?;
++    if name.is_empty() || name.contains('.') || name.contains('/') {
++        return Err(UcErrorResponse::invalid_argument(format!(
++            "Invalid function name '{name}': function names must be non-empty and must not contain '.' or '/'."
++        )));
++    }
++
++    let warehouse = resolve_catalog_warehouse::<C>(
++        &request_metadata,
++        &catalog_name,
++        state.v1_state.catalog.clone(),
++    )
++    .await?;
++    let warehouse_id = warehouse.warehouse_id;
++    let function_id = FunctionId::new_random();
++
++    // ------------------- AUTHZ: namespace-level CreateFunction -------------------
++    let (_warehouse, ns_hierarchy) = resolve_schema_namespace::<C, A>(
++        &state.v1_state.authz,
++        &request_metadata,
++        warehouse_id,
++        &schema_name,
++        CatalogNamespaceAction::CreateFunction {
++            name: Some(name.clone()),
++            function_id: Some(function_id),
++        },
++        state.v1_state.catalog.clone(),
++    )
++    .await?;
++
++    // ------------------- CREATE (catalog + authorizer with guard) -------------------
++    let authorizer = state.v1_state.authz.clone();
++    let mut guard = FunctionCreationGuard::new(authorizer.clone(), warehouse_id, function_id);
++
++    // The whole `function_info` object is stored verbatim as the spec.
++    let creation = FunctionCreation {
++        function_id,
++        namespace_id: ns_hierarchy.namespace.namespace_id(),
++        warehouse_id,
++        name,
++        spec: function_info,
++    };
++
++    let result: UcResult<FunctionInfo> = async {
++        let mut t = C::Transaction::begin_write(state.v1_state.catalog.clone())
++            .await
++            .map_err(uc_err)?;
++        let info = C::create_function(creation, t.transaction())
++            .await
++            .map_err(uc_err)?;
++
++        // Authorizer tuples are written between the catalog insert and the
++        // commit; the guard removes them again if the commit fails.
++        authorizer
++            .create_function(
++                &request_metadata,
++                warehouse_id,
++                info.function_id,
++                info.namespace_id,
++            )
++            .await
++            .map_err(uc_err)?;
++        guard.mark_authorizer_created();
++
++        t.commit().await.map_err(uc_err)?;
++        Ok(info)
++    }
++    .await;
++
++    match result {
++        Ok(info) => {
++            guard.success();
++            Ok(function_info_response(
++                &catalog_name,
++                &schema_name,
++                &info.name,
++                info.function_id,
++                &info.spec,
++                info.created_at,
++                info.updated_at,
++            ))
++        }
++        Err(e) => {
++            guard.cleanup().await;
++            Err(e)
++        }
++    }
++}
++
++pub(crate) async fn list_functions<C: CatalogStore, A: Authorizer + Clone, S: SecretStore>(
++    query: ListFunctionsQuery,
++    state: ApiContext<State<A, C, S>>,
++    request_metadata: RequestMetadata,
++) -> UcResult<ListFunctionsResponse> {
++    let ListFunctionsQuery {
++        catalog_name,
++        schema_name,
++        max_results,
++        page_token,
++    } = query;
++    let page_size = effective_page_size(max_results)?;
++
++    let warehouse = resolve_catalog_warehouse::<C>(
++        &request_metadata,
++        &catalog_name,
++        state.v1_state.catalog.clone(),
++    )
++    .await?;
++    let authorizer = &state.v1_state.authz;
++
++    // ------------------- AUTHZ: namespace-level ListFunctions -------------------
++    let (warehouse, ns) = resolve_schema_namespace::<C, A>(
++        authorizer,
++        &request_metadata,
++        warehouse.warehouse_id,
++        &schema_name,
++        CatalogNamespaceAction::ListFunctions,
++        state.v1_state.catalog.clone(),
++    )
++    .await?;
++    let warehouse_id = warehouse.warehouse_id;
++    let namespace_ident = iceberg::NamespaceIdent::new(schema_name.clone());
++
++    let mut t = C::Transaction::begin_read(state.v1_state.catalog)
++        .await
++        .map_err(uc_err)?;
++    let (entries, next_page_token) = C::list_functions(
++        warehouse_id,
++        ns.namespace.namespace_id(),
++        &namespace_ident,
++        Some(page_size),
++        page_token.as_deref(),
++        t.transaction(),
++    )
++    .await
++    .map_err(uc_err)?;
++    t.commit().await.map_err(uc_err)?;
++
++    // ------------------- AUTHZ: per-entry IncludeInList filtering -------------------
++    let can_list_everything = authorizer
++        .is_allowed_namespace_action(
++            &request_metadata,
++            None,
++            &warehouse,
++            &ns.parents,
++            &ns.namespace,
++            CatalogNamespaceAction::ListEverything,
++        )
++        .await
++        .map_err(|e| uc_err(authz_to_error_no_audit(e)))?
++        .into_inner();
++
++    let masks = if can_list_everything {
++        vec![true; entries.len()]
++    } else {
++        let actions: Vec<_> = entries
++            .iter()
++            .map(|entry| {
++                (
++                    &ns.namespace,
++                    ActionOnFunction {
++                        info: entry,
++                        action: CatalogFunctionAction::IncludeInList,
++                        user: None,
++                    },
++                )
++            })
++            .collect();
++
++        let parents: HashMap<_, _> = ns
++            .parents
++            .iter()
++            .map(|n| (n.namespace_id(), n.clone()))
++            .collect();
++        authorizer
++            .are_allowed_function_actions_vec(&request_metadata, &warehouse, &parents, &actions)
++            .await
++            .map_err(|e| uc_err(authz_to_error_no_audit(e)))?
++            .into_allowed()
++    };
++
++    let functions = entries
++        .into_iter()
++        .zip(masks)
++        .filter(|(_, allowed)| *allowed)
++        .map(|(entry, _)| {
++            function_info_response(
++                &catalog_name,
++                &schema_name,
++                &entry.name,
++                entry.function_id,
++                &entry.spec,
++                entry.created_at,
++                entry.updated_at,
++            )
++        })
++        .collect();
++
++    Ok(ListFunctionsResponse {
++        functions,
++        next_page_token,
++    })
++}
++
++pub(crate) async fn get_function<C: CatalogStore, A: Authorizer + Clone, S: SecretStore>(
++    full_name: String,
++    state: ApiContext<State<A, C, S>>,
++    request_metadata: RequestMetadata,
++) -> UcResult<uc_v1::FunctionInfo> {
++    let (catalog_name, schema_name, function_name) = split_function_full_name(&full_name)?;
++    let warehouse = resolve_catalog_warehouse::<C>(
++        &request_metadata,
++        catalog_name,
++        state.v1_state.catalog.clone(),
++    )
++    .await?;
++
++    let (_ns, info) = load_and_authorize_function::<C, A>(
++        &state.v1_state.authz,
++        &request_metadata,
++        &warehouse,
++        schema_name,
++        function_name,
++        CatalogFunctionAction::GetMetadata,
++        state.v1_state.catalog,
++    )
++    .await?;
++
++    Ok(function_info_response(
++        catalog_name,
++        schema_name,
++        &info.name,
++        info.function_id,
++        &info.spec,
++        info.created_at,
++        info.updated_at,
++    ))
++}
++
++pub(crate) async fn delete_function<C: CatalogStore, A: Authorizer + Clone, S: SecretStore>(
++    full_name: String,
++    state: ApiContext<State<A, C, S>>,
++    request_metadata: RequestMetadata,
++) -> UcResult<()> {
++    let (catalog_name, schema_name, function_name) = split_function_full_name(&full_name)?;
++    let warehouse = resolve_catalog_warehouse::<C>(
++        &request_metadata,
++        catalog_name,
++        state.v1_state.catalog.clone(),
++    )
++    .await?;
++
++    let (ns, info) = load_and_authorize_function::<C, A>(
++        &state.v1_state.authz,
++        &request_metadata,
++        &warehouse,
++        schema_name,
++        function_name,
++        CatalogFunctionAction::Drop,
++        state.v1_state.catalog.clone(),
++    )
++    .await?;
++
++    let mut t = C::Transaction::begin_write(state.v1_state.catalog)
++        .await
++        .map_err(uc_err)?;
++    let dropped_id = C::drop_function(
++        warehouse.warehouse_id,
++        ns.namespace.namespace_id(),
++        function_name,
++        t.transaction(),
++    )
++    .await
++    .map_err(uc_err)?;
++    t.commit().await.map_err(uc_err)?;
++    debug_assert_eq!(dropped_id, info.function_id);
++
++    // Best-effort authorizer cleanup after the commit (mirrors volume drop):
++    // a failure leaves orphaned tuples, not broken authorization.
++    if let Err(e) = state
++        .v1_state
++        .authz
++        .delete_function(warehouse.warehouse_id, dropped_id)
++        .await
++    {
++        tracing::warn!(
++            "Failed to delete function {dropped_id} in warehouse {} from authorizer: {e}",
++            warehouse.warehouse_id
++        );
++    }
++
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn test_split_function_full_name() {
++        assert_eq!(
++            split_function_full_name("cat.schema.fn").unwrap(),
++            ("cat", "schema", "fn")
++        );
++        for bad in ["", "cat", "cat.schema", "cat.schema.fn.extra", "..", "a..b"] {
++            let err = split_function_full_name(bad).unwrap_err();
++            assert_eq!(err.status, 400, "{bad}");
++            assert_eq!(err.error_code, "INVALID_ARGUMENT", "{bad}");
++        }
++    }
++
++    #[test]
++    fn test_function_info_response_merges_server_fields_and_preserves_spec() {
++        let spec = serde_json::json!({
++            "name": "client_name",
++            "catalog_name": "client_cat",
++            "schema_name": "client_sch",
++            "routine_definition": "return a + b\n",
++            "properties": "null",
++            "input_params": {"parameters": [
++                {"name": "a", "type_name": "ARRAY", "type_text": "array<string>",
++                 "type_json": "{\"name\": \"a\"}", "position": 0, "parameter_default": "NULL"}
++            ]},
++            "updated_at": 12345,
++            "custom_extra": {"nested": [1, 2, 3]}
++        });
++        let function_id = FunctionId::new_random();
++        let created = chrono::Utc::now();
++        let info = function_info_response("cat", "sch", "fn1", function_id, &spec, created, None);
++        let v = &info.0;
++
++        // Server fields win.
++        assert_eq!(v["name"], "fn1");
++        assert_eq!(v["catalog_name"], "cat");
++        assert_eq!(v["schema_name"], "sch");
++        assert_eq!(v["full_name"], "cat.sch.fn1");
++        assert_eq!(v["function_id"], function_id.to_string());
++        assert_eq!(v["created_at"], created.timestamp_millis());
++        // No DB updated_at → the stale client value is dropped.
++        assert!(v.get("updated_at").is_none());
++
++        // Everything else is byte-preserved.
++        assert_eq!(v["routine_definition"], "return a + b\n");
++        assert_eq!(v["properties"], "null");
++        assert_eq!(v["custom_extra"], spec["custom_extra"]);
++        assert_eq!(v["input_params"], spec["input_params"]);
++    }
++}
+diff --git a/crates/lakekeeper/src/server/uc/mod.rs b/crates/lakekeeper/src/server/uc/mod.rs
+index 7c304865..1430b049 100644
+--- a/crates/lakekeeper/src/server/uc/mod.rs
++++ b/crates/lakekeeper/src/server/uc/mod.rs
+@@ -3,6 +3,7 @@
+ 
+ pub(crate) mod catalogs;
+ pub(crate) mod credentials;
++pub(crate) mod functions;
+ pub(crate) mod resolve;
+ pub(crate) mod schemas;
+ pub(crate) mod volumes;
+@@ -15,8 +16,9 @@ use crate::{
+         uc::{
+             UcPaginationQuery, UcResult,
+             v1::{
+-                CatalogInfo, CreateSchemaRequest, CreateVolumeRequest, DeleteSchemaQuery,
+-                GenerateTemporaryVolumeCredentialsRequest, ListCatalogsResponse, ListSchemasQuery,
++                CatalogInfo, CreateFunctionRequest, CreateSchemaRequest, CreateVolumeRequest,
++                DeleteSchemaQuery, FunctionInfo, GenerateTemporaryVolumeCredentialsRequest,
++                ListCatalogsResponse, ListFunctionsQuery, ListFunctionsResponse, ListSchemasQuery,
+                 ListSchemasResponse, ListVolumesQuery, ListVolumesResponse, SchemaInfo,
+                 TemporaryCredentials, UcCatalogService, UpdateSchemaRequest, UpdateVolumeRequest,
+                 VolumeInfo,
+@@ -143,4 +145,36 @@ impl<C: CatalogStore, A: Authorizer + Clone, S: SecretStore> UcCatalogService<St
+         )
+         .await
+     }
++
++    async fn create_function(
++        request: CreateFunctionRequest,
++        state: ApiContext<State<A, C, S>>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<FunctionInfo> {
++        functions::create_function::<C, A, S>(request, state, request_metadata).await
++    }
++
++    async fn list_functions(
++        query: ListFunctionsQuery,
++        state: ApiContext<State<A, C, S>>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<ListFunctionsResponse> {
++        functions::list_functions::<C, A, S>(query, state, request_metadata).await
++    }
++
++    async fn get_function(
++        full_name: String,
++        state: ApiContext<State<A, C, S>>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<FunctionInfo> {
++        functions::get_function::<C, A, S>(full_name, state, request_metadata).await
++    }
++
++    async fn delete_function(
++        full_name: String,
++        state: ApiContext<State<A, C, S>>,
++        request_metadata: RequestMetadata,
++    ) -> UcResult<()> {
++        functions::delete_function::<C, A, S>(full_name, state, request_metadata).await
++    }
+ }
+diff --git a/crates/lakekeeper/src/service/authz/function.rs b/crates/lakekeeper/src/service/authz/function.rs
+new file mode 100644
+index 00000000..ce356114
+--- /dev/null
++++ b/crates/lakekeeper/src/service/authz/function.rs
+@@ -0,0 +1,445 @@
++//! Authorization for Unity Catalog functions. Mirrors
++//! `service::authz::volume` (can-see = `GetMetadata`, 404-masking).
++//!
++//! No function action is data-plane: UC function execution is client-side
++//! (the client reconstructs the callable from the stored
++//! `routine_definition`), so `Execute` only gates retrieving the definition —
++//! which `GetMetadata` already reveals. All actions therefore stay inside the
++//! instance-admin bypass.
++
++use std::collections::HashMap;
++
++use iceberg_ext::catalog::rest::ErrorModel;
++
++use crate::{
++    WarehouseId,
++    api::RequestMetadata,
++    service::{
++        AuthZFunctionInfo, CatalogBackendError, FunctionIdentOrId, NamespaceHierarchy, NamespaceId,
++        NamespaceWithParent, ResolvedWarehouse,
++        authz::{
++            AuthorizationBackendUnavailable, AuthorizationCountMismatch, AuthorizationDecision,
++            Authorizer, AuthzBadRequest, CannotInspectPermissions, CatalogAction,
++            CatalogFunctionAction, IsAllowedActionError, MustUse, UserOrRole,
++        },
++        events::{
++            AuthorizationFailureReason, AuthorizationFailureSource,
++            delegate_authorization_failure_source,
++        },
++    },
++};
++
++const CAN_SEE_PERMISSION: CatalogFunctionAction = CatalogFunctionAction::GetMetadata;
++
++pub trait FunctionAction
++where
++    Self: CatalogAction + Clone + PartialEq + Eq + From<CatalogFunctionAction>,
++{
++    /// Whether this action reads or writes data (as opposed to metadata or
++    /// catalog operations). Always `false` for functions: execution happens
++    /// client-side, so no function action touches a data plane.
++    fn is_data_plane(&self) -> bool;
++}
++
++impl FunctionAction for CatalogFunctionAction {
++    fn is_data_plane(&self) -> bool {
++        false
++    }
++}
++
++// ------------------ Cannot See Error ------------------
++#[derive(Debug, PartialEq, Eq)]
++pub struct AuthZCannotSeeFunction {
++    warehouse_id: WarehouseId,
++    function: FunctionIdentOrId,
++    internal_resource_not_found: bool,
++}
++
++impl AuthZCannotSeeFunction {
++    #[must_use]
++    pub fn new(
++        warehouse_id: WarehouseId,
++        function: impl Into<FunctionIdentOrId>,
++        resource_not_found: bool,
++    ) -> Self {
++        Self {
++            warehouse_id,
++            function: function.into(),
++            internal_resource_not_found: resource_not_found,
++        }
++    }
++
++    #[must_use]
++    pub fn new_not_found(
++        warehouse_id: WarehouseId,
++        function: impl Into<FunctionIdentOrId>,
++    ) -> Self {
++        Self::new(warehouse_id, function, true)
++    }
++
++    #[must_use]
++    pub fn new_forbidden(
++        warehouse_id: WarehouseId,
++        function: impl Into<FunctionIdentOrId>,
++    ) -> Self {
++        Self::new(warehouse_id, function, false)
++    }
++}
++
++impl AuthorizationFailureSource for AuthZCannotSeeFunction {
++    fn into_error_model(self) -> ErrorModel {
++        let AuthZCannotSeeFunction {
++            warehouse_id,
++            function,
++            internal_resource_not_found: _,
++        } = self;
++        // 404 for both not-found and cannot-see: hide existence.
++        ErrorModel::not_found(
++            format!("Function {function} not found in warehouse `{warehouse_id}`"),
++            "FunctionNotFound",
++            None,
++        )
++    }
++
++    fn to_failure_reason(&self) -> AuthorizationFailureReason {
++        if self.internal_resource_not_found {
++            AuthorizationFailureReason::ResourceNotFound
++        } else {
++            AuthorizationFailureReason::CannotSeeResource
++        }
++    }
++}
++
++// ------------------ Action Forbidden Error ------------------
++#[derive(Debug, PartialEq, Eq)]
++pub struct AuthZFunctionActionForbidden {
++    warehouse_id: WarehouseId,
++    function: FunctionIdentOrId,
++    action: String,
++}
++
++impl AuthZFunctionActionForbidden {
++    #[must_use]
++    pub fn new(
++        warehouse_id: WarehouseId,
++        function: impl Into<FunctionIdentOrId>,
++        action: &impl FunctionAction,
++    ) -> Self {
++        Self {
++            warehouse_id,
++            function: function.into(),
++            action: action.as_log_str(),
++        }
++    }
++}
++
++impl AuthorizationFailureSource for AuthZFunctionActionForbidden {
++    fn into_error_model(self) -> ErrorModel {
++        let AuthZFunctionActionForbidden {
++            warehouse_id,
++            function,
++            action,
++        } = self;
++        ErrorModel::forbidden(
++            format!(
++                "Function action `{action}` forbidden on function {function} in warehouse `{warehouse_id}`"
++            ),
++            "FunctionActionForbidden",
++            None,
++        )
++    }
++
++    fn to_failure_reason(&self) -> AuthorizationFailureReason {
++        AuthorizationFailureReason::ActionForbidden
++    }
++}
++
++#[derive(Debug, derive_more::From)]
++pub enum RequireFunctionActionError {
++    AuthZFunctionActionForbidden(AuthZFunctionActionForbidden),
++    AuthorizationBackendUnavailable(AuthorizationBackendUnavailable),
++    AuthorizationCountMismatch(AuthorizationCountMismatch),
++    CannotInspectPermissions(CannotInspectPermissions),
++    AuthorizerValidationFailed(AuthzBadRequest),
++    AuthZCannotSeeFunction(AuthZCannotSeeFunction),
++    CatalogBackendError(CatalogBackendError),
++}
++
++impl From<IsAllowedActionError> for RequireFunctionActionError {
++    fn from(err: IsAllowedActionError) -> Self {
++        match err {
++            IsAllowedActionError::AuthorizationBackendUnavailable(e) => e.into(),
++            IsAllowedActionError::CannotInspectPermissions(e) => e.into(),
++            IsAllowedActionError::BadRequest(e) => e.into(),
++            IsAllowedActionError::CountMismatch(e) => e.into(),
++        }
++    }
++}
++
++delegate_authorization_failure_source!(RequireFunctionActionError => {
++    AuthZFunctionActionForbidden,
++    AuthorizationBackendUnavailable,
++    AuthorizationCountMismatch,
++    CannotInspectPermissions,
++    AuthZCannotSeeFunction,
++    CatalogBackendError,
++    AuthorizerValidationFailed
++});
++
++/// An action on a function with authorization context. Functions are not part
++/// of DEFINER view chains, so there is no delegated-execution flag.
++pub struct ActionOnFunction<'a, 'u, I: AuthZFunctionInfo, A> {
++    pub info: &'a I,
++    pub action: A,
++    pub user: Option<&'u UserOrRole>,
++}
++
++impl<I: AuthZFunctionInfo, A: Clone> Clone for ActionOnFunction<'_, '_, I, A> {
++    fn clone(&self) -> Self {
++        Self {
++            info: self.info,
++            action: self.action.clone(),
++            user: self.user,
++        }
++    }
++}
++
++impl<I: AuthZFunctionInfo, A> std::fmt::Debug for ActionOnFunction<'_, '_, I, A> {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.debug_struct("ActionOnFunction")
++            .field("info", &format!("<{}>", std::any::type_name::<I>()))
++            .field("action", &std::any::type_name::<A>())
++            .field("user", &self.user)
++            .finish()
++    }
++}
++
++#[async_trait::async_trait]
++pub trait AuthZFunctionOps: Authorizer {
++    fn require_function_presence<T: AuthZFunctionInfo>(
++        &self,
++        warehouse_id: WarehouseId,
++        user_provided: impl Into<FunctionIdentOrId> + Send,
++        result: Result<Option<T>, impl Into<RequireFunctionActionError> + Send>,
++    ) -> Result<T, RequireFunctionActionError> {
++        let info = result.map_err(Into::into)?;
++        let Some(info) = info else {
++            return Err(AuthZCannotSeeFunction::new_not_found(warehouse_id, user_provided).into());
++        };
++        Ok(info)
++    }
++
++    async fn require_function_action<T: AuthZFunctionInfo>(
++        &self,
++        metadata: &RequestMetadata,
++        warehouse: &ResolvedWarehouse,
++        namespace: &NamespaceHierarchy,
++        user_provided: impl Into<FunctionIdentOrId> + Send,
++        result: Result<Option<T>, impl Into<RequireFunctionActionError> + Send>,
++        action: impl Into<Self::FunctionAction> + Send,
++    ) -> Result<T, RequireFunctionActionError> {
++        let warehouse_id = warehouse.warehouse_id;
++        let user_provided = user_provided.into();
++        let info = self.require_function_presence(warehouse_id, user_provided.clone(), result)?;
++        let ident = info.function_ident().clone();
++
++        let cant_see_err =
++            AuthZCannotSeeFunction::new_forbidden(warehouse_id, user_provided).into();
++        let action = action.into();
++
++        if action == CAN_SEE_PERMISSION.into() {
++            let is_allowed = self
++                .is_allowed_function_action(metadata, None, warehouse, namespace, &info, action)
++                .await?
++                .into_inner();
++            is_allowed.then_some(info).ok_or(cant_see_err)
++        } else {
++            let [can_see, is_allowed] = self
++                .are_allowed_function_actions_arr(
++                    metadata,
++                    None,
++                    warehouse,
++                    namespace,
++                    &info,
++                    &[CAN_SEE_PERMISSION.into(), action.clone()],
++                )
++                .await?
++                .into_inner();
++            if can_see {
++                is_allowed.then_some(info).ok_or_else(|| {
++                    AuthZFunctionActionForbidden::new(warehouse_id, ident.clone(), &action).into()
++                })
++            } else {
++                Err(cant_see_err)
++            }
++        }
++    }
++
++    async fn is_allowed_function_action(
++        &self,
++        metadata: &RequestMetadata,
++        for_user: Option<&UserOrRole>,
++        warehouse: &ResolvedWarehouse,
++        namespace: &NamespaceHierarchy,
++        info: &impl AuthZFunctionInfo,
++        action: impl Into<Self::FunctionAction> + Send,
++    ) -> Result<MustUse<bool>, IsAllowedActionError> {
++        let [decision] = self
++            .are_allowed_function_actions_arr(
++                metadata,
++                for_user,
++                warehouse,
++                namespace,
++                info,
++                &[action.into()],
++            )
++            .await?
++            .into_inner();
++        Ok(decision.into())
++    }
++
++    async fn are_allowed_function_actions_arr<
++        const N: usize,
++        A: FunctionAction + Into<Self::FunctionAction> + Send + Clone + Sync,
++    >(
++        &self,
++        metadata: &RequestMetadata,
++        for_user: Option<&UserOrRole>,
++        warehouse: &ResolvedWarehouse,
++        namespace_hierarchy: &NamespaceHierarchy,
++        info: &impl AuthZFunctionInfo,
++        actions: &[A; N],
++    ) -> Result<MustUse<[bool; N]>, IsAllowedActionError> {
++        let wrapped = actions
++            .iter()
++            .map(|a| {
++                (
++                    &namespace_hierarchy.namespace,
++                    ActionOnFunction {
++                        info,
++                        action: a.clone(),
++                        user: for_user,
++                    },
++                )
++            })
++            .collect::<Vec<_>>();
++        let result = self
++            .are_allowed_function_actions_vec(
++                metadata,
++                warehouse,
++                &namespace_hierarchy
++                    .parents
++                    .iter()
++                    .map(|ns| (ns.namespace_id(), ns.clone()))
++                    .collect(),
++                &wrapped,
++            )
++            .await?
++            .into_allowed();
++        let n_returned = result.len();
++        let arr: [bool; N] = result
++            .try_into()
++            .map_err(|_| AuthorizationCountMismatch::new(N, n_returned, "function"))?;
++        Ok(MustUse::from(arr))
++    }
++
++    async fn are_allowed_function_actions_vec<
++        A: FunctionAction + Into<Self::FunctionAction> + Send + Clone + Sync,
++    >(
++        &self,
++        metadata: &RequestMetadata,
++        warehouse: &ResolvedWarehouse,
++        parent_namespaces: &HashMap<NamespaceId, NamespaceWithParent>,
++        actions: &[(
++            &NamespaceWithParent,
++            ActionOnFunction<'_, '_, impl AuthZFunctionInfo, A>,
++        )],
++    ) -> Result<MustUse<Vec<AuthorizationDecision>>, IsAllowedActionError> {
++        #[cfg(debug_assertions)]
++        {
++            let namespaces: Vec<&NamespaceWithParent> = actions.iter().map(|(ns, _)| *ns).collect();
++            super::table::validate_namespace_hierarchy(&namespaces, parent_namespaces);
++        }
++
++        let internal = metadata.is_lakekeeper_internal();
++
++        let mut auto_approved: Vec<Option<bool>> = Vec::with_capacity(actions.len());
++        let mut actions_to_check = Vec::new();
++
++        for (ns, action) in actions {
++            let same_warehouse = action.info.warehouse_id() == warehouse.warehouse_id;
++            if !same_warehouse {
++                tracing::warn!(
++                    "Function warehouse_id `{}` does not match provided warehouse_id `{}`. Denying access.",
++                    action.info.warehouse_id(),
++                    warehouse.warehouse_id
++                );
++                auto_approved.push(Some(false));
++                continue;
++            }
++
++            // Normalize user: if it's the actor itself, treat as None (acting as self).
++            let normalized_user = if metadata.actor().to_user_or_role().as_ref() == action.user {
++                None
++            } else {
++                action.user
++            };
++
++            // No function action is data-plane, so instance admins (and
++            // `LakekeeperInternal`) bypass all of them.
++            let bypass = metadata.bypasses_control_plane_authz(normalized_user)
++                && (internal || !action.action.is_data_plane());
++            if bypass {
++                auto_approved.push(Some(true));
++            } else {
++                auto_approved.push(None);
++                let mut normalized_action = action.clone();
++                normalized_action.user = normalized_user;
++                actions_to_check.push((*ns, normalized_action));
++            }
++        }
++
++        if actions_to_check.is_empty() {
++            Ok(auto_approved
++                .into_iter()
++                .map(|v| AuthorizationDecision::from(v.unwrap()))
++                .collect())
++        } else {
++            let decisions = self
++                .are_allowed_function_actions_impl(
++                    metadata,
++                    warehouse,
++                    parent_namespaces,
++                    &actions_to_check,
++                )
++                .await?;
++
++            if decisions.len() != actions_to_check.len() {
++                return Err(AuthorizationCountMismatch::new(
++                    actions_to_check.len(),
++                    decisions.len(),
++                    "function",
++                )
++                .into());
++            }
++
++            // Merge auto-approved decisions (warehouse-mismatch / bypass) with
++            // the authorizer's checked decisions.
++            let mut decision_iter = decisions.into_iter();
++            let final_decisions: Vec<AuthorizationDecision> = auto_approved
++                .into_iter()
++                .map(|auto| {
++                    auto.map_or_else(
++                        || decision_iter.next().unwrap(),
++                        AuthorizationDecision::from,
++                    )
++                })
++                .collect();
++
++            Ok(final_decisions)
++        }
++        .map(MustUse::from)
++    }
++}
++
++impl<T> AuthZFunctionOps for T where T: Authorizer {}
+diff --git a/crates/lakekeeper/src/service/authz/implementations/allow_all.rs b/crates/lakekeeper/src/service/authz/implementations/allow_all.rs
+index 8c5c5f30..ed53b278 100644
+--- a/crates/lakekeeper/src/service/authz/implementations/allow_all.rs
++++ b/crates/lakekeeper/src/service/authz/implementations/allow_all.rs
+@@ -11,18 +11,18 @@ use crate::{
+     api::{ApiContext, iceberg::v1::Result},
+     request_metadata::RequestMetadata,
+     service::{
+-        ArcProjectId, AuthZGenericTableInfo, AuthZNamespaceInfo, AuthZTableInfo, AuthZViewInfo,
+-        AuthZVolumeInfo, CatalogStore, GenericTableId, NamespaceId, NamespaceWithParent, ProjectId,
+-        ResolvedWarehouse, Role, RoleId, SecretStore, ServerId, State, TableId, ViewId,
+-        WarehouseId,
++        ArcProjectId, AuthZFunctionInfo, AuthZGenericTableInfo, AuthZNamespaceInfo, AuthZTableInfo,
++        AuthZViewInfo, AuthZVolumeInfo, CatalogStore, GenericTableId, NamespaceId,
++        NamespaceWithParent, ProjectId, ResolvedWarehouse, Role, RoleId, SecretStore, ServerId,
++        State, TableId, ViewId, WarehouseId,
+         authn::UserId,
+         authz::{
+-            ActionOnGenericTable, ActionOnTable, ActionOnView, ActionOnVolume,
++            ActionOnFunction, ActionOnGenericTable, ActionOnTable, ActionOnView, ActionOnVolume,
+             AuthorizationDecision, Authorizer, AuthzBackendErrorOrBadRequest,
+-            CatalogGenericTableAction, CatalogNamespaceAction, CatalogProjectAction,
+-            CatalogRoleAction, CatalogServerAction, CatalogTableAction, CatalogUserAction,
+-            CatalogViewAction, CatalogVolumeAction, CatalogWarehouseAction, IsAllowedActionError,
+-            ListProjectsResponse, NamespaceParent, UserOrRole,
++            CatalogFunctionAction, CatalogGenericTableAction, CatalogNamespaceAction,
++            CatalogProjectAction, CatalogRoleAction, CatalogServerAction, CatalogTableAction,
++            CatalogUserAction, CatalogViewAction, CatalogVolumeAction, CatalogWarehouseAction,
++            IsAllowedActionError, ListProjectsResponse, NamespaceParent, UserOrRole,
+         },
+         health::{Health, HealthExt},
+     },
+@@ -67,6 +67,7 @@ impl Authorizer for AllowAllAuthorizer {
+     type ViewAction = CatalogViewAction;
+     type GenericTableAction = CatalogGenericTableAction;
+     type VolumeAction = CatalogVolumeAction;
++    type FunctionAction = CatalogFunctionAction;
+     type UserAction = CatalogUserAction;
+     type RoleAction = CatalogRoleAction;
+ 
+@@ -240,6 +241,21 @@ impl Authorizer for AllowAllAuthorizer {
+         Ok(vec![AuthorizationDecision::allow(); actions.len()])
+     }
+ 
++    async fn are_allowed_function_actions_impl<
++        A: Into<Self::FunctionAction> + Send + Clone + Sync,
++    >(
++        &self,
++        _metadata: &RequestMetadata,
++        _warehouse: &ResolvedWarehouse,
++        _parent_namespaces: &HashMap<NamespaceId, NamespaceWithParent>,
++        actions: &[(
++            &NamespaceWithParent,
++            ActionOnFunction<'_, '_, impl AuthZFunctionInfo, A>,
++        )],
++    ) -> Result<Vec<AuthorizationDecision>, IsAllowedActionError> {
++        Ok(vec![AuthorizationDecision::allow(); actions.len()])
++    }
++
+     async fn delete_user(&self, _metadata: &RequestMetadata, _user_id: UserId) -> Result<()> {
+         Ok(())
+     }
+diff --git a/crates/lakekeeper/src/service/authz/mod.rs b/crates/lakekeeper/src/service/authz/mod.rs
+index e3c6d296..ab8f4412 100644
+--- a/crates/lakekeeper/src/service/authz/mod.rs
++++ b/crates/lakekeeper/src/service/authz/mod.rs
+@@ -9,8 +9,8 @@ use strum::{EnumIter, VariantArray};
+ use strum_macros::{EnumString, IntoStaticStr};
+ 
+ use super::{
+-    CatalogStore, GenericTableId, NamespaceId, ProjectId, RoleId, RoleProviderId, RoleSourceId,
+-    SecretStore, State, TableId, ViewId, VolumeId, WarehouseId, health::HealthExt,
++    CatalogStore, FunctionId, GenericTableId, NamespaceId, ProjectId, RoleId, RoleProviderId,
++    RoleSourceId, SecretStore, State, TableId, ViewId, VolumeId, WarehouseId, health::HealthExt,
+ };
+ use crate::{
+     api::{
+@@ -19,9 +19,9 @@ use crate::{
+     },
+     request_metadata::RequestMetadata,
+     service::{
+-        Actor, ArcProjectId, ArcRole, AuthZGenericTableInfo, AuthZNamespaceInfo, AuthZTableInfo,
+-        AuthZViewInfo, AuthZVolumeInfo, NamespaceWithParent, ResolvedWarehouse, Role, ServerId,
+-        TableInfo,
++        Actor, ArcProjectId, ArcRole, AuthZFunctionInfo, AuthZGenericTableInfo, AuthZNamespaceInfo,
++        AuthZTableInfo, AuthZViewInfo, AuthZVolumeInfo, NamespaceWithParent, ResolvedWarehouse,
++        Role, ServerId, TableInfo,
+     },
+ };
+ 
+@@ -47,6 +47,8 @@ mod generic_table;
+ pub use generic_table::*;
+ mod volume;
+ pub use volume::*;
++mod function;
++pub use function::*;
+ mod project;
+ pub use project::*;
+ mod server;
+@@ -867,8 +869,18 @@ pub enum CatalogNamespaceAction {
+         location: Option<String>,
+     },
+     ListVolumes,
++    CreateFunction {
++        /// Name of the function to create.
++        #[serde(default, skip_serializing_if = "Option::is_none")]
++        name: Option<String>,
++        /// Function ID, if already generated by the server.
++        #[serde(default, skip_serializing_if = "Option::is_none")]
++        #[cfg_attr(feature = "open-api", schema(value_type = Option<Uuid>))]
++        function_id: Option<FunctionId>,
++    },
++    ListFunctions,
+ }
+-static NAMESPACE_ACTION_VARIANTS: LazyLock<[CatalogNamespaceAction; 16]> = LazyLock::new(|| {
++static NAMESPACE_ACTION_VARIANTS: LazyLock<[CatalogNamespaceAction; 18]> = LazyLock::new(|| {
+     [
+         CatalogNamespaceAction::CreateTable {
+             name: None,
+@@ -914,11 +926,16 @@ static NAMESPACE_ACTION_VARIANTS: LazyLock<[CatalogNamespaceAction; 16]> = LazyL
+             location: None,
+         },
+         CatalogNamespaceAction::ListVolumes,
++        CatalogNamespaceAction::CreateFunction {
++            name: None,
++            function_id: None,
++        },
++        CatalogNamespaceAction::ListFunctions,
+     ]
+ });
+ impl CatalogNamespaceAction {
+     #[must_use]
+-    pub fn variants() -> &'static [CatalogNamespaceAction; 16] {
++    pub fn variants() -> &'static [CatalogNamespaceAction; 18] {
+         &NAMESPACE_ACTION_VARIANTS
+     }
+ }
+@@ -983,6 +1000,14 @@ impl CatalogAction for CatalogNamespaceAction {
+                     b = b.context_string("location", l.clone());
+                 }
+             }
++            Self::CreateFunction { name, function_id } => {
++                if let Some(n) = name {
++                    b = b.context_string("name", n.clone());
++                }
++                if let Some(fid) = function_id {
++                    b = b.context_string("function_id", fid.to_string());
++                }
++            }
+             Self::CreateView { name, properties } | Self::CreateNamespace { name, properties } => {
+                 if let Some(n) = name {
+                     b = b.context_string("name", n.clone());
+@@ -1316,6 +1341,51 @@ impl CatalogAction for CatalogVolumeAction {
+     }
+ }
+ 
++#[derive(
++    Debug,
++    Hash,
++    Clone,
++    Eq,
++    PartialEq,
++    Serialize,
++    Deserialize,
++    strum_macros::EnumCount,
++    strum_macros::IntoStaticStr,
++)]
++#[cfg_attr(feature = "open-api", derive(utoipa::ToSchema))]
++#[cfg_attr(feature = "open-api", schema(as=LakekeeperFunctionAction))]
++#[serde(rename_all = "snake_case", tag = "action")]
++#[strum(serialize_all = "snake_case")]
++pub enum CatalogFunctionAction {
++    GetMetadata,
++    /// Permission to use the function. UC function execution is client-side
++    /// (the definition is reconstructed from `routine_definition`), so this
++    /// is a metadata action, not a data-plane one: `GetMetadata` already
++    /// reveals the full definition.
++    Execute,
++    Drop,
++    IncludeInList,
++}
++static FUNCTION_ACTION_VARIANTS: LazyLock<[CatalogFunctionAction; 4]> = LazyLock::new(|| {
++    [
++        CatalogFunctionAction::GetMetadata,
++        CatalogFunctionAction::Execute,
++        CatalogFunctionAction::Drop,
++        CatalogFunctionAction::IncludeInList,
++    ]
++});
++impl CatalogFunctionAction {
++    #[must_use]
++    pub fn variants() -> &'static [CatalogFunctionAction; 4] {
++        &FUNCTION_ACTION_VARIANTS
++    }
++}
++impl CatalogAction for CatalogFunctionAction {
++    fn action_descriptor(&self) -> ActionDescriptor {
++        ActionDescriptor::builder().action_name(self.into()).build()
++    }
++}
++
+ // ---------------------------------------------------------------------------
+ // Fieldless "action kind" enums.
+ //
+@@ -1499,6 +1569,8 @@ pub enum CatalogNamespaceActionKind {
+     ListGenericTables,
+     CreateVolume,
+     ListVolumes,
++    CreateFunction,
++    ListFunctions,
+ }
+ impl From<&CatalogNamespaceAction> for CatalogNamespaceActionKind {
+     fn from(action: &CatalogNamespaceAction) -> Self {
+@@ -1519,6 +1591,8 @@ impl From<&CatalogNamespaceAction> for CatalogNamespaceActionKind {
+             CatalogNamespaceAction::ListGenericTables => Self::ListGenericTables,
+             CatalogNamespaceAction::CreateVolume { .. } => Self::CreateVolume,
+             CatalogNamespaceAction::ListVolumes => Self::ListVolumes,
++            CatalogNamespaceAction::CreateFunction { .. } => Self::CreateFunction,
++            CatalogNamespaceAction::ListFunctions => Self::ListFunctions,
+         }
+     }
+ }
+@@ -1671,6 +1745,7 @@ where
+     type ViewAction: ViewAction;
+     type GenericTableAction: GenericTableAction;
+     type VolumeAction: VolumeAction;
++    type FunctionAction: FunctionAction;
+     type UserAction: UserAction;
+     type RoleAction: RoleAction;
+ 
+@@ -1832,6 +1907,20 @@ where
+         )],
+     ) -> Result<Vec<AuthorizationDecision>, IsAllowedActionError>;
+ 
++    /// Checks if actions are allowed on Unity Catalog functions.
++    async fn are_allowed_function_actions_impl<
++        A: Into<Self::FunctionAction> + Send + Clone + Sync,
++    >(
++        &self,
++        metadata: &RequestMetadata,
++        warehouse: &ResolvedWarehouse,
++        parent_namespaces: &HashMap<NamespaceId, NamespaceWithParent>,
++        actions: &[(
++            &NamespaceWithParent,
++            ActionOnFunction<'_, '_, impl AuthZFunctionInfo, A>,
++        )],
++    ) -> Result<Vec<AuthorizationDecision>, IsAllowedActionError>;
++
+     /// Hook that is called when a user is deleted.
+     async fn delete_user(&self, metadata: &RequestMetadata, user_id: UserId) -> Result<()>;
+ 
+@@ -1967,6 +2056,26 @@ where
+     async fn delete_volume(&self, _warehouse_id: WarehouseId, _volume_id: VolumeId) -> Result<()> {
+         Ok(())
+     }
++
++    /// Hook that is called when a new Unity Catalog function is created.
++    async fn create_function(
++        &self,
++        _metadata: &RequestMetadata,
++        _warehouse_id: WarehouseId,
++        _function_id: FunctionId,
++        _parent: NamespaceId,
++    ) -> Result<()> {
++        Ok(())
++    }
++
++    /// Hook that is called when a Unity Catalog function is deleted.
++    async fn delete_function(
++        &self,
++        _warehouse_id: WarehouseId,
++        _function_id: FunctionId,
++    ) -> Result<()> {
++        Ok(())
++    }
+ }
+ 
+ #[cfg(any(test, feature = "test-utils"))]
+@@ -2120,6 +2229,48 @@ pub mod tests {
+         }
+     }
+ 
++    #[test]
++    fn test_function_action_variant_completeness() {
++        let variants = CatalogFunctionAction::variants();
++        assert_eq!(variants.len(), CatalogFunctionAction::COUNT);
++    }
++
++    #[test]
++    fn test_catalog_function_action_serde() {
++        for (action, expected) in [
++            (
++                CatalogFunctionAction::GetMetadata,
++                serde_json::json!({"action": "get_metadata"}),
++            ),
++            (
++                CatalogFunctionAction::Execute,
++                serde_json::json!({"action": "execute"}),
++            ),
++            (
++                CatalogFunctionAction::Drop,
++                serde_json::json!({"action": "drop"}),
++            ),
++            (
++                CatalogFunctionAction::IncludeInList,
++                serde_json::json!({"action": "include_in_list"}),
++            ),
++        ] {
++            let serialized = serde_json::to_value(&action).unwrap();
++            assert_eq!(serialized, expected);
++            let deserialized: CatalogFunctionAction = serde_json::from_value(serialized).unwrap();
++            assert_eq!(deserialized, action);
++        }
++    }
++
++    #[test]
++    fn test_function_actions_are_never_data_plane() {
++        use crate::service::authz::FunctionAction as _;
++        // Execution is client-side; all function actions are control plane.
++        for action in CatalogFunctionAction::variants() {
++            assert!(!action.is_data_plane(), "{action:?}");
++        }
++    }
++
+     #[test]
+     fn test_role_action_variant_completeness() {
+         // `UpdateSourceSystem` is enumerated with the `SourceSystemTarget::Any`
+@@ -2793,6 +2944,7 @@ pub mod tests {
+         type ViewAction = CatalogViewAction;
+         type GenericTableAction = CatalogGenericTableAction;
+         type VolumeAction = CatalogVolumeAction;
++        type FunctionAction = CatalogFunctionAction;
+         type UserAction = CatalogUserAction;
+         type RoleAction = CatalogRoleAction;
+ 
+@@ -3092,6 +3244,40 @@ pub mod tests {
+                 .collect())
+         }
+ 
++        async fn are_allowed_function_actions_impl<
++            A: Into<Self::FunctionAction> + Send + Clone + Sync,
++        >(
++            &self,
++            metadata: &RequestMetadata,
++            _warehouse: &ResolvedWarehouse,
++            _parent_namespaces: &HashMap<NamespaceId, NamespaceWithParent>,
++            actions: &[(
++                &NamespaceWithParent,
++                ActionOnFunction<'_, '_, impl AuthZFunctionInfo, A>,
++            )],
++        ) -> Result<Vec<AuthorizationDecision>, IsAllowedActionError> {
++            // See the table impl above for why we fall back to the actor.
++            let actor_identity = metadata.actor().to_user_or_role();
++            let results: Vec<bool> = actions
++                .iter()
++                .map(|(_parent_namespace, action)| {
++                    let converted: Self::FunctionAction = action.action.clone().into();
++                    if self.action_is_blocked(format!("function:{converted:?}").as_str()) {
++                        return false;
++                    }
++                    let function_id = action.info.function_id();
++                    let warehouse_id = action.info.warehouse_id();
++                    let object = format!("function:{warehouse_id}/{function_id}");
++                    let subject = action.user.or(actor_identity.as_ref());
++                    self.check_available_for_user(&object, subject)
++                })
++                .collect();
++            Ok(results
++                .into_iter()
++                .map(AuthorizationDecision::from)
++                .collect())
++        }
++
+         async fn delete_user(&self, _metadata: &RequestMetadata, _user_id: UserId) -> Result<()> {
+             Ok(())
+         }
+diff --git a/crates/lakekeeper/src/service/catalog_store.rs b/crates/lakekeeper/src/service/catalog_store.rs
+index f4a016f4..11a24bb7 100644
+--- a/crates/lakekeeper/src/service/catalog_store.rs
++++ b/crates/lakekeeper/src/service/catalog_store.rs
+@@ -11,8 +11,8 @@ use moka::{
+ };
+ 
+ use super::{
+-    GenericTableId, NamespaceId, ProjectId, RoleId, RoleIdent, TableId, ViewId, VolumeId,
+-    WarehouseId, storage::StorageProfile,
++    FunctionId, GenericTableId, NamespaceId, ProjectId, RoleId, RoleIdent, TableId, ViewId,
++    VolumeId, WarehouseId, storage::StorageProfile,
+ };
+ pub use crate::api::iceberg::v1::{
+     CreateNamespaceRequest, CreateNamespaceResponse, ListNamespacesQuery, NamespaceIdent, Result,
+@@ -80,6 +80,8 @@ pub mod generic_table;
+ pub use generic_table::*;
+ pub mod volume;
+ pub use volume::*;
++pub mod function;
++pub use function::*;
+ 
+ macro_rules! define_version_newtype {
+     ($name:ident) => {
+@@ -754,6 +756,41 @@ where
+         transaction: <Self::Transaction as Transaction<Self::State>>::Transaction<'a>,
+     ) -> std::result::Result<VolumeId, DropVolumeError>;
+ 
++    // ---------------- Function Management (Unity Catalog compat) ----------------
++    async fn create_function_impl<'a>(
++        creation: FunctionCreation,
++        transaction: <Self::Transaction as Transaction<Self::State>>::Transaction<'a>,
++    ) -> std::result::Result<FunctionInfo, CreateFunctionError>;
++
++    async fn load_function_impl<'a>(
++        warehouse_id: WarehouseId,
++        namespace_id: NamespaceId,
++        function_name: &str,
++        transaction: <Self::Transaction as Transaction<Self::State>>::Transaction<'a>,
++    ) -> std::result::Result<FunctionInfo, LoadFunctionError>;
++
++    async fn load_function_by_id_impl<'a>(
++        warehouse_id: WarehouseId,
++        function_id: FunctionId,
++        transaction: <Self::Transaction as Transaction<Self::State>>::Transaction<'a>,
++    ) -> std::result::Result<FunctionInfo, LoadFunctionError>;
++
++    async fn list_functions_impl<'a>(
++        warehouse_id: WarehouseId,
++        namespace_id: NamespaceId,
++        namespace_ident: &iceberg::NamespaceIdent,
++        page_size: Option<i64>,
++        page_token: Option<&str>,
++        transaction: <Self::Transaction as Transaction<Self::State>>::Transaction<'a>,
++    ) -> std::result::Result<(Vec<FunctionListEntry>, Option<String>), ListFunctionsError>;
++
++    async fn drop_function_impl<'a>(
++        warehouse_id: WarehouseId,
++        namespace_id: NamespaceId,
++        function_name: &str,
++        transaction: <Self::Transaction as Transaction<Self::State>>::Transaction<'a>,
++    ) -> std::result::Result<FunctionId, DropFunctionError>;
++
+     // ---------------- Role Management API ----------------
+     async fn create_roles_impl<'a>(
+         project_id: &ProjectId,
+diff --git a/crates/lakekeeper/src/service/catalog_store/function.rs b/crates/lakekeeper/src/service/catalog_store/function.rs
+new file mode 100644
+index 00000000..59210af2
+--- /dev/null
++++ b/crates/lakekeeper/src/service/catalog_store/function.rs
+@@ -0,0 +1,258 @@
++//! Unity Catalog functions: dedicated catalog-store entity (design D1 — no
++//! tabular piggyback). Functions live in the `uc_function` table, are
++//! hard-deleted in v1 (`deleted_at` column reserved) and are never protected.
++//!
++//! Wire fidelity (design D3): the client's `function_info` JSON is stored
++//! verbatim as `spec` and echoed back on read with server fields
++//! (`function_id`, `full_name`, timestamps) merged in. Function execution is
++//! client-side (unitycatalog-ai reconstructs the callable from
++//! `routine_definition`), so there is no server-side execute path.
++
++use std::fmt;
++
++use http::StatusCode;
++use iceberg::{NamespaceIdent, TableIdent};
++use iceberg_ext::catalog::rest::ErrorModel;
++
++use super::{
++    CatalogStore, Transaction, define_simple_error, define_transparent_error,
++    impl_error_stack_methods, impl_from_with_detail,
++};
++use crate::{
++    WarehouseId,
++    service::{CatalogBackendError, FunctionId, NamespaceId, NamespaceVersion, WarehouseVersion},
++};
++
++/// Function addressed either by `<namespace>.<name>` identifier or by id.
++/// Used in authorization errors (mirrors `VolumeIdentOrId`).
++#[derive(Hash, Debug, Clone, PartialEq, Eq, derive_more::From)]
++pub enum FunctionIdentOrId {
++    Ident(TableIdent),
++    Id(FunctionId),
++}
++
++impl fmt::Display for FunctionIdentOrId {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            FunctionIdentOrId::Ident(ident) => write!(f, "'{ident}'"),
++            FunctionIdentOrId::Id(id) => write!(f, "ID '{id}'"),
++        }
++    }
++}
++
++/// The function fields authorization code needs. Mirrors [`AuthZVolumeInfo`];
++/// implemented by [`FunctionInfo`] and [`FunctionListEntry`].
++///
++/// [`AuthZVolumeInfo`]: crate::service::AuthZVolumeInfo
++pub trait AuthZFunctionInfo: Send + Sync {
++    fn warehouse_id(&self) -> WarehouseId;
++    fn function_ident(&self) -> &TableIdent;
++    fn function_id(&self) -> FunctionId;
++    fn namespace_id(&self) -> NamespaceId;
++    fn namespace_ident(&self) -> &NamespaceIdent {
++        self.function_ident().namespace()
++    }
++}
++
++#[derive(Debug, Clone)]
++pub struct FunctionInfo {
++    pub function_id: FunctionId,
++    pub warehouse_id: WarehouseId,
++    pub warehouse_version: WarehouseVersion,
++    pub namespace_id: NamespaceId,
++    pub namespace_version: NamespaceVersion,
++    pub namespace_ident: NamespaceIdent,
++    pub name: String,
++    /// `<namespace>.<name>` identifier (UC functions live in single-level
++    /// namespaces; `TableIdent` is reused as a generic two-part identifier).
++    pub function_ident: TableIdent,
++    /// The client's `function_info` JSON, stored verbatim.
++    pub spec: serde_json::Value,
++    pub created_at: chrono::DateTime<chrono::Utc>,
++    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
++}
++
++impl AuthZFunctionInfo for FunctionInfo {
++    fn warehouse_id(&self) -> WarehouseId {
++        self.warehouse_id
++    }
++
++    fn function_ident(&self) -> &TableIdent {
++        &self.function_ident
++    }
++
++    fn function_id(&self) -> FunctionId {
++        self.function_id
++    }
++
++    fn namespace_id(&self) -> NamespaceId {
++        self.namespace_id
++    }
++}
++
++#[derive(Debug, Clone)]
++pub struct FunctionCreation {
++    pub function_id: FunctionId,
++    pub namespace_id: NamespaceId,
++    pub warehouse_id: WarehouseId,
++    pub name: String,
++    /// The client's `function_info` JSON, stored verbatim.
++    pub spec: serde_json::Value,
++}
++
++/// UC `GET /functions` returns full `FunctionInfo` objects, so list entries
++/// carry the complete stored spec.
++#[derive(Debug, Clone)]
++pub struct FunctionListEntry {
++    pub function_id: FunctionId,
++    pub warehouse_id: WarehouseId,
++    pub namespace_id: NamespaceId,
++    pub name: String,
++    pub function_ident: TableIdent,
++    pub namespace_ident: NamespaceIdent,
++    pub spec: serde_json::Value,
++    pub created_at: chrono::DateTime<chrono::Utc>,
++    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
++}
++
++impl AuthZFunctionInfo for FunctionListEntry {
++    fn warehouse_id(&self) -> WarehouseId {
++        self.warehouse_id
++    }
++
++    fn function_ident(&self) -> &TableIdent {
++        &self.function_ident
++    }
++
++    fn function_id(&self) -> FunctionId {
++        self.function_id
++    }
++
++    fn namespace_id(&self) -> NamespaceId {
++        self.namespace_id
++    }
++}
++
++define_simple_error!(FunctionAlreadyExists, "Function already exists");
++impl From<FunctionAlreadyExists> for ErrorModel {
++    fn from(err: FunctionAlreadyExists) -> Self {
++        ErrorModel::builder()
++            .message(err.to_string())
++            .r#type("FunctionAlreadyExists")
++            .code(StatusCode::CONFLICT.as_u16())
++            .stack(err.stack)
++            .build()
++    }
++}
++
++define_simple_error!(FunctionNotFound, "Function not found");
++impl From<FunctionNotFound> for ErrorModel {
++    fn from(err: FunctionNotFound) -> Self {
++        ErrorModel::builder()
++            .message(err.to_string())
++            .r#type("FunctionNotFound")
++            .code(StatusCode::NOT_FOUND.as_u16())
++            .stack(err.stack)
++            .build()
++    }
++}
++
++define_transparent_error! {
++    pub enum CreateFunctionError,
++    stack_message: "Error creating function",
++    variants: [
++        FunctionAlreadyExists,
++        CatalogBackendError,
++    ]
++}
++
++define_transparent_error! {
++    pub enum LoadFunctionError,
++    stack_message: "Error loading function",
++    variants: [
++        FunctionNotFound,
++        CatalogBackendError,
++    ]
++}
++
++define_transparent_error! {
++    pub enum ListFunctionsError,
++    stack_message: "Error listing functions",
++    variants: [
++        CatalogBackendError,
++    ]
++}
++
++define_transparent_error! {
++    pub enum DropFunctionError,
++    stack_message: "Error dropping function",
++    variants: [
++        FunctionNotFound,
++        CatalogBackendError,
++    ]
++}
++
++#[async_trait::async_trait]
++pub trait CatalogFunctionOps
++where
++    Self: CatalogStore,
++{
++    async fn create_function<'a>(
++        creation: FunctionCreation,
++        transaction: <Self::Transaction as Transaction<Self::State>>::Transaction<'a>,
++    ) -> std::result::Result<FunctionInfo, CreateFunctionError> {
++        Self::create_function_impl(creation, transaction).await
++    }
++
++    async fn load_function<'a>(
++        warehouse_id: WarehouseId,
++        namespace_id: NamespaceId,
++        function_name: &str,
++        transaction: <Self::Transaction as Transaction<Self::State>>::Transaction<'a>,
++    ) -> std::result::Result<FunctionInfo, LoadFunctionError> {
++        Self::load_function_impl(warehouse_id, namespace_id, function_name, transaction).await
++    }
++
++    /// Load a function by its stable id. Prefer this over
++    /// [`Self::load_function`] after a successful authz check (TOCTOU:
++    /// rename/create races cannot substitute a different row).
++    async fn load_function_by_id<'a>(
++        warehouse_id: WarehouseId,
++        function_id: FunctionId,
++        transaction: <Self::Transaction as Transaction<Self::State>>::Transaction<'a>,
++    ) -> std::result::Result<FunctionInfo, LoadFunctionError> {
++        Self::load_function_by_id_impl(warehouse_id, function_id, transaction).await
++    }
++
++    async fn list_functions<'a>(
++        warehouse_id: WarehouseId,
++        namespace_id: NamespaceId,
++        namespace_ident: &iceberg::NamespaceIdent,
++        page_size: Option<i64>,
++        page_token: Option<&str>,
++        transaction: <Self::Transaction as Transaction<Self::State>>::Transaction<'a>,
++    ) -> std::result::Result<(Vec<FunctionListEntry>, Option<String>), ListFunctionsError> {
++        Self::list_functions_impl(
++            warehouse_id,
++            namespace_id,
++            namespace_ident,
++            page_size,
++            page_token,
++            transaction,
++        )
++        .await
++    }
++
++    /// Hard-delete a function (UC DELETE semantics; no soft delete in v1).
++    /// There is no update: UC has no function PATCH endpoint.
++    async fn drop_function<'a>(
++        warehouse_id: WarehouseId,
++        namespace_id: NamespaceId,
++        function_name: &str,
++        transaction: <Self::Transaction as Transaction<Self::State>>::Transaction<'a>,
++    ) -> std::result::Result<FunctionId, DropFunctionError> {
++        Self::drop_function_impl(warehouse_id, namespace_id, function_name, transaction).await
++    }
++}
++
++impl<T> CatalogFunctionOps for T where T: CatalogStore {}
+diff --git a/crates/lakekeeper/src/service/identifier/generic.rs b/crates/lakekeeper/src/service/identifier/generic.rs
+index 70e9d4de..4245d746 100644
+--- a/crates/lakekeeper/src/service/identifier/generic.rs
++++ b/crates/lakekeeper/src/service/identifier/generic.rs
+@@ -159,6 +159,7 @@ define_id_type!(RoleId, true);
+ define_id_type!(GenericTableId, true);
+ // Unity Catalog compatibility entities.
+ define_id_type!(VolumeId, true);
++define_id_type!(FunctionId, true);
+ 
+ impl GenericTableId {
+     #[must_use]
+@@ -174,6 +175,13 @@ impl VolumeId {
+     }
+ }
+ 
++impl FunctionId {
++    #[must_use]
++    pub fn into_uuid(self) -> uuid::Uuid {
++        *self
++    }
++}
++
+ impl TryFrom<Prefix> for WarehouseId {
+     type Error = ErrorModel;
+ 
+-- 
+2.43.0
+
