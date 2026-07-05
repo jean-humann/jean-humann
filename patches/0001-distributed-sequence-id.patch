@@ -1,0 +1,836 @@
+From ec4e4f78285892b7eaea312c1c547722e13824c0 Mon Sep 17 00:00:00 2001
+From: Jean Humann <jeanhumann@gmail.com>
+Date: Sun, 5 Jul 2026 03:03:53 +0000
+Subject: [PATCH] feat: implement distributed_sequence_id for pandas API on
+ Spark
+
+Implement the internal Spark function distributed_sequence_id(), which
+pyspark.pandas uses over Spark Connect to attach its default
+distributed-sequence index. Previously any pandas-on-Spark operation
+that attached a default index to a server-side frame (ps.range(),
+DataFrame.pandas_api(), merge(), read_parquet(), ...) failed with
+"unknown function: distributed_sequence_id".
+
+The implementation follows the existing monotonically_increasing_id
+pattern:
+
+- a marker scalar UDF registered as distributed_sequence_id
+- a plan rewriter that replaces the marker with a column emitted by a
+  new DistributedSequenceIdNode logical extension node
+- a DistributedSequenceIdExec physical operator that attaches a
+  gap-free, 0-based Int64 sequence in input order by draining input
+  partitions sequentially into a single output partition
+- proto codec support so the operator works in distributed execution
+
+With this change, pyspark.pandas works against Sail with the default
+index type, without requiring compute.default_index_type to be set to
+"distributed".
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01MqZ1HC6NsRof99EDi5ARo1
+---
+ .../proto/sail/plan/physical.proto            |   7 +
+ crates/sail-execution/src/proto/codec.rs      |  23 ++
+ .../scalar/misc/distributed_sequence_id.rs    |  50 ++++
+ crates/sail-function/src/scalar/misc/mod.rs   |   1 +
+ .../src/distributed_sequence_id.rs            |  79 +++++
+ crates/sail-logical-plan/src/lib.rs           |   1 +
+ .../src/distributed_sequence_id.rs            | 271 ++++++++++++++++++
+ crates/sail-physical-plan/src/lib.rs          |   1 +
+ crates/sail-plan/src/function/scalar/misc.rs  |   5 +
+ .../sail-plan/src/resolver/query/aggregate.rs |   3 +
+ .../sail-plan/src/resolver/query/column_op.rs |   3 +
+ .../sail-plan/src/resolver/query/lateral.rs   |   3 +
+ .../sail-plan/src/resolver/query/pivoting.rs  |   3 +
+ .../sail-plan/src/resolver/query/project.rs   |   3 +
+ .../resolver/tree/distributed_sequence_id.rs  |  72 +++++
+ crates/sail-plan/src/resolver/tree/mod.rs     |   1 +
+ crates/sail-session/src/planner.rs            |  13 +
+ 17 files changed, 539 insertions(+)
+ create mode 100644 crates/sail-function/src/scalar/misc/distributed_sequence_id.rs
+ create mode 100644 crates/sail-logical-plan/src/distributed_sequence_id.rs
+ create mode 100644 crates/sail-physical-plan/src/distributed_sequence_id.rs
+ create mode 100644 crates/sail-plan/src/resolver/tree/distributed_sequence_id.rs
+
+diff --git a/crates/sail-execution/proto/sail/plan/physical.proto b/crates/sail-execution/proto/sail/plan/physical.proto
+index dcadf545..4f840568 100644
+--- a/crates/sail-execution/proto/sail/plan/physical.proto
++++ b/crates/sail-execution/proto/sail/plan/physical.proto
+@@ -65,6 +65,7 @@ message ExtendedPhysicalPlanNode {
+     CoalesceExecNode coalesce = 50;
+     FileDeleteExecNode file_delete = 51;
+     NoopSinkExecNode noop_sink = 52;
++    DistributedSequenceIdExecNode distributed_sequence_id = 53;
+   }
+ }
+ 
+@@ -811,6 +812,12 @@ message MonotonicIdExecNode {
+   bytes schema = 3;
+ }
+ 
++message DistributedSequenceIdExecNode {
++  bytes input = 1;
++  string column_name = 2;
++  bytes schema = 3;
++}
++
+ message SparkPartitionIdExecNode {
+   bytes input = 1;
+   string column_name = 2;
+diff --git a/crates/sail-execution/src/proto/codec.rs b/crates/sail-execution/src/proto/codec.rs
+index 3cc73e76..b5def1d7 100644
+--- a/crates/sail-execution/src/proto/codec.rs
++++ b/crates/sail-execution/src/proto/codec.rs
+@@ -247,6 +247,7 @@ use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
+ use sail_physical_plan::barrier::BarrierExec;
+ use sail_physical_plan::catalog_command::CatalogCommandExec;
+ use sail_physical_plan::coalesce::CoalesceExec;
++use sail_physical_plan::distributed_sequence_id::DistributedSequenceIdExec;
+ use sail_physical_plan::map_partitions::MapPartitionsExec;
+ use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
+ use sail_physical_plan::monotonic_id::MonotonicIdExec;
+@@ -1061,6 +1062,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
+                     Arc::new(schema),
+                 )?))
+             }
++            NodeKind::DistributedSequenceId(gen::DistributedSequenceIdExecNode {
++                input,
++                column_name,
++                schema,
++            }) => {
++                let schema = try_decode_schema(&schema)?;
++                Ok(Arc::new(DistributedSequenceIdExec::try_new(
++                    try_decode_physical_plan(ctx, self, &input)?,
++                    column_name,
++                    Arc::new(schema),
++                )?))
++            }
+             NodeKind::SparkPartitionId(gen::SparkPartitionIdExecNode {
+                 input,
+                 column_name,
+@@ -1892,6 +1905,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
+                 column_name: monotonic_id.column_name().to_string(),
+                 schema,
+             })
++        } else if let Some(distributed_sequence_id) =
++            node.downcast_ref::<DistributedSequenceIdExec>()
++        {
++            let input = try_encode_physical_plan(self, distributed_sequence_id.input().clone())?;
++            let schema = try_encode_schema(distributed_sequence_id.schema().as_ref())?;
++            NodeKind::DistributedSequenceId(gen::DistributedSequenceIdExecNode {
++                input,
++                column_name: distributed_sequence_id.column_name().to_string(),
++                schema,
++            })
+         } else if let Some(spark_partition_id) = node.downcast_ref::<SparkPartitionIdExec>() {
+             let input = try_encode_physical_plan(self, spark_partition_id.input().clone())?;
+             let schema = try_encode_schema(spark_partition_id.schema().as_ref())?;
+diff --git a/crates/sail-function/src/scalar/misc/distributed_sequence_id.rs b/crates/sail-function/src/scalar/misc/distributed_sequence_id.rs
+new file mode 100644
+index 00000000..8f29b9c4
+--- /dev/null
++++ b/crates/sail-function/src/scalar/misc/distributed_sequence_id.rs
+@@ -0,0 +1,50 @@
++use datafusion::arrow::datatypes::DataType;
++use datafusion::common::{exec_err, Result};
++use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
++use datafusion_expr_common::columnar_value::ColumnarValue;
++use datafusion_expr_common::signature::{Signature, Volatility};
++
++/// The internal Spark expression used by the pandas API on Spark
++/// (`pyspark.pandas`) to attach the default `distributed-sequence` index.
++/// It produces consecutive 0-based `Int64` values across the whole data frame,
++/// in input order, without gaps between partitions.
++///
++/// The actual evaluation is implemented as a plan rewrite + physical operator.
++/// This UDF exists as a *marker* so the logical rewriter can detect
++/// and replace it before physical planning.
++#[derive(Debug, PartialEq, Eq, Hash)]
++pub struct SparkDistributedSequenceId {
++    signature: Signature,
++}
++
++impl Default for SparkDistributedSequenceId {
++    fn default() -> Self {
++        Self::new()
++    }
++}
++
++impl SparkDistributedSequenceId {
++    pub fn new() -> Self {
++        Self {
++            signature: Signature::nullary(Volatility::Volatile),
++        }
++    }
++}
++
++impl ScalarUDFImpl for SparkDistributedSequenceId {
++    fn name(&self) -> &str {
++        "distributed_sequence_id"
++    }
++
++    fn signature(&self) -> &Signature {
++        &self.signature
++    }
++
++    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
++        Ok(DataType::Int64)
++    }
++
++    fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {
++        exec_err!("distributed_sequence_id() was not rewritten into a partition-aware operator")
++    }
++}
+diff --git a/crates/sail-function/src/scalar/misc/mod.rs b/crates/sail-function/src/scalar/misc/mod.rs
+index 216ea714..b6374948 100644
+--- a/crates/sail-function/src/scalar/misc/mod.rs
++++ b/crates/sail-function/src/scalar/misc/mod.rs
+@@ -1,3 +1,4 @@
++pub mod distributed_sequence_id;
+ pub mod hll_sketch;
+ pub mod monotonically_increasing_id;
+ pub mod raise_error;
+diff --git a/crates/sail-logical-plan/src/distributed_sequence_id.rs b/crates/sail-logical-plan/src/distributed_sequence_id.rs
+new file mode 100644
+index 00000000..c15c88ad
+--- /dev/null
++++ b/crates/sail-logical-plan/src/distributed_sequence_id.rs
+@@ -0,0 +1,79 @@
++use std::fmt::Formatter;
++use std::sync::Arc;
++
++use datafusion::arrow::datatypes::{DataType, Field};
++use datafusion_common::{DFSchema, DFSchemaRef, Result};
++use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
++use educe::Educe;
++use sail_common_datafusion::utils::items::ItemTaker;
++
++#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
++#[educe(PartialOrd)]
++pub struct DistributedSequenceIdNode {
++    input: Arc<LogicalPlan>,
++    column_name: String,
++    #[educe(PartialOrd(ignore))]
++    schema: DFSchemaRef,
++}
++
++impl DistributedSequenceIdNode {
++    pub fn try_new(input: Arc<LogicalPlan>, column_name: String) -> Result<Self> {
++        let mut qualified_fields = input
++            .schema()
++            .iter()
++            .map(|(qualifier, field)| (qualifier.cloned(), Arc::clone(field)))
++            .collect::<Vec<_>>();
++        qualified_fields.push((
++            None,
++            Arc::new(Field::new(column_name.clone(), DataType::Int64, false)),
++        ));
++        let schema =
++            DFSchema::new_with_metadata(qualified_fields, input.schema().metadata().clone())?
++                .with_functional_dependencies(input.schema().functional_dependencies().clone())?;
++        Ok(Self {
++            input,
++            column_name,
++            schema: Arc::new(schema),
++        })
++    }
++
++    pub fn input(&self) -> &Arc<LogicalPlan> {
++        &self.input
++    }
++
++    pub fn column_name(&self) -> &str {
++        &self.column_name
++    }
++}
++
++impl UserDefinedLogicalNodeCore for DistributedSequenceIdNode {
++    fn name(&self) -> &str {
++        "DistributedSequenceId"
++    }
++
++    fn inputs(&self) -> Vec<&LogicalPlan> {
++        vec![self.input.as_ref()]
++    }
++
++    fn schema(&self) -> &DFSchemaRef {
++        &self.schema
++    }
++
++    fn expressions(&self) -> Vec<Expr> {
++        vec![]
++    }
++
++    fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
++        write!(f, "DistributedSequenceId")
++    }
++
++    fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
++        exprs.zero()?;
++        let input = Arc::new(inputs.one()?);
++        Self::try_new(input, self.column_name.clone())
++    }
++
++    fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
++        Some(vec![(0..self.input.schema().fields().len()).collect()])
++    }
++}
+diff --git a/crates/sail-logical-plan/src/lib.rs b/crates/sail-logical-plan/src/lib.rs
+index fa6d6a90..0ddbb0ca 100644
+--- a/crates/sail-logical-plan/src/lib.rs
++++ b/crates/sail-logical-plan/src/lib.rs
+@@ -1,5 +1,6 @@
+ pub mod barrier;
+ pub mod check_constraints;
++pub mod distributed_sequence_id;
+ pub mod map_partitions;
+ pub mod merge;
+ pub mod monotonic_id;
+diff --git a/crates/sail-physical-plan/src/distributed_sequence_id.rs b/crates/sail-physical-plan/src/distributed_sequence_id.rs
+new file mode 100644
+index 00000000..80fd4a2e
+--- /dev/null
++++ b/crates/sail-physical-plan/src/distributed_sequence_id.rs
+@@ -0,0 +1,271 @@
++use std::pin::Pin;
++use std::sync::Arc;
++use std::task::{Context, Poll};
++
++use datafusion::arrow::array::{ArrayRef, Int64Array};
++use datafusion::arrow::datatypes::{DataType, SchemaRef};
++use datafusion::arrow::record_batch::RecordBatch;
++use datafusion::execution::{SendableRecordBatchStream, TaskContext};
++use datafusion::physical_expr::EquivalenceProperties;
++use datafusion::physical_plan::{
++    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
++    PlanProperties, RecordBatchStream,
++};
++use datafusion_common::stats::Precision;
++use datafusion_common::{exec_err, internal_err, ColumnStatistics, Result, Statistics};
++use futures::Stream;
++
++/// Attaches a consecutive 0-based `Int64` sequence column to the input,
++/// matching the semantics of Spark's internal `DistributedSequenceID`
++/// expression (`AttachDistributedSequenceExec`), which the pandas API on
++/// Spark uses for its default `distributed-sequence` index.
++///
++/// Unlike `monotonically_increasing_id()`, the sequence must be gap-free
++/// across partitions, so partition `i` cannot emit values until the row
++/// counts of partitions `0..i` are known. This implementation drains the
++/// input partitions sequentially into a single output partition, which
++/// preserves the input order and keeps the operator fully streaming at the
++/// cost of parallelism. This mirrors the documented Spark caveat that the
++/// `distributed-sequence` index can require extra computation.
++#[derive(Debug, Clone)]
++pub struct DistributedSequenceIdExec {
++    input: Arc<dyn ExecutionPlan>,
++    column_name: String,
++    schema: SchemaRef,
++    properties: Arc<PlanProperties>,
++}
++
++impl DistributedSequenceIdExec {
++    pub fn try_new(
++        input: Arc<dyn ExecutionPlan>,
++        column_name: impl Into<String>,
++        schema: SchemaRef,
++    ) -> Result<Self> {
++        let column_name = column_name.into();
++        // Basic sanity: ensure the column exists in schema and is Int64
++        let idx = schema.index_of(&column_name)?;
++        let field = schema.field(idx);
++        if field.data_type() != &DataType::Int64 {
++            return exec_err!(
++                "DistributedSequenceIdExec expects Int64 field for {}, got {:?}",
++                column_name,
++                field.data_type()
++            );
++        }
++
++        let properties = Arc::new(PlanProperties::new(
++            EquivalenceProperties::new(schema.clone()),
++            Partitioning::UnknownPartitioning(1),
++            input.pipeline_behavior(),
++            input.boundedness(),
++        ));
++        Ok(Self {
++            input,
++            column_name,
++            schema,
++            properties,
++        })
++    }
++
++    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
++        &self.input
++    }
++
++    pub fn column_name(&self) -> &str {
++        &self.column_name
++    }
++}
++
++impl DisplayAs for DistributedSequenceIdExec {
++    fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
++        write!(f, "DistributedSequenceIdExec: col={}", self.column_name)
++    }
++}
++
++impl ExecutionPlan for DistributedSequenceIdExec {
++    fn name(&self) -> &'static str {
++        "DistributedSequenceIdExec"
++    }
++
++    fn properties(&self) -> &Arc<PlanProperties> {
++        &self.properties
++    }
++
++    fn schema(&self) -> SchemaRef {
++        self.schema.clone()
++    }
++
++    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
++        vec![&self.input]
++    }
++
++    fn maintains_input_order(&self) -> Vec<bool> {
++        vec![true]
++    }
++
++    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
++        vec![false]
++    }
++
++    fn with_new_children(
++        self: Arc<Self>,
++        children: Vec<Arc<dyn ExecutionPlan>>,
++    ) -> Result<Arc<dyn ExecutionPlan>> {
++        let [input] = children.as_slice() else {
++            return internal_err!("DistributedSequenceIdExec requires exactly one child");
++        };
++        Ok(Arc::new(Self::try_new(
++            input.clone(),
++            self.column_name.clone(),
++            self.schema.clone(),
++        )?))
++    }
++
++    fn execute(
++        &self,
++        partition: usize,
++        context: Arc<TaskContext>,
++    ) -> Result<SendableRecordBatchStream> {
++        if partition != 0 {
++            return internal_err!(
++                "DistributedSequenceIdExec has a single output partition, got partition {partition}"
++            );
++        }
++        Ok(Box::pin(DistributedSequenceIdStream::new(
++            self.input.clone(),
++            context,
++            self.schema.clone(),
++            self.column_name.clone(),
++        )?))
++    }
++
++    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
++        // The output is a single partition covering all input partitions.
++        let mut stats = Arc::unwrap_or_clone(self.input.partition_statistics(None)?);
++        if partition.is_some_and(|p| p != 0) {
++            return internal_err!(
++                "DistributedSequenceIdExec has a single output partition, got partition {partition:?}"
++            );
++        }
++        let col_idx = self.schema.index_of(&self.column_name)?;
++        let unknown_col_stats = ColumnStatistics::new_unknown();
++        if col_idx <= stats.column_statistics.len() {
++            stats.column_statistics.insert(col_idx, unknown_col_stats);
++        } else {
++            while stats.column_statistics.len() < col_idx {
++                stats
++                    .column_statistics
++                    .push(ColumnStatistics::new_unknown());
++            }
++            stats.column_statistics.push(unknown_col_stats);
++        }
++
++        // One additional Int64 output column contributes 8 bytes per row when row counts are known.
++        let added_bytes = stats
++            .num_rows
++            .multiply(&Precision::Exact(std::mem::size_of::<i64>()));
++        stats.total_byte_size = stats.total_byte_size.add(&added_bytes);
++
++        Ok(Arc::new(stats))
++    }
++}
++
++struct DistributedSequenceIdStream {
++    input: Arc<dyn ExecutionPlan>,
++    context: Arc<TaskContext>,
++    current: Option<SendableRecordBatchStream>,
++    next_partition: usize,
++    schema: SchemaRef,
++    col_idx: usize,
++    offset: i64,
++}
++
++impl DistributedSequenceIdStream {
++    fn new(
++        input: Arc<dyn ExecutionPlan>,
++        context: Arc<TaskContext>,
++        schema: SchemaRef,
++        column_name: String,
++    ) -> Result<Self> {
++        let col_idx = schema.index_of(&column_name)?;
++        Ok(Self {
++            input,
++            context,
++            current: None,
++            next_partition: 0,
++            schema,
++            col_idx,
++            offset: 0,
++        })
++    }
++
++    fn make_ids(&mut self, len: usize) -> Result<ArrayRef> {
++        let start = self.offset;
++        let Some(end) = start.checked_add(len as i64) else {
++            return exec_err!(
++                "distributed_sequence_id overflow: exceeded {} rows",
++                i64::MAX
++            );
++        };
++        self.offset = end;
++        let values = (start..end).collect::<Vec<_>>();
++        Ok(Arc::new(Int64Array::from(values)) as ArrayRef)
++    }
++}
++
++impl RecordBatchStream for DistributedSequenceIdStream {
++    fn schema(&self) -> SchemaRef {
++        self.schema.clone()
++    }
++}
++
++impl Stream for DistributedSequenceIdStream {
++    type Item = Result<RecordBatch>;
++
++    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
++        loop {
++            // The input partitions are executed lazily, one at a time, so that
++            // the sequence values stay consecutive in partition order.
++            if self.current.is_none() {
++                if self.next_partition >= self.input.output_partitioning().partition_count() {
++                    return Poll::Ready(None);
++                }
++                let partition = self.next_partition;
++                self.next_partition += 1;
++                match self.input.execute(partition, self.context.clone()) {
++                    Ok(stream) => self.current = Some(stream),
++                    Err(e) => return Poll::Ready(Some(Err(e))),
++                }
++            }
++            let Some(current) = self.current.as_mut() else {
++                return Poll::Ready(None);
++            };
++            match current.as_mut().poll_next(cx) {
++                Poll::Pending => return Poll::Pending,
++                Poll::Ready(None) => {
++                    self.current = None;
++                    continue;
++                }
++                Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
++                Poll::Ready(Some(Ok(batch))) => {
++                    let mut cols = batch.columns().to_vec();
++                    let id_col = match self.make_ids(batch.num_rows()) {
++                        Ok(c) => c,
++                        Err(e) => return Poll::Ready(Some(Err(e))),
++                    };
++                    if self.col_idx > cols.len() {
++                        return Poll::Ready(Some(internal_err!(
++                            "DistributedSequenceIdExec output column index {0} exceeds input column count {1}",
++                            self.col_idx,
++                            cols.len()
++                        )));
++                    }
++                    cols.insert(self.col_idx, id_col);
++                    return Poll::Ready(Some(
++                        RecordBatch::try_new(self.schema.clone(), cols).map_err(Into::into),
++                    ));
++                }
++            }
++        }
++    }
++}
+diff --git a/crates/sail-physical-plan/src/lib.rs b/crates/sail-physical-plan/src/lib.rs
+index 2c4ef7d0..dc8734cb 100644
+--- a/crates/sail-physical-plan/src/lib.rs
++++ b/crates/sail-physical-plan/src/lib.rs
+@@ -1,6 +1,7 @@
+ pub mod barrier;
+ pub mod catalog_command;
+ pub mod coalesce;
++pub mod distributed_sequence_id;
+ pub mod map_partitions;
+ pub mod merge_cardinality_check;
+ pub mod monotonic_id;
+diff --git a/crates/sail-plan/src/function/scalar/misc.rs b/crates/sail-plan/src/function/scalar/misc.rs
+index b2db79b0..16dcbda1 100644
+--- a/crates/sail-plan/src/function/scalar/misc.rs
++++ b/crates/sail-plan/src/function/scalar/misc.rs
+@@ -10,6 +10,7 @@ use sail_catalog::utils::quote_namespace_if_needed;
+ use sail_common_datafusion::extension::SessionExtensionAccessor;
+ use sail_common_datafusion::session::plan::PlanService;
+ use sail_common_datafusion::utils::items::ItemTaker;
++use sail_function::scalar::misc::distributed_sequence_id::SparkDistributedSequenceId;
+ use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
+ use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
+ use sail_function::scalar::misc::raise_error::RaiseError;
+@@ -206,6 +207,10 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
+             F::udf(ThetaSketchEstimateFunction::new()),
+         ),
+         ("theta_union", F::custom(theta_union)),
++        (
++            "distributed_sequence_id",
++            F::udf(SparkDistributedSequenceId::new()),
++        ),
+         (
+             "input_file_block_length",
+             F::unknown("input_file_block_length"),
+diff --git a/crates/sail-plan/src/resolver/query/aggregate.rs b/crates/sail-plan/src/resolver/query/aggregate.rs
+index def69f21..c922649a 100644
+--- a/crates/sail-plan/src/resolver/query/aggregate.rs
++++ b/crates/sail-plan/src/resolver/query/aggregate.rs
+@@ -16,6 +16,7 @@ use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
+ use crate::error::{PlanError, PlanResult};
+ use crate::resolver::expression::NamedExpr;
+ use crate::resolver::state::{AggregateState, PlanResolverState};
++use crate::resolver::tree::distributed_sequence_id::DistributedSequenceIdRewriter;
+ use crate::resolver::tree::explode::ExplodeRewriter;
+ use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+ use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
+@@ -257,6 +258,8 @@ impl PlanResolver<'_> {
+         };
+         let (plan, projections) =
+             self.rewrite_projection::<MonotonicIdRewriter>(plan, projections, state)?;
++        let (plan, projections) =
++            self.rewrite_projection::<DistributedSequenceIdRewriter>(plan, projections, state)?;
+         let (plan, projections) =
+             self.rewrite_projection::<SparkPartitionIdRewriter>(plan, projections, state)?;
+         let (plan, projections) =
+diff --git a/crates/sail-plan/src/resolver/query/column_op.rs b/crates/sail-plan/src/resolver/query/column_op.rs
+index f8ed9e10..eca0a240 100644
+--- a/crates/sail-plan/src/resolver/query/column_op.rs
++++ b/crates/sail-plan/src/resolver/query/column_op.rs
+@@ -12,6 +12,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
+ use crate::error::{PlanError, PlanResult};
+ use crate::resolver::expression::NamedExpr;
+ use crate::resolver::state::PlanResolverState;
++use crate::resolver::tree::distributed_sequence_id::DistributedSequenceIdRewriter;
+ use crate::resolver::tree::explode::ExplodeRewriter;
+ use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+ use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
+@@ -253,6 +254,8 @@ impl PlanResolver<'_> {
+             }
+         }
+         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
++        let (input, expr) =
++            self.rewrite_projection::<DistributedSequenceIdRewriter>(input, expr, state)?;
+         let (input, expr) =
+             self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
+         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
+diff --git a/crates/sail-plan/src/resolver/query/lateral.rs b/crates/sail-plan/src/resolver/query/lateral.rs
+index 85208f2c..848b195e 100644
+--- a/crates/sail-plan/src/resolver/query/lateral.rs
++++ b/crates/sail-plan/src/resolver/query/lateral.rs
+@@ -11,6 +11,7 @@ use crate::error::{PlanError, PlanResult};
+ use crate::function::get_outer_built_in_generator_functions;
+ use crate::resolver::function::PythonUdtf;
+ use crate::resolver::state::PlanResolverState;
++use crate::resolver::tree::distributed_sequence_id::DistributedSequenceIdRewriter;
+ use crate::resolver::tree::explode::ExplodeRewriter;
+ use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+ use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
+@@ -126,6 +127,8 @@ impl PlanResolver<'_> {
+             .await?;
+         let (input, expr) = self.rewrite_wildcard(input, vec![expr], state)?;
+         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
++        let (input, expr) =
++            self.rewrite_projection::<DistributedSequenceIdRewriter>(input, expr, state)?;
+         let (input, expr) =
+             self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
+         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
+diff --git a/crates/sail-plan/src/resolver/query/pivoting.rs b/crates/sail-plan/src/resolver/query/pivoting.rs
+index 0b70ae8f..325f3b91 100644
+--- a/crates/sail-plan/src/resolver/query/pivoting.rs
++++ b/crates/sail-plan/src/resolver/query/pivoting.rs
+@@ -18,6 +18,7 @@ use sail_function::scalar::struct_function::StructFunction;
+ use crate::error::{PlanError, PlanResult};
+ use crate::resolver::expression::NamedExpr;
+ use crate::resolver::state::PlanResolverState;
++use crate::resolver::tree::distributed_sequence_id::DistributedSequenceIdRewriter;
+ use crate::resolver::tree::explode::ExplodeRewriter;
+ use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+ use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
+@@ -407,6 +408,8 @@ impl PlanResolver<'_> {
+ 
+         let (input, expr) =
+             self.rewrite_projection::<MonotonicIdRewriter>(input.clone(), projections, state)?;
++        let (input, expr) =
++            self.rewrite_projection::<DistributedSequenceIdRewriter>(input, expr, state)?;
+         let (input, expr) =
+             self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
+         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
+diff --git a/crates/sail-plan/src/resolver/query/project.rs b/crates/sail-plan/src/resolver/query/project.rs
+index ffcd9fab..8f9b0464 100644
+--- a/crates/sail-plan/src/resolver/query/project.rs
++++ b/crates/sail-plan/src/resolver/query/project.rs
+@@ -14,6 +14,7 @@ use sail_function::scalar::multi_expr::MultiExpr;
+ use crate::error::{PlanError, PlanResult};
+ use crate::resolver::expression::NamedExpr;
+ use crate::resolver::state::PlanResolverState;
++use crate::resolver::tree::distributed_sequence_id::DistributedSequenceIdRewriter;
+ use crate::resolver::tree::explode::ExplodeRewriter;
+ use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+ use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
+@@ -36,6 +37,8 @@ impl PlanResolver<'_> {
+         let expr = self.resolve_named_expressions(expr, schema, state).await?;
+         let (input, expr) = self.rewrite_wildcard(input, expr, state)?;
+         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
++        let (input, expr) =
++            self.rewrite_projection::<DistributedSequenceIdRewriter>(input, expr, state)?;
+         let (input, expr) =
+             self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
+         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
+diff --git a/crates/sail-plan/src/resolver/tree/distributed_sequence_id.rs b/crates/sail-plan/src/resolver/tree/distributed_sequence_id.rs
+new file mode 100644
+index 00000000..1b41bd0d
+--- /dev/null
++++ b/crates/sail-plan/src/resolver/tree/distributed_sequence_id.rs
+@@ -0,0 +1,72 @@
++use std::mem;
++use std::sync::Arc;
++
++use datafusion::common::tree_node::{Transformed, TreeNodeRewriter};
++use datafusion::common::Result;
++use datafusion_expr::expr::ScalarFunction;
++use datafusion_expr::{ident, Expr, Extension, LogicalPlan};
++use sail_common_datafusion::utils::items::ItemTaker;
++use sail_function::scalar::misc::distributed_sequence_id::SparkDistributedSequenceId;
++use sail_logical_plan::distributed_sequence_id::DistributedSequenceIdNode;
++
++use crate::resolver::state::PlanResolverState;
++use crate::resolver::tree::{empty_logical_plan, PlanRewriter};
++
++pub(crate) struct DistributedSequenceIdRewriter<'s> {
++    plan: LogicalPlan,
++    state: &'s mut PlanResolverState,
++    column_name: Option<String>,
++}
++
++impl<'s> PlanRewriter<'s> for DistributedSequenceIdRewriter<'s> {
++    fn new_from_plan(plan: LogicalPlan, state: &'s mut PlanResolverState) -> Self {
++        Self {
++            plan,
++            state,
++            column_name: None,
++        }
++    }
++
++    fn into_plan(self) -> LogicalPlan {
++        self.plan
++    }
++}
++
++impl TreeNodeRewriter for DistributedSequenceIdRewriter<'_> {
++    type Node = Expr;
++
++    fn f_up(&mut self, node: Expr) -> Result<Transformed<Expr>> {
++        let (func, args) = match node {
++            Expr::ScalarFunction(ScalarFunction { func, args }) => (func, args),
++            _ => return Ok(Transformed::no(node)),
++        };
++
++        let inner = func.inner();
++        if !inner.is::<SparkDistributedSequenceId>() {
++            return Ok(Transformed::no(func.call(args)));
++        }
++
++        // `distributed_sequence_id()` is nullary
++        args.zero()?;
++
++        let col = match &self.column_name {
++            Some(c) => c.clone(),
++            None => {
++                // Create an internal-only field id (external name is empty)
++                let col = self.state.register_field_name("");
++
++                let plan = mem::replace(&mut self.plan, empty_logical_plan());
++                self.plan = LogicalPlan::Extension(Extension {
++                    node: Arc::new(DistributedSequenceIdNode::try_new(
++                        Arc::new(plan),
++                        col.clone(),
++                    )?),
++                });
++                self.column_name = Some(col.clone());
++                col
++            }
++        };
++
++        Ok(Transformed::yes(ident(&col)))
++    }
++}
+diff --git a/crates/sail-plan/src/resolver/tree/mod.rs b/crates/sail-plan/src/resolver/tree/mod.rs
+index 66ba8621..e363712f 100644
+--- a/crates/sail-plan/src/resolver/tree/mod.rs
++++ b/crates/sail-plan/src/resolver/tree/mod.rs
+@@ -5,6 +5,7 @@ use datafusion_expr::{EmptyRelation, LogicalPlan};
+ 
+ use crate::resolver::state::PlanResolverState;
+ 
++pub(crate) mod distributed_sequence_id;
+ pub(crate) mod explode;
+ pub(crate) mod monotonic_id;
+ pub(crate) mod spark_partition_id;
+diff --git a/crates/sail-session/src/planner.rs b/crates/sail-session/src/planner.rs
+index 02cd978a..2e3d6c69 100644
+--- a/crates/sail-session/src/planner.rs
++++ b/crates/sail-session/src/planner.rs
+@@ -23,6 +23,7 @@ use sail_data_source::listing::planner::ListingPhysicalPlanner;
+ use sail_delta_lake::physical::DeltaPhysicalPlanner;
+ use sail_iceberg::IcebergPhysicalPlanner;
+ use sail_logical_plan::barrier::BarrierNode;
++use sail_logical_plan::distributed_sequence_id::DistributedSequenceIdNode;
+ use sail_logical_plan::map_partitions::MapPartitionsNode;
+ use sail_logical_plan::monotonic_id::MonotonicIdNode;
+ use sail_logical_plan::range::RangeNode;
+@@ -38,6 +39,7 @@ use sail_logical_plan::streaming::source_adapter::StreamSourceAdapterNode;
+ use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
+ use sail_physical_plan::barrier::BarrierExec;
+ use sail_physical_plan::catalog_command::CatalogCommandExec;
++use sail_physical_plan::distributed_sequence_id::DistributedSequenceIdExec;
+ use sail_physical_plan::map_partitions::MapPartitionsExec;
+ use sail_physical_plan::monotonic_id::MonotonicIdExec;
+ use sail_physical_plan::range::RangeExec;
+@@ -137,6 +139,17 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
+                 node.column_name().to_string(),
+                 UserDefinedLogicalNode::schema(node).inner().clone(),
+             )?)
++        } else if let Some(node) = node.as_any().downcast_ref::<DistributedSequenceIdNode>() {
++            let [input] = physical_inputs else {
++                return internal_err!(
++                    "DistributedSequenceIdExec requires exactly one physical input"
++                );
++            };
++            Arc::new(DistributedSequenceIdExec::try_new(
++                input.clone(),
++                node.column_name().to_string(),
++                UserDefinedLogicalNode::schema(node).inner().clone(),
++            )?)
+         } else if let Some(node) = node.as_any().downcast_ref::<SparkPartitionIdNode>() {
+             let [input] = physical_inputs else {
+                 return internal_err!("SparkPartitionIdExec requires exactly one physical input");
+-- 
+2.43.0
+
