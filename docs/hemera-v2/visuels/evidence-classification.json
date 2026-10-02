@@ -1,0 +1,603 @@
+{
+  "schema_version": 2,
+  "purpose": "Navigation des preuves par contrat. Aucun score ou pourcentage de maturité ne peut être déduit de ces entrées.",
+  "audit_mode": "Relecture des sources et JSON archivés, sans réexécution du banc. La classification ne modifie pas les données historiques.",
+  "independence": "Les familles séparent les contrats, pas des expériences statistiquement indépendantes. Infrastructure, données et mécanismes se recouvrent.",
+  "raw_registry": {
+    "records": 33,
+    "executed_records": 23,
+    "raw_status_counts": {
+      "passed": 18,
+      "failed": 5,
+      "not_executed": 10
+    },
+    "unit": "Entrées du registre, pas tests indépendants",
+    "source": "cleyrop-dm/experiments/hemera-v2-review/evidence/results.json"
+  },
+  "prototype_counterexamples": {
+    "records": 4,
+    "raw_product_guarantees_passed": 0,
+    "catalog_hash_matches_current_source": true,
+    "source": "cleyrop-dm/experiments/prototype-counteraudit/counteraudit-results.json"
+  },
+  "families": [
+    {
+      "id": "publication",
+      "label": "Publication conditionnelle et WAP",
+      "records": [
+        "I1",
+        "I2",
+        "I3",
+        "I4",
+        "WAP-VETO",
+        "INT-3"
+      ],
+      "counterexamples": [
+        "C1",
+        "C2"
+      ],
+      "observation": "Conflits de version et CAS, références, upsert et summary, veto après seed, wrapper sérialisé observés.",
+      "qualification": "partielle_avec_contre_exemples",
+      "open": "Création initiale privée, publisher Rust, fencing au commit, réponse perdue, reprise réelle et publish-then-ack.",
+      "document_anchor": "docs/hemera-v2/10-preuves-et-campagnes.html#famille-publication"
+    },
+    {
+      "id": "authorization",
+      "label": "Autorisation et confidentialité",
+      "records": [
+        "AUTH",
+        "STAGING-ISOLATION",
+        "INT-2",
+        "INT-6",
+        "INT-14"
+      ],
+      "counterexamples": [],
+      "observation": "Grants et révocations réels ; lecture du candidat non publié, puis lecture par snapshot-id après suppression de sa branche. Aucun audit n’est exécuté par STAGING-ISOLATION.",
+      "qualification": "confidentialite_refusee_dans_le_banc",
+      "open": "PEP par édition, objets autorisés, identité par utilisateur et tenant, token exchange, revocation des accès déjà ouverts.",
+      "document_anchor": "docs/hemera-v2/10-preuves-et-campagnes.html#famille-authorization"
+    },
+    {
+      "id": "expiry",
+      "label": "Expiration des droits",
+      "records": [
+        "OPENFGA-TTL",
+        "INT-5"
+      ],
+      "counterexamples": [],
+      "observation": "CEL accepte puis refuse trois contextes temporels fournis ; le modèle natif refuse la condition inconnue.",
+      "qualification": "integration_native_refusee",
+      "open": "Modèle et contexte Lakekeeper, caches, expiration réelle et réconciliation.",
+      "document_anchor": "docs/hemera-v2/10-preuves-et-campagnes.html#famille-expiry"
+    },
+    {
+      "id": "sql_semantics",
+      "label": "Parité des résultats SQL",
+      "records": [
+        "I6",
+        "I8",
+        "INT-1"
+      ],
+      "counterexamples": [],
+      "observation": "Sous-chaîne à zéro divergente ; types unix_timestamp divergents ; date_trunc réconcilié en UTC.",
+      "qualification": "parite_refusee_sur_echantillon",
+      "open": "Contrat de dialecte, types, nullabilité, fuseaux et suite métier sur moteurs finaux sans JVM.",
+      "document_anchor": "docs/hemera-v2/10-preuves-et-campagnes.html#famille-sql-semantics"
+    },
+    {
+      "id": "execution",
+      "label": "Exécution, clients et sessions",
+      "records": [
+        "I9",
+        "I10",
+        "I11",
+        "SPARK-ARTIFACTS",
+        "INT-10",
+        "INT-7"
+      ],
+      "counterexamples": [],
+      "observation": "Closure, SQL, UDF, Arrow et artefacts par session fonctionnent ; classes d’erreur des clients différentes.",
+      "qualification": "partielle_sur_moteur_transitoire",
+      "open": "Contrat d’erreurs, JWT et tenants, image worker, opérateur, candidats Rust finaux.",
+      "document_anchor": "docs/hemera-v2/10-preuves-et-campagnes.html#famille-execution"
+    },
+    {
+      "id": "schema",
+      "label": "Lectures partagées et évolution du schéma",
+      "records": [
+        "MULTI-ENGINE",
+        "SCHEMA-TRANSITION",
+        "INT-8"
+      ],
+      "counterexamples": [],
+      "observation": "Deux lecteurs de la table I3 concordent ; ajout nullable visible dans Spark après refresh.",
+      "qualification": "expand_only_partiel",
+      "open": "Contrat et suppression de champs, lecteurs concurrents, Icegres et matrice complète.",
+      "document_anchor": "docs/hemera-v2/10-preuves-et-campagnes.html#famille-schema"
+    },
+    {
+      "id": "orchestration",
+      "label": "Ordonnancement et livraison durable",
+      "records": [
+        "I12",
+        "INT-4"
+      ],
+      "counterexamples": [],
+      "observation": "File SQL synthétique avec trois threads, dépendances, reprise de lease et complétion obsolète refusée.",
+      "qualification": "completion_sql_uniquement",
+      "open": "Fencing du commit Iceberg, effets externes, journal durable et réconciliation des pertes ou doublons.",
+      "document_anchor": "docs/hemera-v2/10-preuves-et-campagnes.html#famille-orchestration"
+    },
+    {
+      "id": "retention",
+      "label": "Rétention et nettoyage",
+      "records": [
+        "I5"
+      ],
+      "counterexamples": [],
+      "observation": "La propriété max-ref-age-ms est persistée.",
+      "qualification": "metadata_uniquement",
+      "open": "Expiration planifiée, GC, suppression physique, sûreté vis-à-vis du replay et des lecteurs.",
+      "document_anchor": "docs/hemera-v2/10-preuves-et-campagnes.html#famille-retention"
+    },
+    {
+      "id": "planning",
+      "label": "Compilation, plan et adaptateurs",
+      "records": [
+        "I7",
+        "INT-9",
+        "INT-11",
+        "INT-12",
+        "INT-13"
+      ],
+      "counterexamples": [
+        "C3",
+        "C4"
+      ],
+      "observation": "Lignage AST sur une requête ; audit renforcé ignoré, cache autoritaire et import à effet de bord dans le prototype.",
+      "qualification": "prototype_refuse_sur_ces_contrats",
+      "open": "Manifestes déclaratifs, fingerprint du contrat, reconstruction depuis édition, compilateur isolé et régions tiers WAP.",
+      "document_anchor": "docs/hemera-v2/10-preuves-et-campagnes.html#famille-planning"
+    }
+  ],
+  "records": [
+    {
+      "campaign": "I1",
+      "executed": true,
+      "status": "passed",
+      "scope": "PyIceberg 0.12 retry, disabled-retry conflict and explicit recovery",
+      "family": "publication",
+      "evidence_kind": "bounded_assertion_satisfied",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/I1.json"
+    },
+    {
+      "campaign": "I2",
+      "executed": true,
+      "status": "passed",
+      "scope": "New live CAS race, divergence guard, unsafe repoint counterexample",
+      "family": "publication",
+      "evidence_kind": "bounded_assertion_and_counterexample",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/I2.json"
+    },
+    {
+      "campaign": "I3",
+      "executed": true,
+      "status": "passed",
+      "scope": "New live branch isolation",
+      "family": "publication",
+      "evidence_kind": "bounded_assertion_satisfied",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/I3.json"
+    },
+    {
+      "campaign": "I4",
+      "executed": true,
+      "status": "passed",
+      "scope": "Branch upsert, prepublication isolation and origin summary",
+      "family": "publication",
+      "evidence_kind": "summary_roundtrip_only",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/I4.json"
+    },
+    {
+      "campaign": "I5",
+      "executed": true,
+      "status": "passed",
+      "scope": "New live ref retention metadata",
+      "family": "retention",
+      "evidence_kind": "metadata_roundtrip_only",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/I5.json"
+    },
+    {
+      "campaign": "I6",
+      "executed": true,
+      "status": "failed",
+      "scope": "New SQLGlot30.12 transpilation and live Spark versus DuckDB golden subset",
+      "family": "sql_semantics",
+      "evidence_kind": "comparison_method_limit",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/I6.json"
+    },
+    {
+      "campaign": "I7",
+      "executed": true,
+      "status": "passed",
+      "scope": "New schema-qualified AST column lineage",
+      "family": "planning",
+      "evidence_kind": "single_query_ast_assertion",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/I7.json"
+    },
+    {
+      "campaign": "I8",
+      "executed": true,
+      "status": "passed",
+      "scope": "New Spark versus DuckDB boundary semantics samples",
+      "family": "sql_semantics",
+      "evidence_kind": "observation_without_parity_assertion",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/I8.json"
+    },
+    {
+      "campaign": "I9",
+      "executed": true,
+      "status": "passed",
+      "scope": "New cloudpickle3.1.2 cross-process closure",
+      "family": "execution",
+      "evidence_kind": "bounded_assertion_satisfied",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/I9.json"
+    },
+    {
+      "campaign": "I10",
+      "executed": true,
+      "status": "passed",
+      "scope": "New Spark Connect4.1.2 SQL Arrow closure and unsupported API checks",
+      "family": "execution",
+      "evidence_kind": "bounded_assertion_satisfied",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/I10.json"
+    },
+    {
+      "campaign": "I11",
+      "executed": true,
+      "status": "passed",
+      "scope": "New pure Python client, SPARK_REMOTE, RDD, real static bearer rejection",
+      "family": "execution",
+      "evidence_kind": "bounded_assertion_satisfied",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/I11.json"
+    },
+    {
+      "campaign": "I12",
+      "executed": true,
+      "status": "passed",
+      "scope": "New real PostgreSQL SKIP LOCKED / dependencies / lease / stale completion test",
+      "family": "orchestration",
+      "evidence_kind": "queue_completion_fencing_only",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/I12.json"
+    },
+    {
+      "campaign": "INT-1",
+      "executed": true,
+      "status": "failed",
+      "scope": "Strict Arrow schema/value comparison, explicit UTC client/server and DuckDB, three boundary queries",
+      "family": "sql_semantics",
+      "evidence_kind": "requirement_failed",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/INT-1.json"
+    },
+    {
+      "campaign": "INT-2",
+      "executed": false,
+      "status": "not_executed",
+      "reason": "JWT interceptor, token refresh and authenticated tenant isolation not deployed. Static bearer and synthetic-session artifacts were probed separately.",
+      "family": "authorization",
+      "evidence_kind": "not_executed",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/INT-2.json"
+    },
+    {
+      "campaign": "INT-3",
+      "executed": true,
+      "status": "passed",
+      "scope": "New local serialization wrapper, Lakekeeper commits, PostgreSQL locking",
+      "family": "publication",
+      "evidence_kind": "single_process_wrapper_assertion",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/INT-3.json"
+    },
+    {
+      "campaign": "INT-4",
+      "executed": false,
+      "status": "not_executed",
+      "reason": "No Kafka/NATS sink, fault injection, durable delivery or duplicate/loss reconciliation test.",
+      "family": "orchestration",
+      "evidence_kind": "not_executed",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/INT-4.json"
+    },
+    {
+      "campaign": "INT-5",
+      "executed": true,
+      "status": "failed",
+      "scope": "Native Lakekeeper 0.12.0 OpenFGA model accepts no conditional grants. Standalone TTL was tested in another store only.",
+      "family": "expiry",
+      "evidence_kind": "requirement_failed",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/INT-5.json"
+    },
+    {
+      "campaign": "INT-6",
+      "executed": false,
+      "status": "not_executed",
+      "reason": "No requested_subject token exchange or long-job re-exchange. Keycloak only issues synthetic service credentials in this bench.",
+      "family": "authorization",
+      "evidence_kind": "not_executed",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/INT-6.json"
+    },
+    {
+      "campaign": "INT-7",
+      "executed": false,
+      "status": "not_executed",
+      "reason": "No Kubernetes cluster or operator was accessed. Local Spark restart is not this gate.",
+      "family": "execution",
+      "evidence_kind": "not_executed",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/INT-7.json"
+    },
+    {
+      "campaign": "INT-8",
+      "executed": false,
+      "status": "not_executed",
+      "reason": "Only PyIceberg and Spark expand-column/read-cache behavior probed. No Trino or complete migration matrix.",
+      "family": "schema",
+      "evidence_kind": "not_executed",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/INT-8.json"
+    },
+    {
+      "campaign": "INT-9",
+      "executed": false,
+      "status": "not_executed",
+      "reason": "SQLMesh compiler-only acceptance not rerun in this bench.",
+      "family": "planning",
+      "evidence_kind": "not_executed",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/INT-9.json"
+    },
+    {
+      "campaign": "INT-10",
+      "executed": true,
+      "status": "failed",
+      "scope": "Pure Python client vs full PySpark Connect functional subset",
+      "family": "execution",
+      "evidence_kind": "requirement_failed",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/INT-10.json"
+    },
+    {
+      "campaign": "INT-11",
+      "executed": false,
+      "status": "not_executed",
+      "reason": "Doc02 INT-11 defines SQLMesh/dbt region writes under WAP, including CTAS/replace. Not executed.",
+      "family": "planning",
+      "evidence_kind": "not_executed",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/INT-11.json"
+    },
+    {
+      "campaign": "INT-12",
+      "executed": false,
+      "status": "not_executed",
+      "reason": "Doc02 INT-12 defines monitoring of dbt Core/Fusion and adapter readiness. No runtime acceptance test executed.",
+      "family": "planning",
+      "evidence_kind": "not_executed",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/INT-12.json"
+    },
+    {
+      "campaign": "INT-13",
+      "executed": false,
+      "status": "not_executed",
+      "reason": "Doc02 INT-13 defines dbt-spark Iceberg materializations through Lakekeeper. Not executed; target adapters must be without JVM.",
+      "family": "planning",
+      "evidence_kind": "not_executed",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/INT-13.json"
+    },
+    {
+      "campaign": "INT-14",
+      "executed": false,
+      "status": "not_executed",
+      "reason": "No Trino OPA bridge, OAuth2 end-user identity, row/column permissions test.",
+      "family": "authorization",
+      "evidence_kind": "not_executed",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/INT-14.json"
+    },
+    {
+      "campaign": "AUTH",
+      "executed": true,
+      "status": "passed",
+      "scope": "OIDC, native OpenFGA grants and revocation, Lakekeeper REST",
+      "family": "authorization",
+      "evidence_kind": "bounded_assertion_satisfied",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/AUTH.json"
+    },
+    {
+      "campaign": "WAP-VETO",
+      "executed": true,
+      "status": "passed",
+      "scope": "New live blocking audit before publication",
+      "family": "publication",
+      "evidence_kind": "veto_after_seed_only",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/WAP-VETO.json"
+    },
+    {
+      "campaign": "OPENFGA-TTL",
+      "executed": true,
+      "status": "passed",
+      "scope": "Real standalone OpenFGA condition, not INT-5 acceptance",
+      "family": "expiry",
+      "evidence_kind": "isolated_condition_assertion",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/OPENFGA-TTL.json"
+    },
+    {
+      "campaign": "SPARK-ARTIFACTS",
+      "executed": true,
+      "status": "passed",
+      "scope": "Live addArtifacts and two synthetic session separation",
+      "family": "execution",
+      "evidence_kind": "synthetic_session_assertion",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/SPARK-ARTIFACTS.json"
+    },
+    {
+      "campaign": "MULTI-ENGINE",
+      "executed": true,
+      "status": "passed",
+      "scope": "New same-table PyIceberg and Spark through authenticated Lakekeeper",
+      "family": "schema",
+      "evidence_kind": "shared_fixture_assertion",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/MULTI-ENGINE.json"
+    },
+    {
+      "campaign": "SCHEMA-TRANSITION",
+      "executed": true,
+      "status": "passed",
+      "scope": "PyIceberg expand-only change with Spark cached reader and REFRESH TABLE",
+      "family": "schema",
+      "evidence_kind": "shared_fixture_expand_only",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/SCHEMA-TRANSITION.json"
+    },
+    {
+      "campaign": "STAGING-ISOLATION",
+      "executed": true,
+      "status": "failed",
+      "scope": "P0 unpublished rows must be invisible to ordinary dataset readers",
+      "family": "authorization",
+      "evidence_kind": "requirement_failed",
+      "production_qualification": "not_established",
+      "evidence_path": "cleyrop-dm/experiments/hemera-v2-review/evidence/STAGING-ISOLATION.json",
+      "interpretation_note": "Le script lit le candidat, supprime explicitement la branche et relit le snapshot. Il n’exécute aucun audit. Les libellés historiques after_veto et AUDIT_VETO_PAYLOAD ne constituent pas une preuve de veto. WAP-VETO est une autre sonde.",
+      "observed_steps": [
+        "read_unpublished_candidate",
+        "remove_branch_explicitly",
+        "read_snapshot_id_after_branch_removal"
+      ],
+      "audit_executed": false
+    }
+  ],
+  "dependencies": [
+    {
+      "from": "I3",
+      "to": [
+        "MULTI-ENGINE",
+        "SCHEMA-TRANSITION"
+      ],
+      "reason": "Same generated Iceberg table and recorded expected rows"
+    },
+    {
+      "from": "I6",
+      "to": [
+        "INT-1"
+      ],
+      "reason": "UTC/Arrow refinement repeats date_trunc and unix_timestamp"
+    },
+    {
+      "from": "I8",
+      "to": [
+        "INT-1"
+      ],
+      "reason": "Same substr-at-zero counterexample"
+    },
+    {
+      "from": "AUTH",
+      "to": [
+        "INT-5"
+      ],
+      "reason": "Native model id, conditions and table UUID loaded from prior result"
+    },
+    {
+      "from": "I9",
+      "to": [
+        "I10",
+        "INT-10"
+      ],
+      "reason": "Closure serialization reused through Spark UDF; subset overlap, not additive coverage"
+    }
+  ],
+  "unregistered_open_controls": [
+    {
+      "id": "INT-15",
+      "label": "Files authorization",
+      "reason": "Present in doc10 but absent from raw results.json, so not part of the 33 entries."
+    }
+  ],
+  "source_hashes": {
+    "cleyrop-dm/experiments/hemera-v2-review/evidence/results.json": "6d1b89ed39fbf4f4e474656ed46483d8ed99621b1324cc0e3971d483af0217db",
+    "cleyrop-dm/experiments/hemera-v2-review/scripts/summarize.py": "58aa9513667fd0f1707524184fe5cd1dfd299367f43b4a253ff47a69f4f5eb8a",
+    "cleyrop-dm/experiments/hemera-v2-review/scripts/catalog_campaigns.py": "fa5cb3cd58ddec85f4cd1adde1831880d7447232b55a46a159446c391789699f",
+    "cleyrop-dm/experiments/prototype-counteraudit/counteraudit.py": "d2ebd3bf2ebf643cbaca74e264b7a963c47b4cc6dff52546d389035c9ea98382"
+  },
+  "classification_date": "2026-10-02",
+  "historical_data_modified": false,
+  "paths_relative_to": "repository_root",
+  "interpretation_document": "docs/hemera-v2/10-preuves-et-campagnes.html#familles",
+  "visual_document": "docs/hemera-v2/visuels/08-preuves-risques.html",
+  "counterexample_records": [
+    {
+      "id": "C1",
+      "family": "publication",
+      "observation": "Un second catalogue lit main avant le premier veto.",
+      "contract_verdict": "failed_in_prototype"
+    },
+    {
+      "id": "C2",
+      "family": "publication",
+      "observation": "Une promotion divergente remplace une publication production.",
+      "contract_verdict": "failed_in_prototype"
+    },
+    {
+      "id": "C3",
+      "family": "planning",
+      "observation": "Un audit renforcé ne change pas le fingerprint ; un cache vide demande une reconstruction.",
+      "contract_verdict": "failed_in_prototype"
+    },
+    {
+      "id": "C4",
+      "family": "planning",
+      "observation": "Le chargement du plan exécute un import à effet de bord.",
+      "contract_verdict": "failed_in_prototype"
+    }
+  ],
+  "provenance_limitations": [
+    "Le contre-audit émet un commit de référence constant sans contrôler tous les modules concernés.",
+    "Le Python du serveur Spark et la date du résumé sont des constantes dans les scripts.",
+    "Les JSON ne possèdent pas de run commun obligatoire ; un répertoire evidence réutilisé peut mélanger des passages.",
+    "Le runner assemblé final n’a pas été rejoué intégralement.",
+    "Les locks Python fixent les versions sans hashes de toutes les distributions."
+  ],
+  "display_rules": {
+    "top_level": "Afficher les contrats, observations, limites reproduites et preuves ouvertes.",
+    "raw_counts": "Réserver 18/5/10 à un index brut replié avec avertissement sur les entrées non indépendantes.",
+    "forbidden": [
+      "maturity_percentage",
+      "success_ratio",
+      "maturity_gauge",
+      "summed_product_tests"
+    ],
+    "historical_results": "Conserver les statuts archivés et distinguer leur interprétation de la qualification produit."
+  }
+}

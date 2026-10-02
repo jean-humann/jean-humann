@@ -1,0 +1,194 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-02",
+  "scope": "Visual and documentary validation only; no new live platform qualification.",
+  "pages": [
+    {
+      "file": "11-atlas-visuel.html",
+      "html_sha256": "a9608320a5d608c468e83ab52edbefb36ace68fc0a21375088cf334c599f728e",
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "mobile_width": 390
+    },
+    {
+      "file": "01-carte-plateforme.html",
+      "html_sha256": "f84ec7219bc9ffe008207dda14e208a34da161d7b8080cf92ba0df0c346a1dd4",
+      "interactive_nodes": 8,
+      "view_filters": 3,
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "mobile_width": 390
+    },
+    {
+      "file": "02-avant-cible.html",
+      "html_sha256": "c971cc342ba9573a944a4ff76bef6e7b95d0e93441d4450f4410cac6fb2528f8",
+      "interactive_nodes": 8,
+      "view_filters": 0,
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "mobile_width": 390
+    },
+    {
+      "file": "03-icegres-eidos.html",
+      "html_sha256": "f6432f170c309fc52f24b6b240125757ef7e000bef940ef76358c6236aaf9c52",
+      "interactive_nodes": 8,
+      "view_filters": 3,
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "mobile_width": 390
+    },
+    {
+      "file": "04-edition-publish-ack.html",
+      "html_sha256": "66e553458758496034adbddc50160a4b15ba2c24e47cc9a1b756f1e782c47c85",
+      "interactive_nodes": 6,
+      "view_filters": 0,
+      "scenarios": {
+        "normal": {
+          "steps": 5,
+          "final": "TERMINÉ"
+        },
+        "veto": {
+          "steps": 3,
+          "final": "VETO"
+        },
+        "conflit": {
+          "steps": 4,
+          "final": "CONFLIT"
+        },
+        "reponse_perdue": {
+          "steps": 6,
+          "final": "TERMINÉ"
+        },
+        "zombie": {
+          "steps": 4,
+          "final": "REFUS EXIGÉ"
+        },
+        "ack_pending": {
+          "steps": 6,
+          "final": "TERMINÉ"
+        }
+      },
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "mobile_width": 390
+    },
+    {
+      "file": "05-securite-frontieres.html",
+      "html_sha256": "193f01b1d8dc28b561dc8aa23356597947bc5620a8e5ab86fc470c71fdf7b99c",
+      "interactive_nodes": 7,
+      "view_filters": 0,
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "mobile_width": 390
+    },
+    {
+      "file": "06-kinds-provenance.html",
+      "html_sha256": "9b918a1cd552b2b2aa2b8bb7fa7982fa8c3163047317dc2b0b2a55690ba04d4f",
+      "interactive_nodes": 9,
+      "view_filters": 0,
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "mobile_width": 390
+    },
+    {
+      "file": "07-migration-decisions.html",
+      "html_sha256": "c41273de5f6a9552bef8aa8d2980c9571f64886eebb9c9755715bb321a8bb6cc",
+      "interactive_nodes": 8,
+      "view_filters": 0,
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "mobile_width": 390
+    },
+    {
+      "file": "08-preuves-risques.html",
+      "html_sha256": "403a887973f6236d2b2627cbac96263448380fc89c4dafce1b99b7a098f3a30a",
+      "interactive_nodes": 9,
+      "view_filters": 0,
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "mobile_width": 390
+    }
+  ],
+  "pdfs": [
+    {
+      "file": "01-carte-plateforme.pdf",
+      "pages": 2,
+      "sha256": "a9d0aeec978b412696c7b2be2e790b9f58ec85cf4b79399dc9e0acd0eeb97e12"
+    },
+    {
+      "file": "02-avant-cible.pdf",
+      "pages": 2,
+      "sha256": "57780c905068d2297fc235534707c5cb34d014ce5c4f1b7a4bc5262f79028ff0"
+    },
+    {
+      "file": "03-icegres-eidos.pdf",
+      "pages": 2,
+      "sha256": "7780cf1e711452850bd345a064147b4bdce59b4233baff1ce67ef5bac6b049df"
+    },
+    {
+      "file": "04-edition-publish-ack.pdf",
+      "pages": 2,
+      "sha256": "0ca8a9a1f02208e712daa45de60b33570b2c3ba2c5f5fc96fe9d75940795d1b6"
+    },
+    {
+      "file": "05-securite-frontieres.pdf",
+      "pages": 2,
+      "sha256": "6eb7eb248717339e5b3c153eb451385ce097127473ac3cd042fa07298331c58c"
+    },
+    {
+      "file": "06-kinds-provenance.pdf",
+      "pages": 2,
+      "sha256": "86002e83fdfcead0720278be5a72c961b10e65b7ffd4090fb4811f68b80c21e9"
+    },
+    {
+      "file": "07-migration-decisions.pdf",
+      "pages": 2,
+      "sha256": "189e5d3dd7d395a63fe58f1a482222b485b9a11e2a1970d056e9fa9104ca500e"
+    },
+    {
+      "file": "08-preuves-risques.pdf",
+      "pages": 2,
+      "sha256": "bfb55c52a7d44df626a7e4a5b5152dcf66a735d93987332f55c20e11f93a9f3c"
+    },
+    {
+      "file": "hemera-v2-atlas-complet.pdf",
+      "pages": 16,
+      "sha256": "5778b522d65839a4358055b616982d7c7f55eb4655ba3faa5651906432ffa17e"
+    },
+    {
+      "file": "hemera-v2-synthese.pdf",
+      "pages": 3,
+      "sha256": "2703aa2dc285d2a70687fb5d0b6e6e79df696099a912848e32736ec231730213"
+    }
+  ],
+  "errors": [],
+  "static_links": 363,
+  "prototype_preflight": {
+    "demo": "passed before edits",
+    "pytest": "10 passed in 1.34s before edits",
+    "production_qualification": false
+  },
+  "live_campaigns_rerun": false,
+  "browser": "154.0.8037.93",
+  "no_javascript_fallback": "passed",
+  "external_runtime_requests": [],
+  "passed": true
+}

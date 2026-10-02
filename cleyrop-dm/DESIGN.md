@@ -1,348 +1,253 @@
-# Managing Cleyrop datasets on Iceberg — design
+# Pourquoi le prototype cleyrop-dm existe
 
-> État vérifié le 2 octobre 2026 : la démo et les 10 tests existants passent,
-> mais quatre contre-épreuves reproduisent des écarts de WAP, de promotion,
-> de fingerprint et d’isolation du plan. Ce document expose l’intention du
-> prototype, pas une qualification de production. Voir les
-> [preuves et limites](../docs/hemera-v2/10-preuves-et-campagnes.html#prototype)
-> et la [cible Rust sans JVM](../docs/hemera-v2/08-plateforme-rust-sans-jvm.html).
+`cleyrop-dm` explore une gestion déclarative des datasets Iceberg : modèles
+SQL/Python, dépendances, plans, branches, audits et lecture historique. Il
+permet de discuter ces mécanismes avec du code exécutable. La frontière de
+publication gouvernée de Hemera v2 reste à construire.
 
+Le 2 octobre 2026, la démo complète et les dix tests existants passent.
+Quatre contre-épreuves reproduisent pourtant une visibilité avant le premier
+audit, une promotion divergente, un audit renforcé ignoré par le plan et
+l’exécution de code Python pendant la préparation d’un plan. La présente
+révision corrige leur description ; elle ne modifie pas le prototype.
 
-> How to manage Cleyrop datasets (Apache Iceberg tables) *properly* with Python
-> and SQL transformations, taking the good ideas from **dbt-core** and
-> **SQLMesh** and making them native to the Iceberg table format.
+Pour une lecture direction et technique, commencer par l’[atlas
+visuel](../docs/hemera-v2/11-atlas-visuel.html), puis la [cible Rust sans
+JVM](../docs/hemera-v2/08-plateforme-rust-sans-jvm.html). Les [preuves et leurs
+limites](../docs/hemera-v2/10-preuves-et-campagnes.html) distinguent résultats
+locaux, campagnes réelles et critères encore ouverts.
 
-This document is the reasoning behind `cleyrop-dm`. The companion code is a
-working reference implementation: `python demo.py` runs the whole lifecycle
-end-to-end on a local Iceberg warehouse, and `pytest -q` proves the guarantees.
+## 1. Le problème à résoudre
 
----
+Un format de table commun ne suffit pas à gouverner les usages. Il faut savoir
+quelle définition a produit les données, quelles éditions ont été lues,
+quels audits ont autorisé la publication et quelle position source est
+effectivement couverte. Il faut aussi reprendre une exécution sans publier
+deux fois ni acquitter une plage perdue.
 
-## 1. The problem
+Hemera v2 retient une édition publiée comme autorité des données. Pour une
+table, elle référence un snapshot Iceberg identifié. Pour un fichier, un
+modèle ou une définition sémantique, elle porte un index ou manifeste Iceberg
+qui référence des objets immuables. Les index de recherche, caches et
+projections métier doivent pouvoir être reconstruits à partir de ces éditions.
 
-Cleyrop runs a **sovereign lakehouse**: data lives in Apache Iceberg tables in
-object storage the customer controls, behind a catalog (REST / Nessie / Polaris
-/ Glue), queried by several engines. We need to *manage the datasets* on top of
-that lake — the derived tables analysts and ML depend on — with the same rigour
-software gets:
+La cible confirmée impose des cœurs métier Rust et zéro JVM, y compris dans
+les moteurs, l’identité, les notebooks et les outils d’exploitation finaux.
+Le prototype Python reste une référence fonctionnelle. Spark Connect est un
+outil temporaire de comparaison ; sa JVM distante ne satisfait pas cette cible.
 
-1. **Declarative** — a dataset is defined once, in SQL or Python; the framework
-   figures out order, dependencies and rebuilds.
-2. **Safe to change** — you can see what a change will do *before* it runs, and a
-   bad change never corrupts what's live.
-3. **Testable & governed** — data quality is asserted before publication; every
-   change is attributable and reversible. Non-negotiable for a sovereign
-   platform.
-4. **Engine-flexible** — the same transformation runs on DuckDB locally and on a
-   Spark cluster in production, over the *one* Iceberg catalog. Cleyrop's stack
-   is **Spark Connect / PyIceberg / DuckDB**.
+## 2. Ce que nous reprenons de dbt et SQLMesh
 
-Two tools already solve most of this for warehouses. Neither was built for an
-Iceberg-first, multi-engine, sovereign lake. The right answer borrows heavily
-from both and leans on Iceberg for the parts they simulate in software.
+dbt apporte les modèles déclaratifs, les dépendances explicites et les tests.
+SQLMesh apporte notamment fingerprints, plans, audits bloquants et
+environnements virtuels. Ces idées inspirent le prototype sans imposer que
+l’un de ces outils possède la publication ou le curseur d’ingestion.
 
-## 2. What dbt and SQLMesh get right (and wrong for us)
-
-| Dimension | **dbt-core** | **SQLMesh** | What we want |
-|---|---|---|---|
-| Model definition | SQL + **Jinja** macros | SQL (parsed with **SQLGlot**) + **Python** models | SQL *and* first-class Python, **no Jinja** |
-| Dependencies | explicit `{{ ref() }}` / `{{ source() }}` | inferred from parsed SQL | inferred from SQL (SQLGlot), explicit for Python |
-| Change detection | none — you rebuild | **fingerprints** + breaking/non-breaking categorisation | fingerprints; skip unchanged models |
-| Environments | separate target schemas, **full recompute** | **virtual environments** — dev reuses prod tables via view swaps | virtual envs, but **zero-copy at the table-format layer** |
-| Safe deploy | `--defer`, manual blue/green | **virtual layer** promotion (swap views) | atomic promotion, native to Iceberg |
-| Tests / audits | `tests/` run *after* build | **audits** + blocking runs | audits run **before publish** (WAP) |
-| Time travel / rollback | — | snapshot-ish via state | native **Iceberg snapshots** |
-| State | run artifacts | dedicated state DB | state DB for `plan`, catalog for data |
-
-**dbt's** weak spots for us: Jinja string-templating instead of understanding
-SQL; no change-awareness (every `dbt run` rebuilds); environments are physically
-separate schemas (expensive full copies); tests run after data is already
-written.
-
-**SQLMesh's** great ideas — fingerprints, virtual environments, blocking audits,
-plan/apply — are implemented *in the framework* on top of whatever warehouse it
-targets. Its "virtual environment" is a layer of **views** that point at
-physically named tables. That's clever, but it's a software re-implementation of
-something **Iceberg already does at the storage layer**.
-
-## 3. The key insight: Iceberg already has the hard parts
-
-Iceberg is not just a file layout — it's a versioned, branchable, ACID table
-format. Three native features map exactly onto what dbt/SQLMesh emulate:
-
-| We need… | SQLMesh does… | Iceberg gives us… |
+| Besoin | Apport des outils | Choix Hemera |
 |---|---|---|
-| Isolated environments | a view layer over hash-named tables | **branches** (`main`, `env_dev`, …) — zero-copy, instant |
-| Safe deploy of new data | swap views atomically | **Write-Audit-Publish**: write to a branch, audit, fast-forward ref |
-| Rollback / history | reconstruct from state | **snapshots** + `rollback_to_snapshot`, scan `snapshot_id` |
-| Schema change safety | categorise + recreate | **schema evolution** with compatibility rules |
+| Décrire un traitement | SQL, configuration, dépendances et modèles Python selon outil | Manifeste versionné commun au code et à l’interface |
+| Sélectionner le travail | dbt possède sélection par état et defer ; SQLMesh exploite ses fingerprints et plans | Distinguer changement logique, nouvelles entrées et revalidation d’audit |
+| Réutiliser un environnement | Vues virtuelles, defer ou clone selon moteur | Réutiliser des éditions explicitement épinglées |
+| Contrôler une publication | Tests et audits, avec mécanismes propres à l’outil | Audits du candidat exact avant la décision de publication |
+| Reprendre une ingestion | États et artefacts propres à chaque exécutant | Curseur et état de reprise portés par la dernière édition publiée |
 
-So the design principle is:
+La sélection par état et defer peuvent limiter le travail exécuté par dbt.
+Ses documentations décrivent
+[state et defer](https://docs.getdbt.com/reference/node-selection/defer), ainsi
+que [clone](https://docs.getdbt.com/reference/commands/clone), dont le mécanisme
+dépend de la plateforme. Ces fonctions ne prouvent pas pour autant le contrat
+de publication Hemera. Les wrappers dbt, SQLMesh et dlt restent à qualifier
+dans un espace privé, avec entrées gouvernées et sorties préparées.
 
-> **Don't re-implement versioning in the framework. Use Iceberg branches, tags
-> and snapshots directly, and keep the framework thin: a DAG, fingerprints, a
-> WAP orchestrator, and pluggable engines.**
+## 3. Ce que le code exécute aujourd’hui
 
-This is the difference between "dbt/SQLMesh pointed at Iceberg" and a system
-designed *for* Iceberg.
+Le runner charge les modèles, construit le graphe et compare leurs fingerprints
+avec ceux de SQLite. Pour les modèles sélectionnés, il lit les relations en
+Arrow, appelle le moteur ou la fonction Python, matérialise le résultat,
+exécute les audits puis enregistre le résultat dans le state store.
 
-## 4. Architecture
+| Module | Responsabilité observée |
+|---|---|
+| `config.py`, `model.py` | Configuration YAML, en-têtes SQL, modèles Python et dépendances |
+| `dag.py`, `fingerprint.py`, `plan.py` | Ordre des modèles, hash récursif et sélection des changements |
+| `engines/` | Exécution SQL DuckDB et adaptateur Spark Connect |
+| `catalog.py` | Tables, branches d’environnement, matérialisation, promotion et scans historiques |
+| `audits.py` | Assertions sur les données Arrow calculées |
+| `state.py`, `runner.py`, `cli.py` | État local, exécution du plan et commandes utilisateur |
 
-```
-        ┌───────────────────────── cleyrop-dm ─────────────────────────┐
- models │  parse & config → DAG (SQLGlot) → fingerprints → plan         │
-  .sql  │        │                                    │                 │
-  .py   │        ▼                                    ▼                 │
-        │   ┌─────────┐   compute    ┌──────────────────────────────┐   │
-        │   │ engines │◀────────────▶│  runner  (apply under WAP)   │   │
-        │   │ duckdb  │   Arrow      └──────────────┬───────────────┘   │
-        │   │ spark   │                             │ pyiceberg          │
-        │   │ connect │                             ▼                    │
-        │   └─────────┘        ┌───────────────────────────────────┐    │
-        │                      │        Iceberg catalog            │    │
-   state│  fingerprints +      │  analytics.customer_orders        │    │
-   .db  │  snapshot history    │    main(prod) · env_dev · wap     │    │
-        │                      │    snapshots → time travel        │    │
-        └──────────────────────┴───────────────────────────────────┘    │
-```
-
-Components (all in `cleyrop_dm/`):
-
-- **`config`** — project (`cleyrop_project.yml`) and per-model config.
-- **`model`** — `SqlModel` / `PythonModel`; parses the `-- @key:` header DSL and
-  infers SQL dependencies with SQLGlot.
-- **`dag`** — resolves refs to models vs declared sources; topological order;
-  cycle detection.
-- **`fingerprint`** — recursive content hash per model → change detection.
-- **`engines`** — `DuckDBEngine`, `SparkConnectEngine`, over a tiny `Engine`
-  interface (run SQL over named Arrow relations → Arrow).
-- **`catalog`** — the Iceberg layer: environments-as-branches, WAP, promotion,
-  time travel.
-- **`audits`** — dbt-style tests, evaluated on staged data before publish.
-- **`state`** — applied fingerprints + snapshot history (SQLite here; catalog-
-  adjacent in production).
-- **`plan` / `runner`** — decide what will change, then apply it safely.
-- **`cli`** — `plan` · `apply` · `run` · `promote` · `history` · `ls`.
-
-## 5. Models: SQL and Python, no Jinja
-
-A model is a named dataset that yields an Arrow table.
-
-**SQL models** are a `SELECT` with a comment header — SQLMesh-style, so the SQL
-stays valid and runnable on its own:
+Un modèle SQL décrit par exemple sa sortie et ses audits dans un en-tête :
 
 ```sql
--- @model: customer_orders
+-- @model: customer_totals
 -- @materialization: table
--- @audits: not_null(customer_id), unique(customer_id), row_count_at_least(1)
-SELECT c.customer_id, c.name, count(o.order_id) AS n_orders, ...
-FROM stg_customers c LEFT JOIN stg_orders o USING (customer_id)
-GROUP BY 1, 2
+-- @audits: not_null(customer_id), unique(customer_id)
+SELECT customer_id, SUM(amount) AS total_amount
+FROM orders
+GROUP BY customer_id
 ```
 
-Dependencies (`stg_customers`, `stg_orders`) are **parsed out of the SQL** with
-SQLGlot — CTE names excluded, sources vs models classified by the DAG. No
-`ref()` macros, no Jinja rendering step, no string soup.
+Les modèles Python exposent `META` et une fonction `model(ctx)`. Le contexte
+résout les relations amont en Arrow. Leur chargement exécute actuellement le
+module pour lire ses métadonnées. Demander un plan n’est donc pas une opération
+sans effets de bord pour un projet Python non maîtrisé.
 
-**Python models** are for what SQL is bad at (feature engineering, scoring):
+Trois matérialisations existent : `TABLE`, `INCREMENTAL` et `VIEW`. Une table
+existante est remplacée par overwrite ; l’incrémental utilise upsert avec les
+clés déclarées. La VIEW est une expression éphémère du graphe, sans édition
+persistée propre. Le `source()` d’ingestion et les autres kinds du design
+ne sont pas implémentés.
 
-```python
-META = {"name": "customer_features", "depends_on": ["customer_orders"], ...}
-def model(ctx):
-    co = ctx.ref("customer_orders")   # Arrow, read from the current environment
-    return pa.table({...})            # return a pyarrow.Table
-```
+## 4. Branches et WAP : fonctionnement et écarts
 
-Both flavours get the same DAG, fingerprints, WAP, audits and time travel. The
-runner reads a model's upstreams from the *current environment's Iceberg branch*
-and hands them to the engine (or to the Python `ctx`).
+Le prototype associe `prod` à `main`, et les autres environnements à
+`env_<nom>`. Créer une référence vers un snapshot existant réutilise ses
+fichiers. Cela n’isole ni le schéma de table, ni ses propriétés globales,
+ni les droits sur les objets. La [documentation Iceberg des
+branches](https://iceberg.apache.org/docs/latest/branching/) explicite notamment
+le schéma partagé entre branches.
 
-## 6. The DAG and fingerprints
-
-Every model gets a **fingerprint**: a hash of its own logic + config, combined
-with the fingerprints of everything it depends on. Two consequences:
-
-- **Recursive dirtiness for free** — change one model and every descendant's
-  fingerprint changes, so they're rebuilt without special-casing.
-- **`plan` before `apply`** — diff desired fingerprints against the last-applied
-  ones (from the state store) and show exactly which models will move, per
-  environment, *before any data changes*. This is what makes changes reviewable.
-
-Unchanged models are skipped: their Iceberg data is still valid, so there's
-nothing to do. (SQLMesh's core insight; dbt lacks it.)
-
-## 7. Environments = Iceberg branches (the core move)
-
-Each managed table lives once, in the project namespace (e.g.
-`analytics.daily_revenue`). Environments are **branches** of that table:
-
-- `prod`  → the `main` branch.
-- `dev` / any feature env → a branch `env_<name>`, created off `main`.
-
-Creating a dev environment is **zero-copy and instant** — a branch is just a
-named pointer to a snapshot; no data is duplicated. Building a model in `dev`
-writes only to `env_dev`; readers on `prod`/`main` see nothing change. When a
-dev model reads an upstream that *wasn't* rebuilt in dev, the scan simply falls
-back to `main` — dev transparently reuses prod data (exactly SQLMesh's virtual-
-environment reuse, but at the storage layer).
-
-The demo shows this precisely: after an incremental run in `dev`, the table
-carries both refs and the two environments show different data:
-
-```
-Iceberg refs on daily_revenue: ['env_dev', 'main']
-dev  daily_revenue:  {...'2026-06-05': 225.0}   # 5 days
-prod daily_revenue:  {...}                       # 4 days — untouched
-```
-
-## 8. Write-Audit-Publish (WAP)
-
-Every materialisation is transactional at the table level, but we want the
-publish to be gated by **data audits**, not just by a successful write. Iceberg
-branches give us the classic WAP pattern natively:
-
-```
- 1. WRITE    branch `wap` off the environment head; write the new data to `wap`
- 2. AUDIT    scan `wap`; run the model's audits on exactly what would be published
- 3. PUBLISH  audits pass → fast-forward the env branch to `wap`, drop `wap`
-             audits fail → drop `wap`; the environment never moved
-```
-
-Mapped to PyIceberg primitives (see `catalog.py`):
-
-| Step | PyIceberg call |
+| Chemin du prototype | Comportement et limite |
 |---|---|
-| branch | `table.manage_snapshots().create_branch(head, "wap")` |
-| write (full) | `table.overwrite(arrow, branch="wap")` |
-| write (incremental) | `table.upsert(arrow, join_cols=key, branch="wap")` |
-| audit | `table.scan(snapshot_id=wap_head).to_arrow()` → `run_audits(...)` |
-| publish (main) | `manage_snapshots().set_current_snapshot(wap_head)` |
-| publish (env branch) | move the branch ref to `wap_head` |
-| abort | `manage_snapshots().remove_branch("wap")` |
+| Table existante | Écriture sur `wap`, audit du snapshot obtenu, puis déplacement de la référence cible. Le nom `wap` est partagé entre tentatives, ce qui ne protège pas deux runs concurrents. |
+| Première création | Création et append sur `main` avant audit. Un veto supprime ensuite l’entrée catalogue, sans annuler une lecture déjà effectuée. Une première création en dev passe aussi par main. |
+| Publication vers main | `set_current_snapshot` déplace la référence. Le code n’ajoute pas de contrôle d’ascendance métier à la promotion. |
+| Publication vers une autre branche | Suppression puis recréation de la référence dans deux commits distincts. |
+| Promotion de plusieurs modèles | Traitement séquentiel des tables. Un échec intermédiaire peut laisser un ensemble de versions partiellement promu. |
 
-The demo's audit-veto act proves the guarantee: a `-500` refund makes a day's
-revenue negative, the `expression(revenue >= 0)` audit fails on the `wap`
-branch, the publish is vetoed, **prod is byte-for-byte unchanged**, and the
-staging branch is cleaned up. Bad data never becomes visible.
+Le veto de la démo confirme que la production du scénario reste inchangée
+après un audit échoué sur une table déjà publiée. Il ne prouve pas cette
+garantie pour la première création ou la concurrence. Les [contre-épreuves
+du prototype](experiments/prototype-counteraudit/README.md) reproduisent ces
+limites sur des données temporaires.
 
-## 9. Materializations → Iceberg operations
+Supprimer une branche ne supprime pas nécessairement ses snapshots et fichiers.
+Le [banc Lakekeeper/OpenFGA](experiments/hemera-v2-review/README.md) a aussi
+reproduit une lecture de staging avant publication puis après suppression de
+la branche. Un grant de lecture sur toute la table n’est pas une frontière de
+confidentialité suffisante.
 
-| Materialization | Meaning | Iceberg operation |
-|---|---|---|
-| `table` | full refresh | `overwrite` (atomic replace) on the WAP branch |
-| `incremental` | merge new/changed rows by `unique_key` | `upsert(join_cols=…)` (row-level MERGE) |
-| `view` | ephemeral staging, never persisted | inlined/recomputed on demand; recorded for lineage only |
+## 5. Plans, entrées et historique
 
-Incremental models run on a cadence to pick up new source rows even when their
-code is unchanged (`--force` / `force=True`), just like a scheduled `dbt run` or
-a SQLMesh interval. Fingerprints govern *code* changes; the schedule governs
-*data* arrival.
+Le fingerprint actuel couvre le corps du modèle, sa matérialisation, les clés
+de merge et les hashes des modèles amont. Il ne couvre pas tout le contrat.
+Renforcer uniquement un audit SQL peut laisser le plan inchangé. La catégorie
+`NON_BREAKING` est déclarée, mais la fonction de catégorisation ne la produit
+pas dans le code observé.
 
-## 10. Engines: one catalog, many compute layers
+Le state store SQLite décide quels fingerprints sont appliqués. Perdre ce
+cache change le plan, alors que les données Iceberg subsistent. Les écritures
+actuelles ne portent pas les propriétés `origin.*` permettant la reprise
+cible. Aucun acquittement de source n’est implémenté dans ce prototype.
 
-The `Engine` contract is deliberately tiny: *run SQL over named Arrow relations,
-return Arrow*. Everything else (WAP, audits, state) is engine-independent.
+Les entrées ne sont pas résolues une fois pour tout le run. Une branche absente
+retombe sur le `main` courant ; plusieurs lectures peuvent donc observer des
+éditions différentes. Le contrat cible doit figer les entrées et refuser un
+pin manquant, sauf règle de résolution explicitement déclarée au plan.
 
-- **DuckDB** — in-process; upstream Iceberg data is handed over as Arrow
-  (zero-copy) and the model SQL runs locally. Perfect for dev, CI and
-  small/medium datasets. This is what the demo and tests run on.
-- **Spark Connect** — a thin gRPC client submits the same SQL to a remote Spark
-  cluster (no local JVM). For large datasets, `run_sql_on_catalog(...)` lets
-  Spark read the Iceberg tables **directly from the shared catalog** and never
-  ship data through the client — the scalable path.
-- **PyIceberg** — the metadata/commit layer used everywhere internally (branches,
-  snapshots, upsert), plus Arrow compute for Python models.
+`history()` liste les snapshots physiques et `scan_at()` accepte un identifiant
+de snapshot. Ils ne distinguent pas encore éditions publiées, candidats et
+snapshots rejetés. Le time travel gouverné devra vérifier la publication
+historique, les droits actuels et la disponibilité des fichiers. L’historique
+des snapshots ne constitue pas, seul, un registre de publications.
 
-Because all engines read and write the same catalog, DuckDB locally and Spark in
-production are interchangeable for the *same* model definitions.
+## 6. Le contrat de publication cible
 
-## 11. Governance, contracts and sovereignty
+Ce protocole est une proposition à implémenter dans les cœurs Rust partagés.
+Il est détaillé dans la [décision
+EL-4](../docs/hemera-v2/09-decision-el4-wap.html) et le [visuel édition,
+publication et acquittement](../docs/hemera-v2/visuels/04-edition-publish-ack.html).
 
-For a sovereign platform, *how* data changes matters as much as *what* it
-contains:
+1. Le plan fixe les entrées, le contrat, les audits, l’identité, les limites et
+   la plage source. Chaque tentative reçoit son propre staging privé.
+2. Le writer crée un snapshot candidat avec `origin.cursor`, l’état de reprise
+   et la provenance dans son summary. Un champ auto-déclaré ne lui donne pas
+   le statut publié.
+3. Les audits portent sur ce candidat exact. Leur preuve immuable doit être
+   conservée et liée au candidat. Son support durable et sa récupération
+   font partie du protocole à qualifier ; un fast-forward ne réécrit pas le
+   summary pour y ajouter après coup le résultat des audits.
+4. Le publisher vérifie les droits, l’ascendance, l’UUID, les références et
+   les versions de schéma/spec attendues. Un changement global de schéma
+   impose une précondition de commit ou une revalidation explicite.
+5. Le commit conditionnel établit la publication. Le contrôle des générations
+   périmées doit agir au même point de décision ou bénéficier d’une
+   sérialisation prouvée, failover compris. Le REST Iceberg propose des
+   assertions sur UUID, refs et schéma, pas un fencing Hemera natif.
+6. Le coordinateur retrouve un reçu de publication certain avant d’acquitter
+   la source. Une réponse réseau perdue ne prouve pas que le commit a échoué.
+   Un candidat seulement préparé n’autorise jamais l’acquittement.
 
-- **Data never leaves the lake.** All materialisation is catalog-native; compute
-  reads and writes the customer's own Iceberg storage. Spark's catalog push-down
-  keeps even large joins inside the cluster.
-- **Audits are blocking and pre-publication.** Quality is enforced *before*
-  anything is visible, not detected afterwards.
-- **Everything is attributable and reversible.** The state store records which
-  fingerprint and which snapshot is live in each environment; Iceberg keeps the
-  full snapshot history. Any prior state is one `snapshot_id` away (§ time
-  travel), and rollback is a ref move.
-- **Schema is a contract.** Iceberg's schema-evolution rules (safe adds/renames
-  via field IDs; blocked incompatible changes) back a model's declared output
-  contract. Breaking schema changes surface in `plan`.
-- **Lineage** falls out of the DAG (model↔model, model↔source) and can be
-  emitted to a catalog / OpenLineage for the data-governance layer.
+Le [contrat REST Iceberg
+épinglé](https://github.com/apache/iceberg/blob/apache-iceberg-1.7.2/open-api/rest-catalog-open-api.yaml)
+définit les assertions du catalogue. Il ne prouve ni le publisher applicatif,
+ni la confidentialité des objets, ni le comportement d’un writer particulier.
 
-## 12. Lifecycle
+Pour plusieurs sorties, une release est elle-même une édition Iceberg qui
+référence les membres validés. Les consommateurs du groupe résolvent cette
+release avant leurs lectures. Des déplacements successifs des `main` ne
+rendent pas atomiques les lecteurs qui continuent de consulter chaque table
+indépendamment.
 
+## 7. Moteurs, gouvernance et exploitation
+
+DuckDB exécute les scénarios locaux. Le runner charge les relations en Arrow ;
+l’adaptateur Spark peut aussi les convertir en Pandas. Sa méthode de lecture
+directe du catalogue ne démontre pas que le chemin principal l’utilise. La
+localisation des données, les copies et les accès réseau doivent être qualifiés
+sur le chemin réellement exécuté.
+
+Partager un catalogue ne rend pas les moteurs interchangeables. Le banc a
+trouvé des divergences Spark/DuckDB sur `substr('abc',0,2)` et sur des types.
+Icegres/DataFusion, DuckDB et les candidats distribués sans JVM devront passer
+une matrice de valeurs, types, schémas, deletes, ressources et erreurs. Aucun
+client parlant un protocole compatible n’est déclaré substituable sur ce seul
+critère.
+
+Les lectures gouvernées passent d’abord par Query et Files, avec résolution
+d’éditions publiées autorisées. L’accès natif attend une preuve équivalente
+sur métadonnées, manifests, données et fichiers de suppression. Les états
+non publiés restent privés, y compris après veto.
+
+Le rollback ne peut ni rétracter un ack déjà envoyé, ni annuler un effet
+externe ou une suppression physique. Le schéma partagé et les politiques
+d’accès suivent leurs propres règles. Restaurer derrière le curseur acquitté
+exige un journal couvrant l’écart, sinon une reprise contrôlée sous une
+nouvelle époque source. Expiration et GC doivent préserver les éditions,
+lectures, exécutions et sauvegardes encore retenues.
+
+Migrer SQLite vers Lakekeeper demande configuration, authentification,
+stockage, droits et campagnes de panne. Une modification YAML ne prouve pas
+cette migration. Les [transactions multi-tables de
+Nessie](https://projectnessie.org/guides/transactions/) sont des capacités de
+son catalogue dont l’exposition dépend des moteurs ; elles ne doivent pas
+être attribuées indistinctement à Polaris ou au format Iceberg.
+
+## 8. Ordre de poursuite et vérification
+
+Le [HANDOVER](../HANDOVER.md) fixe les six invariants et le backlog. L’ordre
+retenu est d’implémenter EL-4, de fermer les critères de confidentialité,
+publication concurrente et reprise, puis de construire EL-1 à EL-13 et
+d’étendre les kinds. Les quatre contre-épreuves servent de cas de régression.
+Le travail inclut les pins d’entrée, le staging unique, la reconstruction du
+cache, les fingerprints de contrat et l’isolation de la compilation Python.
+
+Flows porte les runs bornés et les workers fongibles. Icegres fournit des
+composants de calcul et d’écriture à adapter ; Eidos produit des plans
+sémantiques et d’action. L’ajout de STREAM, FILESET, MODEL, EMBEDDINGS,
+FEATURESET et des contrats d’export ne doit pas créer une autre autorité de
+publication. Les identités, clés, drafts, commandes et reçus d’effets externes
+gardent leurs journaux et sauvegardes propres.
+
+Pour vérifier le parcours local existant :
+
+```bash
+cd cleyrop-dm
+python -m pip install -e . pyarrow pytest
+python demo.py
+python -m pytest -q
 ```
-edit model → plan (what will change, per env)
-           → apply to dev   (WAP + audits on env_dev, prod untouched)
-           → inspect dev data / lineage
-           → promote dev → prod   (blue/green: fast-forward main, atomic)
-           → (later) time-travel / rollback if needed
-```
 
-`promote` is a ref fast-forward per table — instant and atomic, the storage-
-layer equivalent of SQLMesh's view swap, with no recompute.
-
-## 13. Why not just use dbt or SQLMesh directly?
-
-You can, and for a pure-warehouse shop you probably should. This design exists
-because Cleyrop is **Iceberg-first, multi-engine and sovereign**:
-
-- dbt would give us Jinja, full-copy environments and post-hoc tests — a poor
-  fit for zero-copy branches and pre-publish gating.
-- SQLMesh is much closer in spirit (fingerprints, virtual envs, audits, plan/
-  apply) and is the primary inspiration — but its virtual layer re-implements in
-  views what Iceberg does in branches, and it isn't designed around Spark
-  Connect + PyIceberg + DuckDB over one catalog.
-
-`cleyrop-dm` keeps SQLMesh's *concepts* and rebuilds the *mechanism* on Iceberg
-primitives, which is simpler, atomic, and free of a shadow versioning system.
-
-## 14. Production hardening (roadmap)
-
-The prototype is intentionally small. To run this for real:
-
-1. **Catalog** — swap the local SQLite catalog for **REST / Nessie / Polaris /
-   Glue**; only `cleyrop_project.yml` changes. Nessie/Polaris add *catalog-level*
-   branching across many tables (multi-table atomic promotion).
-2. **Concurrency** — rely on Iceberg optimistic commits; add retry/backoff on
-   commit conflicts and per-model locks in the state store.
-3. **Orchestration** — schedule `plan`/`apply` from Airflow/Dagster; incremental
-   models run on their cadence.
-4. **Column-level lineage** — SQLGlot can derive it from the parsed SQL; emit to
-   the governance catalog.
-5. **Maintenance** — schedule Iceberg compaction, snapshot expiration and orphan-
-   file cleanup (retaining enough history for the rollback SLA).
-6. **Streaming/CDC** — land raw via Kafka/Flink into Iceberg; incremental models
-   pick it up by time window.
-7. **RBAC & audit log** — enforce who can `promote` to `prod`; sign every apply
-   with actor + fingerprint + snapshot for the sovereign audit trail.
-8. **Backfills & data tests as gates in CI** — run `plan` + audits on a dev
-   branch in CI on every PR; block merge on audit failure.
-
-## 15. Concept map
-
-| Concept | dbt-core | SQLMesh | **cleyrop-dm (Iceberg-native)** |
-|---|---|---|---|
-| Model | `.sql` + Jinja | `.sql`/`.py`, SQLGlot | `.sql`/`.py`, SQLGlot, header DSL |
-| Dependencies | `ref()`/`source()` | inferred | inferred (SQL) + explicit (Python) |
-| Change detection | — | fingerprints | recursive fingerprints |
-| Environment | target schema (copy) | virtual layer (views) | **Iceberg branch (zero-copy)** |
-| Safe publish | manual blue/green | view swap | **WAP branch + fast-forward** |
-| Tests | post-hoc `tests/` | blocking audits | **pre-publish audits (on `wap`)** |
-| Incremental | `is_incremental()` | by time range | `upsert(join_cols)` (Iceberg MERGE) |
-| Rollback / history | — | state | **Iceberg snapshots / `rollback`** |
-| Promote | rebuild in prod | promote virtual env | **fast-forward `main` ref** |
-
----
-
-**In one line:** keep SQLMesh's ideas, drop its shadow versioning, and let
-Iceberg's branches, snapshots and schema evolution *be* the version-control layer
-for Cleyrop's data — driven by SQL and Python models over DuckDB and Spark
-Connect on a single sovereign catalog.
+Le succès attendu des dix tests décrit cette suite. Les campagnes de sécurité,
+de parité et de reprise ont leurs résultats distincts dans le document 10.
+L’exécution des contre-épreuves réussit lorsqu’elle reproduit les écarts ;
+elle ne valide pas les garanties produit correspondantes.

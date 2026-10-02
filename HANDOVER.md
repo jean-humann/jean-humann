@@ -43,7 +43,8 @@ pas le binaire `pytest` du PATH. Le préflight emploie Python 3.13.14, PyIceberg
 | Documents 01 à 07 | Copies historiques conservées, non modifiées. Leurs généralisations sont corrigées par les addenda. |
 | [08, cible Rust sans JVM](docs/hemera-v2/08-plateforme-rust-sans-jvm.html) | Étude du laboratoire de référence, du monorepo, d’Icegres et d’Eidos ; 20 missions distinctes exécutées par vagues de trois. |
 | [09, décision EL-4](docs/hemera-v2/09-decision-el4-wap.html) | Extracteur OLake Go encapsulé, writer/publisher Rust. Choix architectural tranché ; implémentation à réaliser. |
-| [10, preuves et campagnes](docs/hemera-v2/10-preuves-et-campagnes.html) | Banc réel local : 33 sondes/gates, 18 passent, 5 échouent, 10 non exécutés. Ce décompte n’est pas une acceptation produit. |
+| [10, preuves et campagnes](docs/hemera-v2/10-preuves-et-campagnes.html) | Banc réel local : 33 entrées qui se recoupent, 18 passed, 5 failed, 10 not_executed. Reclassées en neuf familles de contrats, sans score de maturité. |
+| [11, atlas visuel](docs/hemera-v2/11-atlas-visuel.html) | Huit HTML dédiés direction/technique, 16 SVG clair/sombre, huit PDF de deux pages, dossiers direction (3 pages) et complet (16 pages). |
 | [Banc reproductible](cleyrop-dm/experiments/hemera-v2-review/README.md) | Lakekeeper/OpenFGA/OIDC/S3/Spark Connect réels, données synthétiques, preuves assainies et versions épinglées. Nettoyage terminé. L’enchaînement final assemblé n’a pas été rejoué intégralement. |
 | [Contre-épreuves du prototype](cleyrop-dm/experiments/prototype-counteraudit/README.md) | Quatre écarts reproduits : visibilité avant premier audit, promotion divergente, audits/fingerprints/cache, import Python durant plan. Aucune garantie produit validée par ces sondes. |
 
@@ -51,7 +52,8 @@ Les constats qui changent la suite du travail :
 
 - Un lecteur `select` sur une table du banc récupère les données staging par
   GET signé avant publication, puis après suppression de la branche. Main
-  reste intact. WAP protège la publication, pas automatiquement les octets.
+  reste intact. Cette sonde ne déclenche pas elle-même un audit ; WAP-VETO est
+  séparée. WAP protège la publication, pas automatiquement les octets.
 - Le modèle natif Lakekeeper 0.12.0/OpenFGA testé refuse les conditions TTL.
   Un test OpenFGA isolé ne prouve pas l’intégration Lakekeeper.
 - La parité Spark/DuckDB échoue sur des valeurs ou types. Le cas date_trunc
@@ -60,6 +62,20 @@ Les constats qui changent la suite du travail :
   historique « aucun retry » ne s’applique pas à cette version.
 - Un lease ou un verrou local ne prouve pas le fencing au commit de destination
   pendant un failover. Les campagnes réelles ne ferment pas ce gate.
+- Le droit Lakekeeper `modify` inclut `can_commit` et `can_drop`, sans
+  séparation staging/main dans le modèle inspecté. Le worker générique ne le
+  reçoit pas : un writer de confiance médie déjà les commits de staging.
+- I4 prouve la persistance de `origin.state` sur le même handle, pas une
+  reprise. I6 ne compare pas strictement les types ; I8 n’affirme pas de parité
+  malgré son statut passed. Les WAP positifs partent d’un main initialisé.
+
+La relecture demandée pour un public mixte a repris tout le corpus, corrigé le
+corps de 08–10 et réécrit DESIGN en français. Les sept originaux restent
+conservés ; le [registre de corrections](docs/hemera-v2/11-atlas-visuel.html#relecture)
+rend leurs écarts explicites. Trois agents de la flotte initiale ont été
+réutilisés pour l’architecture, les preuves et la cohérence éditoriale. La démo
+et les dix tests ont été revérifiés avant modification (10 passed en 1,34 s).
+Aucun banc réel n’a été relancé pour cette seconde livraison.
 
 Les JVM Spark/Keycloak du banc sont transitoires. Aucun cluster client n’a été
 modifié. Les arbres locaux Icegres/Eidos avec modifications utilisateur ont été
@@ -72,13 +88,16 @@ préservés ; aucun de leurs fichiers n’a été committé ici.
    Ils sont attachés au candidat dès sa création. Une propriété globale de
    table, un state file ou PostgreSQL Flows ne remplace pas cette autorité.
 2. **Publish-then-ack.** La source n’est acquittée qu’après la publication qui
-   couvre sa plage. Une réponse de commit perdue se résout par recherche du
-   receipt idempotent. Un receipt de réception HTTP durable ne prétend pas
-   être une publication métier.
+   couvre sa plage. Une réponse de commit perdue se résout dans l’historique
+   autorisé des publications, pas dans tous les snapshots ou tous les ancêtres
+   du head. Si la preuve manque, bloquer et réconcilier. Un receipt de réception
+   HTTP durable ne prétend pas être une publication métier.
 3. **WAP partout.** Stage privé par tentative, audits du snapshot exact, puis
-   publication conditionnelle avec ascendance, UUID et têtes attendues. Un
-   veto ne crée aucune édition publiée. Il peut laisser des objets privés à
-   nettoyer ; leur confidentialité est un contrat distinct à tester.
+   publication conditionnelle avec ascendance, UUID, têtes et schéma/spec
+   attendus. La preuve d’audit post-candidat doit être liée durablement ; un
+   fast-forward ne réécrit pas son summary. Les fichiers audités sont immuables
+   face au worker. Un veto ne crée aucune édition publiée. Il peut laisser des
+   objets privés à nettoyer ; leur confidentialité est un contrat à tester.
 4. **Journal rejouable.** Les flux éphémères entrent d’abord dans une capture
    durable. La rétention, la synchronisation disque et les domaines de panne
    font partie de la garantie. Un broker nommé ne la prouve pas.
@@ -97,7 +116,14 @@ passent leurs propres audits avant publication.
 FILESET, MODEL, VIEW et EMBEDDINGS ont aussi une édition Iceberg autoritaire de
 données ou de manifeste. Leurs index/aliases sont dérivés. Une release de
 plusieurs sorties est elle-même une édition Iceberg qui référence ses membres,
-avec lecteurs épinglés ; des promotions successives ne prouvent pas l’atomicité.
+avec lecteurs épinglés et checkpoint commun (source, époque, plage,
+participants) ; des promotions successives ne prouvent pas l’atomicité.
+
+La taxonomie distingue huit kinds de datasets, EXPORT comme effet externe et
+EXPOSURE comme déclaration de consommateur. SOURCE, OP et TEST sont des nœuds
+de flow. La compaction peut publier sous WAP ; expiration et GC exigent un plan
+audité, des racines de rétention et un journal de suppression. Une branche ne
+permet pas d’annuler un effacement physique.
 
 Les éditions reconstruisent les projections de données, mais pas les identités,
 clés, drafts non publiés, commandes et reçus d’effets externes. Ceux-ci exigent
@@ -107,13 +133,13 @@ bloquer puis reconstituer la source sous une nouvelle époque.
 
 ## 4. Lecture et conventions documentaires
 
-Lire [l’index](docs/hemera-v2/README.md) pour les dix documents. Les sept HTML
+Lire [l’index](docs/hemera-v2/README.md) pour les onze documents et huit planches. Les sept HTML
 initiaux restent les copies historiques de leurs publications. Les addenda
-08, 09 et 10 sont locaux ; aucune publication claude.ai nouvelle n’est annoncée.
+08 à 11 sont locaux ; aucune publication claude.ai nouvelle n’est annoncée.
 Les six invariants et les addenda priment en cas de contradiction.
 
-Le [DESIGN du prototype](cleyrop-dm/DESIGN.md) explique l’intention et renvoie
-maintenant aux contre-épreuves. Ne pas convertir les tests locaux verts en
+Le [DESIGN du prototype](cleyrop-dm/DESIGN.md) distingue désormais dans son corps
+le comportement observé, les contre-épreuves et la cible. Ne pas convertir les tests locaux verts en
 preuve de concurrence, de sécurité ou d’acquittement exactement une fois.
 
 Les documents sont en français, autonomes, sans CDN, avec variables CSS
@@ -121,6 +147,13 @@ clair/sombre et SVG inline thémés. Valider balises, liens relatifs et ancres.
 Si un original claude.ai est édité, télécharger sa version finale et réécrire
 ses liens vers les copies locales selon la procédure de l’index. Les originaux
 n’ont pas été modifiés par cette reprise.
+
+Les planches sont générées depuis `docs/hemera-v2/visuels/content.py` et les
+sources CSS/JS/SVG du même dossier. Ne pas éditer leurs HTML à la main. Le
+[guide de reconstruction](docs/hemera-v2/visuels/README.md) et le
+[rapport de validation](docs/hemera-v2/visuels/validation.json) décrivent
+les contrôles navigateur, clavier, mobile, hors ligne et PDF. Ces contrôles
+documentaires ne qualifient aucun mécanisme de production.
 
 ## 5. Backlog, dans l’ordre
 
@@ -164,7 +197,7 @@ contre-exemples ne doivent pas être comptés comme des tests produit verts.
 > Reprends Hemera v2 sur la branche imposée. Lis HANDOVER.md, puis
 > docs/hemera-v2/README.md, puis cleyrop-dm/DESIGN.md dans cet ordre. Installe
 > l’environnement, exécute la démo et les dix tests avant modification.
-> Lis ensuite les addenda 08 à 10. Respecte les six invariants, la cible finale
+> Lis ensuite les addenda 08 à 10 et l’atlas 11. Respecte les six invariants, la cible finale
 > zéro JVM et le core Rust des services. Continue le backlog §5 dans l’ordre,
 > en distinguant décision, implémentation et preuve. Committe et pousse sur la
 > même branche, sans PR. Les gates de confidentialité, fencing et reprise

@@ -1,11 +1,15 @@
 # Hemera v2 — série de documents de design
 
-Dix documents HTML autoportants, sans CDN, avec thème clair/sombre automatique.
+Onze documents principaux et huit planches dédiées, en HTML autoportant,
+sans CDN, avec thème clair/sombre. L’[atlas visuel](11-atlas-visuel.html)
+est l’entrée pour une lecture mixte direction et équipes techniques.
 Les documents 01 à 07 conservent leur version historique publiée. Les addenda
 08 à 10 intègrent la demande du 2 octobre 2026 : cores Rust, zéro JVM dans la
 cible finale, Icegres/Eidos et les preuves de reprise. En cas de contradiction,
 les six invariants du HANDOVER et ces addenda priment sur les anciennes
-propositions. Les liens croisés sont locaux.
+propositions. La seconde relecture corrige le corps de 08–10 et du DESIGN du
+prototype ; le [registre de corrections](11-atlas-visuel.html#relecture)
+relie aussi les sept originaux à leur règle actuelle. Les liens sont locaux.
 
 ## Lecture
 
@@ -14,7 +18,7 @@ Ouvrir n'importe quel fichier dans un navigateur, ou servir le dossier :
 ```bash
 cd docs/hemera-v2
 python3 -m http.server 8000
-# puis http://localhost:8000/01-architecture-flows-datasets.html
+# puis http://localhost:8000/11-atlas-visuel.html
 ```
 
 ## Ordre de lecture
@@ -31,15 +35,34 @@ python3 -m http.server 8000
 | ⑧ | [`08-plateforme-rust-sans-jvm.html`](08-plateforme-rust-sans-jvm.html) | Étude consolidée des 20 missions : comparaison de la référence, services Rust, contrôle/données, Icegres/Eidos, retrait JVM et migration |
 | ⑨ | [`09-decision-el4-wap.html`](09-decision-el4-wap.html) | Décision EL-4 : extracteur Go, writer/publisher Rust, WAP et publish-then-ack ; confidentialité et CDC |
 | ⑩ | [`10-preuves-et-campagnes.html`](10-preuves-et-campagnes.html) | Préflight vert, campagnes réelles, échecs et limites, quatre contre-épreuves du prototype, registre des 20 missions |
+| ⑪ | [`11-atlas-visuel.html`](11-atlas-visuel.html) | Huit planches interactives, lectures Synthèse/Technique, SVG éditables, PDF et registre de relecture |
 
 Pour reprendre le travail après les lectures obligatoires du HANDOVER, lire 08,
 puis 09 et 10 avant d’implémenter le backlog. Les sept documents initiaux donnent
 le détail des contrats historiques, pas un état intégralement validé de la cible.
 
+## Planches et exports
+
+| Planche | Sujet |
+|---|---|
+| [01 — Carte de plateforme](visuels/01-carte-plateforme.html) | Contrôle, données, writer et publisher de confiance |
+| [02 — Avant / cible](visuels/02-avant-cible.html) | Retrait de toutes les JVM, contrats conservés, candidats ouverts |
+| [03 — Icegres / Eidos](visuels/03-icegres-eidos.html) | Lecture épinglée et action passant par Flows |
+| [04 — Publication / ack](visuels/04-edition-publish-ack.html) | Six scénarios interactifs : normal, veto, conflit, réponse perdue, zombie, ack incertain |
+| [05 — Sécurité](visuels/05-securite-frontieres.html) | Confidentialité des octets et privilèges de commit |
+| [06 — Kinds](visuels/06-kinds-provenance.html) | Huit datasets ; EXPORT comme effet, EXPOSURE comme déclaration |
+| [07 — Migration](visuels/07-migration-decisions.html) | Dépendances, cohortes et preuves d’acceptation |
+| [08 — Preuves](visuels/08-preuves-risques.html) | Neuf familles de contrats, sans score de maturité |
+
+Chaque planche fournit deux SVG (clair/sombre) et un PDF avec annexe technique.
+Les dossiers [direction, trois pages](visuels/exports/hemera-v2-synthese.pdf) et
+[complet, seize pages](visuels/exports/hemera-v2-atlas-complet.pdf) sont prêts à
+partager. Voir le [guide de reconstruction et validation](visuels/README.md).
+
 ## Versions en ligne
 
 Les originaux 01 à 07 sont référencés ci-dessous. Ils n’ont pas été modifiés par
-cette reprise ; leurs copies locales ont été conservées. Les addenda 08 à 10
+ces reprises ; leurs copies locales ont été conservées. Les addenda 08 à 11
 sont de nouveaux documents locaux, sans version claude.ai annoncée :
 
 - ① https://claude.ai/code/artifact/0554ae1e-f790-43ba-be76-4a5d48b5d66d
@@ -60,9 +83,11 @@ Le prototype exécutable du framework est dans [`../../cleyrop-dm/`](../../cleyr
 - [Banc réel Lakekeeper/OpenFGA/Spark Connect](../../cleyrop-dm/experiments/hemera-v2-review/README.md) : scripts, versions épinglées, résultats assainis. Spark et Keycloak servent uniquement de références transitoires.
 - [Contre-épreuves locales du prototype](../../cleyrop-dm/experiments/prototype-counteraudit/README.md) : quatre écarts reproduits, distincts des dix tests existants.
 
-Les résultats du banc sont des données synthétiques. Leur statut décrit la
-sonde, pas l’acceptation de la plateforme. Les preuves de confidentialité,
-de TTL et de parité SQL empêchent une conclusion globalement verte.
+Les résultats du banc portent sur des données synthétiques. Les 33 entrées se
+recoupent ; leur statut décrit une sonde ou un gate, pas l’acceptation de la
+plateforme. La [classification par contrat](visuels/evidence-classification.json)
+précise les limites d’I4, I6 et I8. Confidentialité, TTL et parité SQL empêchent
+une conclusion globalement verte. La relecture visuelle n’a pas relancé le banc.
 
 ## Synchroniser un document publié
 
