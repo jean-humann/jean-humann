@@ -1,0 +1,352 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}</style></head><body>
+<title>Hemera v2 — Revue technique d'intégration</title>
+<style>
+  :root {
+    --bg:#eff1f5; --bg-soft:#e6e9ef; --card:#fff; --card-alt:#dce0e8;
+    --text:#4c4f69; --text-soft:#6c6f85; --text-dim:#8c8fa1; --line:#ccd0da;
+    --accent:#e25a1c; --accent-2:#1e66f5; --green:#40a02b; --mauve:#8839ef;
+    --red:#d20f39; --yellow:#df8e1d; --teal:#179299;
+    --code-bg:#1e1e2e; --code-text:#cdd6f4;
+    --shadow:0 1px 3px rgba(76,79,105,.12),0 8px 24px rgba(76,79,105,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#1e1e2e; --bg-soft:#181825; --card:#313244; --card-alt:#11111b;
+      --text:#cdd6f4; --text-soft:#bac2de; --text-dim:#9399b2; --line:#45475a;
+      --accent:#fab387; --accent-2:#89b4fa; --green:#a6e3a1; --mauve:#cba6f7;
+      --red:#f38ba8; --yellow:#f9e2af; --teal:#94e2d5;
+      --code-bg:#11111b; --code-text:#cdd6f4;
+      --shadow:0 1px 3px rgba(0,0,0,.3),0 8px 28px rgba(0,0,0,.35);
+    }
+  }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.65; -webkit-font-smoothing:antialiased; }
+  code,pre,.mono { font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  .wrap { max-width:980px; margin:0 auto; padding:0 22px 110px; }
+  a { color:var(--accent-2); text-decoration:none; } a:hover { text-decoration:underline; }
+
+  header.hero {
+    background:radial-gradient(1200px 420px at 10% -10%,rgba(30,102,245,.16),transparent 60%),
+      radial-gradient(950px 380px at 96% 0%,rgba(226,90,28,.13),transparent 55%),var(--bg-soft);
+    border-bottom:1px solid var(--line); padding:56px 22px 44px; text-align:center;
+  }
+  .badge { display:inline-flex; align-items:center; gap:8px; background:var(--card);
+    border:1px solid var(--line); color:var(--text-soft); padding:6px 14px;
+    border-radius:999px; font-size:13px; font-weight:600; margin-bottom:18px; }
+  .badge .dot { width:8px; height:8px; border-radius:50%; background:var(--accent-2); box-shadow:0 0 0 4px rgba(30,102,245,.16); }
+  header.hero h1 { margin:0 0 12px; font-size:clamp(26px,4.2vw,38px); line-height:1.14; letter-spacing:-.02em; text-wrap:balance; }
+  header.hero h1 em { color:var(--accent-2); font-style:normal; }
+  header.hero p.lead { margin:0 auto; max-width:770px; font-size:16.5px; color:var(--text-soft); }
+  .meta-pills { margin-top:20px; display:flex; gap:9px; justify-content:center; flex-wrap:wrap; }
+  .pill { font-size:12.5px; font-weight:600; padding:5px 12px; border-radius:8px; background:var(--card); border:1px solid var(--line); color:var(--text-soft); }
+
+  .toc { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px 22px; margin-top:32px; box-shadow:var(--shadow); }
+  .toc b { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim); display:block; margin-bottom:6px; }
+  .toc ol { margin:2px 0 0; padding-left:20px; } .toc li { margin:3px 0; font-size:14px; }
+  .toc .cols { display:grid; grid-template-columns:1fr 1fr; gap:0 30px; }
+  @media (max-width:640px){ .toc .cols{ grid-template-columns:1fr; } }
+
+  section { margin-top:46px; }
+  h2 { font-size:22px; letter-spacing:-.01em; margin:0 0 6px; display:flex; align-items:center; gap:11px; flex-wrap:wrap; }
+  h2 .num { flex:none; min-width:34px; height:32px; padding:0 10px; border-radius:9px; background:var(--accent-2); color:#fff; font-size:14px; font-weight:800; display:grid; place-items:center; }
+  @media (prefers-color-scheme: dark){ h2 .num{ color:#1e1e2e; } }
+  .section-sub { color:var(--text-dim); margin:0 0 18px; font-size:14.5px; }
+  h4.mini { font-size:13.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-dim); margin:20px 0 8px; }
+  p { margin:0 0 13px; }
+  ul { margin:6px 0 13px; padding-left:20px; } li { margin:3px 0; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:20px 22px; box-shadow:var(--shadow); }
+  p code,li code,td code { background:var(--card-alt); color:var(--accent); padding:1.5px 6px; border-radius:6px; font-size:.88em; font-weight:600; }
+
+  pre { background:var(--code-bg); color:var(--code-text); border-radius:12px; padding:14px 16px; overflow-x:auto; font-size:12.2px; line-height:1.55; margin:12px 0; border:1px solid rgba(255,255,255,.06); }
+  pre .c{color:#6c7086;font-style:italic} pre .k{color:#cba6f7} pre .s{color:#a6e3a1} pre .f{color:#89b4fa} pre .n{color:#fab387}
+
+  .tablewrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; margin-top:8px; font-size:12.9px; }
+  th,td { text-align:left; padding:9px 11px; border-bottom:1px solid var(--line); vertical-align:top; }
+  thead th { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-dim); background:var(--bg-soft); }
+  tbody tr:last-child td { border-bottom:none; }
+  td.feat { font-weight:600; }
+  .yes{color:var(--green);font-weight:700} .no{color:var(--red);font-weight:700} .mid{color:var(--yellow);font-weight:700}
+
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:13px; }
+  @media (max-width:700px){ .grid2{ grid-template-columns:1fr; } }
+  .benefit { background:var(--card); border:1px solid var(--line); border-radius:15px; padding:16px 17px; }
+  .benefit .ic { display:inline-grid; place-items:center; width:38px; height:38px; border-radius:11px; background:var(--bg-soft); border:1px solid var(--line); font-size:19px; margin-bottom:10px; }
+  .benefit > b { display:block; margin-bottom:4px; font-size:14px; }
+  .benefit p { font-size:12.9px; color:var(--text-soft); margin:0; line-height:1.55; }
+  .benefit p b { color:var(--text); }
+  .tone-good .ic{ background:color-mix(in srgb,var(--green) 15%,var(--card)); border-color:color-mix(in srgb,var(--green) 42%,var(--line)); }
+  .tone-bad .ic{ background:color-mix(in srgb,var(--red) 14%,var(--card)); border-color:color-mix(in srgb,var(--red) 40%,var(--line)); }
+  .tone-warn .ic{ background:color-mix(in srgb,var(--yellow) 16%,var(--card)); border-color:color-mix(in srgb,var(--yellow) 42%,var(--line)); }
+  .tone-info .ic{ background:color-mix(in srgb,var(--accent-2) 14%,var(--card)); border-color:color-mix(in srgb,var(--accent-2) 38%,var(--line)); }
+
+  .note { border:1px solid color-mix(in srgb,var(--accent-2) 32%,var(--line)); background:color-mix(in srgb,var(--accent-2) 7%,var(--card)); border-radius:13px; padding:13px 17px; margin:14px 0; font-size:13.6px; line-height:1.6; }
+  .note.warn{ border-color:color-mix(in srgb,var(--yellow) 40%,var(--line)); background:color-mix(in srgb,var(--yellow) 10%,var(--card)); }
+  .note.tip{ border-color:color-mix(in srgb,var(--green) 36%,var(--line)); background:color-mix(in srgb,var(--green) 8%,var(--card)); }
+  .note.danger{ border-color:color-mix(in srgb,var(--red) 36%,var(--line)); background:color-mix(in srgb,var(--red) 7%,var(--card)); }
+  .note b { color:var(--text); }
+
+  .tg { font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; padding:2px 8px; border-radius:5px; vertical-align:middle; white-space:nowrap; }
+  .tg.ok{ background:color-mix(in srgb,var(--green) 15%,var(--card)); color:var(--green); }
+  .tg.ko{ background:color-mix(in srgb,var(--red) 13%,var(--card)); color:var(--red); }
+  .tg.wr{ background:color-mix(in srgb,var(--yellow) 16%,var(--card)); color:var(--yellow); }
+  .tg.nf{ background:var(--bg-soft); color:var(--text-dim); border:1px solid var(--line); }
+  .tg.emp{ background:color-mix(in srgb,var(--accent-2) 13%,var(--card)); color:var(--accent-2); }
+
+  footer { margin-top:60px; padding-top:22px; border-top:1px solid var(--line); text-align:center; color:var(--text-dim); font-size:13px; }
+</style>
+
+<header class="hero">
+  <div class="badge"><span class="dot"></span> Revue technique &middot; Plateforme Hemera v2 &middot; complète l'annexe schéma</div>
+  <h1>Revue d'intégration : <em>chaque composant, chaque couture</em><br>testés ensemble avant d'écrire une ligne de prod</h1>
+  <p class="lead">Même méthode que pour le schéma Iceberg : <b>exécuter plutôt que croire</b>. 12 campagnes de tests (I1–I12) sur les composants réels — <b>Spark Connect 4.1.2</b> (serveur + client, la version exacte du runtime Hemera), <b>PostgreSQL 16</b> (la file de jobs), <b>PyIceberg 0.11</b> (WAP concurrent), <b>SQLGlot 30</b> (transpilation &amp; lignage), <b>cloudpickle</b> — et une revue sur pièces, avec versions épinglées, pour ce qui exige un cluster (Lakekeeper, OpenFGA, Keycloak, opérateur K8s, Trino, SQLMesh).</p>
+  <div class="meta-pills">
+    <span class="pill">🔬 12 campagnes empiriques</span>
+    <span class="pill">✅ 9 coutures validées</span>
+    <span class="pill">🟡 réserves outillées (INT-1…14)</span>
+    <span class="pill">🔴 1 décision restante : D3 (D1·D2 résolues)</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div style="font-size:12px; color:var(--text-soft); border:1px solid var(--line); border-radius:10px; padding:9px 14px; margin:0 0 18px; line-height:1.9;"><b>Série Hemera v2 — document ⑤ · Revue d'intégration (gate des epics — lire en dernier).</b> Ordre de lecture : ① <a href="01-architecture-flows-datasets.html">Architecture</a> → ② <a href="02-modele-de-developpement.html">Modèle de développement</a> → ③ <a href="03-design-frontend.html">Design frontend</a> → ④ <a href="04-annexe-schema-iceberg.html">Annexe schéma Iceberg</a> → ⑤ ce document → ⑥ <a href="06-annexe-el-cdc-olake.html">Annexe EL &amp; CDC (étude OLake)</a>.</div>
+
+
+  <div class="toc">
+    <b>Sommaire</b>
+    <div class="cols">
+      <div>
+        <ol>
+          <li><a href="#verdict">Verdict global — la matrice</a></li>
+          <li><a href="#spark">Couture A · Client ⇄ Spark Connect <span class="tg emp">empirique</span></a></li>
+          <li><a href="#queue">Couture B · Orchestrateur ⇄ file Postgres <span class="tg emp">empirique</span></a></li>
+          <li><a href="#iceberg">Couture C · lake ⇄ Iceberg (WAP concurrent) <span class="tg emp">empirique</span></a></li>
+          <li><a href="#sql">Couture D · SQL multi-moteurs &amp; lignage <span class="tg emp">empirique</span></a></li>
+        </ol>
+      </div>
+      <div>
+        <ol start="6">
+          <li><a href="#sqlmesh">Couture E · SQLMesh ⇄ Flows — la tension à trancher</a></li>
+          <li><a href="#gouvernance">Couture F · Lakekeeper · OpenFGA · Keycloak</a></li>
+          <li><a href="#infra">Couture G · Opérateur Spark · workers · Kafka · Trino</a></li>
+          <li><a href="#decisions">Décisions D1–D3 &amp; tickets E-INT</a></li>
+          <li><a href="#statuts">Statuts épinglés au 2 juillet 2026 <span class="tg emp">fraîcheur</span></a></li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <section id="verdict">
+    <h2><span class="num">1</span> Verdict global — la matrice</h2>
+    <p class="section-sub">Tout ce qui pouvait être exécuté ici l'a été. Rien de bloquant ; trois décisions à prendre avant E3.</p>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Composant / couture</th><th>Verdict</th><th>Base</th><th>Points clés</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">Spark Connect 4.1.2 (client⇄serveur)</td><td><span class="tg ok">✅ validé</span></td><td class="feat">I10–I11 exécutés</td><td>SQL/Arrow/UDF/addArtifacts/token OK · <b>pyspark-client 4.1.2</b> pour l'image worker</td></tr>
+          <tr><td class="feat">File de jobs Postgres (SKIP LOCKED)</td><td><span class="tg ok">✅ validé</span></td><td class="feat">I12 exécuté (PG 16)</td><td>lease · deps · crash → re-lease · ordre respecté</td></tr>
+          <tr><td class="feat">lake ⇄ Iceberg : WAP, provenance, branches</td><td><span class="tg ok">✅ validé, 2 correctifs</span></td><td class="feat">I1–I5 + prototype</td><td>pas d'auto-retry PyIceberg · publish = fast-forward <b>avec contrôle d'ascendance</b></td></tr>
+          <tr><td class="feat">SQL multi-moteurs (SQLGlot) &amp; lignage colonne</td><td><span class="tg ok">✅ validé</span></td><td class="feat">I6–I8 exécutés</td><td>transpile OK · <code>lineage()</code> OK (qualifier d'abord) · golden tests requis</td></tr>
+          <tr><td class="feat">UDF / cloudpickle / versions Python</td><td><span class="tg ok">✅ validé</span></td><td class="feat">I9–I10</td><td>closure cross-process + à travers Connect · pin 3.11.x</td></tr>
+          <tr><td class="feat">Schéma Iceberg (branches/WAP/snapshots)</td><td><span class="tg ok">✅ validé</span></td><td class="feat">F1–F16 (annexe dédiée)</td><td>règles R1–R14</td></tr>
+          <tr><td class="feat">SQLMesh en mode « intégration »</td><td><span class="tg ko">🔴 à trancher</span></td><td>revue sur pièces</td><td>son état + sa couche virtuelle recouvrent nos fingerprints + branches → décision D1</td></tr>
+          <tr><td class="feat">Lakekeeper (events, HA, migration)</td><td><span class="tg wr">🟡 réserves</span></td><td>PoC + docs</td><td>remote-signing validé (PoC) · sink d'events &amp; sémantique de livraison à valider en E4</td></tr>
+          <tr><td class="feat">OpenFGA (grants TTL)</td><td><span class="tg wr">🟡 réserves</span></td><td>revue sur pièces</td><td>pas de TTL natif → conditions + réconciliateur (déjà prévu) — mécanique précisée</td></tr>
+          <tr><td class="feat">Keycloak (RFC 8693)</td><td><span class="tg wr">🟡 réserves</span></td><td>revue sur pièces</td><td>token-exchange standard GA récent — version à épingler</td></tr>
+          <tr><td class="feat">Opérateur Spark K8s (serveur Connect long-vivant)</td><td><span class="tg wr">🟡 réserves</span></td><td>revue sur pièces</td><td>service 15002, restart, <code>shuffleTracking</code> pour dynamic allocation · jar <code>iceberg-spark-runtime-4.1</code> à vérifier</td></tr>
+          <tr><td class="feat">Trino (identité par utilisateur)</td><td><span class="tg ko">🔴 à trancher</span></td><td>revue sur pièces</td><td>l'identité s'arrête à Trino sans mécanisme dédié → décision D2</td></tr>
+          <tr><td class="feat">Isolation worker (nsjail)</td><td><span class="tg ko">🔴 à trancher</span></td><td>revue sur pièces</td><td>privilèges kernel sur K8s → décision D3 (nsjail vs gVisor vs pod-par-job)</td></tr>
+          <tr><td class="feat">Kafka (OpenLineage · change events)</td><td><span class="tg wr">🟡 réserves</span></td><td>revue sur pièces</td><td>clé de partition = table · idempotence par snapshot-id — règles posées</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+  </section>
+
+  <section id="spark">
+    <h2><span class="num">2</span> Couture A · Client ⇄ Spark Connect <span class="tg emp">I10–I11 exécutés — Spark 4.1.2 réel</span></h2>
+    <p class="section-sub">Un serveur Spark Connect 4.1.2 a tourné ici (Java 21) ; le client a été exercé exactement comme le seront les workers.</p>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Test</th><th>Résultat</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">I10a · Session Connect</td><td class="yes">ouverte en 8,5 s (JVM incluse) · <code>type(spark)</code> = client Connect</td></tr>
+          <tr><td class="feat">I10b · SQL via gRPC + retour Arrow</td><td class="yes">agrégation exécutée côté serveur, résultat Arrow exact</td></tr>
+          <tr><td class="feat">I10c · UDF Python (closure)</td><td class="yes">cloudpickle traverse le fil, exécutée côté serveur, closure capturée</td></tr>
+          <tr><td class="feat">I10d · <code>sparkContext</code></td><td class="yes">inaccessible (PySparkAttributeError) — conforme Connect</td></tr>
+          <tr><td class="feat">I11a · <code>SPARK_REMOTE</code> + <code>getOrCreate()</code></td><td class="yes">produit un client Connect <b>sans changement de code</b> — le contrat du SDK <code>cleyrop_legacy</code> tient</td></tr>
+          <tr><td class="feat">I11b · <code>df.rdd.zipWithIndex()</code></td><td class="yes">échoue en <code>PySparkNotImplementedError</code> — confirme que les 2 réécritures SDK sont les seules requises ; <code>monotonically_increasing_id</code> fonctionne en remplacement</td></tr>
+          <tr><td class="feat">I11c · <code>addArtifacts(pyfile=True)</code></td><td class="yes">module envoyé puis <b>importé côté serveur dans une UDF</b> — le chemin <code>InternalModule</code> de data-dev est viable</td></tr>
+          <tr><td class="feat">I11d · Auth dans l'URL <code>sc://</code></td><td class="yes"><code>;token=</code> (bearer) + <code>SPARK_CONNECT_AUTHENTICATE_TOKEN</code> présents dans le client 4.1.2 — le JWT par session est natif côté client</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <div class="note tip"><b>Trouvaille d'architecture — l'image worker :</b> le venv <code>pyspark[connect]</code> complet pèse <b>787 Mo</b> (il embarque les jars du serveur). Or Spark 4 publie <b><code>pyspark-client</code> 4.1.2</b> (et <code>pyspark-connect</code>) : le client pur Python, sans JVM ni jars. → L'image <code>flows-worker</code> doit embarquer <code>pyspark-client</code>, pas <code>pyspark</code> — démarrage plus rapide, surface d'attaque réduite, image de plusieurs centaines de Mo plus légère. (Le paquet complet reste celui du <i>serveur</i> Connect / <code>dataflow-spark-runner</code>.)</div>
+    <div class="note warn"><b>Réserves (cluster requis — checklist E-INT) :</b> ① <b>refresh du JWT en cours de session</b> : le token est fixé à l'ouverture du canal ; pour les sessions longues, recréer la session ou interceptor client custom — à tester contre le vrai serveur ; ② l'<b>interceptor serveur</b> (<code>JwtAuthInterceptor</code>/<code>UserTokenBridge</code> du PoC) se branche via <code>spark.connect.grpc.interceptor.classes</code> — revalider sur 4.1.2 ; ③ <b>artefact <code>iceberg-spark-runtime-4.1_2.13</code></b> : vérifier sa disponibilité (Iceberg 1.11) avant de figer l'image serveur ; ④ UDF + <code>addArtifacts</code> sur serveur <b>mutualisé</b> : les artefacts sont par session Connect — vérifier l'isolation entre sessions de tenants différents.</div>
+  </section>
+
+  <section id="queue">
+    <h2><span class="num">3</span> Couture B · Orchestrateur ⇄ file Postgres <span class="tg emp">I12 exécuté — PostgreSQL 16 réel</span></h2>
+    <p class="section-sub">La table <code>flow_job</code> exacte de l'architecture, 3 workers concurrents, un crash simulé.</p>
+    <div class="card">
+      <p>Schéma de l'architecture §14 monté tel quel (états, <code>depends_on</code>, lease TTL, <code>deps_done()</code> en SQL). Scénario : DAG source_a + source_b → transform → output, plus un nœud indépendant ; 3 workers concurrents ; le worker w0 <b>crashe en tenant source_b</b> (abandon sans commit).</p>
+      <p style="margin-bottom:0;"><b>Résultat vérifié :</b> aucun doublon d'exécution (le <code>SKIP LOCKED</code> distribue sans collision) ; le job du worker mort est <b>re-loué après expiration du lease</b> (attempt=2) et terminé par un autre worker ; <code>transform</code> n'a démarré qu'après <b>ses deux</b> dépendances, <code>output</code> après <code>transform</code> ; tous les jobs finissent <code>SUCCEEDED</code>, en 2,3 s murales. La revendication anti-zombie « un seul registre, lease à TTL » <b>tient exactement comme spécifiée</b>.</p>
+    </div>
+    <div class="note warn"><b>Réserves d'exploitation (aucune ne change le design) :</b> ① la re-location attend l'expiration du lease → le TTL est un compromis latence-de-reprise / faux-positifs (heartbeat qui prolonge, TTL court 30–60 s) ; ② <code>deps_done()</code> en sous-requête est O(deps) — indexer <code>(state)</code> et <code>(tag, state)</code> ; ③ le polling à vide se règle par <code>LISTEN/NOTIFY</code> Postgres (réveil des workers à l'enqueue) plutôt qu'en réduisant l'intervalle ; ④ prévoir l'autovacuum : la table est à fort churn → <code>fillfactor</code> réduit + partitionnement par âge des runs terminés.</div>
+  </section>
+
+  <section id="iceberg">
+    <h2><span class="num">4</span> Couture C · lake ⇄ Iceberg : concurrence du WAP <span class="tg emp">I1–I5 exécutés</span></h2>
+    <p class="section-sub">Ce qui se passe quand deux runs touchent la même table — les deux correctifs qui en sortent.</p>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Test</th><th>Résultat vérifié</th><th>Conséquence</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">I1 · Deux appends concurrents (handles obsolètes)</td><td class="no">2ᵉ commit <b>rejeté</b> (« branch main was created concurrently ») — <b>PyIceberg ne fait aucun retry automatique</b> (contrairement au client Java)</td><td class="feat">correctif 1 : <code>lake</code> implémente <b>retry-refresh-reapply</b> sur <code>CommitFailedException</code> (borné, backoff)</td></tr>
+          <tr><td class="feat">I2 · Deux publications WAP concurrentes sur la même table</td><td class="mid">le verrou optimiste du catalogue a rejeté le perdant (A FAILED, B PUBLISHED, zéro perte) — <b>mais</b> un publish par <code>set_current_snapshot</code> aveugle peut pointer main sur une lignée qui <b>ne contient pas</b> la publication concurrente : perte silencieuse possible selon l'ordre</td><td class="feat">correctif 2 : le publish vérifie l'<b>ascendance</b> (la tête d'env doit être ancêtre de la tête wap), sinon abort + re-run du WAP depuis la nouvelle tête ; et la <b>sérialisation par dataset</b> dans l'orchestrateur (déjà au design) devient une exigence, pas une optimisation</td></tr>
+          <tr><td class="feat">I3 · Branche env_dev quand main avance</td><td class="yes">la branche est un <b>pointeur figé</b> (1 ligne vs 2 sur main) — pas un overlay</td><td>confirme le design : le fallback dev→prod est <b>par table</b> (table non reconstruite en dev = lire main), jamais intra-table</td></tr>
+          <tr><td class="feat">I4 · <code>snapshot_properties</code> sur <code>upsert</code>+branche</td><td class="yes">provenance présente sur le snapshot de merge</td><td>la provenance (§20 archi) couvre bien les publications incrémentales</td></tr>
+          <tr><td class="feat">I5 · Rétention par ref (<code>max-ref-age-ms</code>)</td><td class="yes">propriété posée par transaction</td><td>le nettoyage des branches <code>env_*</code>/<code>wap</code> périmées est outillé nativement</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <pre><span class="c"># le publish corrigé (remplace le set_current_snapshot naïf du prototype cleyrop-dm)</span>
+<span class="k">def</span> <span class="f">publish</span>(tbl, env_branch, wap_branch):
+    tbl.<span class="f">refresh</span>()
+    env_head, wap_head <span class="n">=</span> tbl.<span class="f">snapshot_by_name</span>(env_branch), tbl.<span class="f">snapshot_by_name</span>(wap_branch)
+    <span class="k">if not</span> <span class="f">is_ancestor</span>(tbl, ancestor<span class="n">=</span>env_head, of<span class="n">=</span>wap_head):        <span class="c"># qqn a publié entre-temps</span>
+        <span class="k">raise</span> <span class="f">StaleWapError</span>(<span class="s">"re-run WAP from new head"</span>)             <span class="c"># le job repart en QUEUED (idempotent)</span>
+    <span class="f">fast_forward</span>(tbl, env_branch, to<span class="n">=</span>wap_head)                      <span class="c"># + retry-refresh sur CommitFailedException</span></pre>
+  </section>
+
+  <section id="sql">
+    <h2><span class="num">5</span> Couture D · SQL multi-moteurs &amp; lignage colonne <span class="tg emp">I6–I8 exécutés</span></h2>
+    <p class="section-sub">Le contrat « même SQL sur DuckDB et Spark » et la promesse du lignage par AST, tous deux exercés.</p>
+    <div class="grid2">
+      <div class="benefit tone-good"><div class="ic">🔁</div><b>I6 · Transpilation spark ⇄ duckdb</b><p>SQLGlot 30 transpile correctement les constructions réelles testées : <code>date_trunc</code>, <code>explode→UNNEST</code>, <code>collect_list→ARRAY_AGG FILTER</code>, <code>unix_timestamp→EPOCH(STRPTIME)</code>, <code>QUALIFY</code>, <code>try_divide→CASE</code>. Le gateway dev (DuckDB) peut exécuter les modèles écrits en dialecte spark.</p></div>
+      <div class="benefit tone-good"><div class="ic">🧬</div><b>I7 · Lignage colonne par AST</b><p><code>sqlglot.lineage()</code> remonte correctement <code>amount_eur ← raw_orders.amount + fx.rate</code> à travers CTE + jointures, avec schémas fournis. <b>Nuance</b> : les feuilles sortent au niveau <i>alias</i> (<code>cu.region</code>) — <b>qualifier la requête d'abord</b> (<code>sqlglot.optimizer.qualify</code>) pour des noms pleinement résolus. LN-3 est faisable tel que spécifié.</p></div>
+      <div class="benefit tone-warn"><div class="ic">⚠️</div><b>I8 · Les divergences sont sémantiques, pas syntaxiques</b><p><code>substr(x, 0, n)</code>, division entière, comportements NULL : la transpilation est correcte mais les <i>moteurs</i> divergent sur les bords. → Politique : dialecte source unique (<code>spark</code>), et une <b>suite golden</b> (mêmes requêtes, mêmes données, résultats comparés DuckDB vs Spark Connect) comme gate E3 — le run local « comme en prod » en dépend.</p></div>
+      <div class="benefit tone-good"><div class="ic">📦</div><b>I9 · cloudpickle</b><p>Closure + globals capturées, désérialisées et exécutées dans un autre process (3.1.2, Python 3.11). L'invariant reste la <b>même version mineure de Python</b> des deux côtés — épinglée par l'image (3.11.x partout).</p></div>
+    </div>
+  </section>
+
+  <section id="sqlmesh">
+    <h2><span class="num">6</span> Couture E · SQLMesh ⇄ Flows — la tension à trancher <span class="tg ko">décision D1</span></h2>
+    <p class="section-sub">Le seul recouvrement structurel du design : deux systèmes veulent posséder l'état et les environnements.</p>
+    <div class="card">
+      <p><b>Le problème, précisément.</b> SQLMesh apporte quatre choses : ① parsing/rendu SQL multi-dialectes (SQLGlot), ② calcul incrémental par fenêtre temporelle (<code>@start_ds/@end_ds</code>, intervalles suivis), ③ audits bloquants, ④ <b>son</b> orchestration : fingerprints, state DB, environnements <b>virtuels par vues</b>, plan/apply. Or Hemera v2 possède déjà ③ (audits WAP, plus forts : pré-publication), ④ (fingerprints Flows, environnements = <b>branches Iceberg</b>, plan/apply, file de jobs). Utiliser SQLMesh « entier » en mode intégration = <b>deux state stores, deux notions d'environnement, deux plans</b> — le ticket WK-4b (« raccorder les envs virtuels SQLMesh aux branches ») sous-estime ce recouvrement : la couche virtuelle de SQLMesh (vues + tables hash-nommées) n'a pas de point d'extension officiel « remplacez mes vues par des branches Iceberg ».</p>
+    </div>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Option</th><th>Ce que fait SQLMesh</th><th>Ce que fait Flows</th><th>Verdict</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">D1-a · SQLMesh entier (lib) + envs raccordés aux branches</td><td>state, plan, envs virtuels, exécution SQL</td><td>orchestration des nœuds non-SQL</td><td class="no">recouvrement maximal · point d'extension inexistant · deux vérités — <b>déconseillé</b></td></tr>
+          <tr><td class="feat">D1-b · SQLMesh = <b>compilateur SQL</b> (recommandé)</td><td>parse/rendu dialecte, macros, calcul de <b>fenêtre incrémentale</b>, définitions d'audits — <i>en bibliothèque, sans state ni envs</i></td><td>fingerprints, branches, WAP, audits exécutés sur la branche wap, matérialisation via <code>lake</code></td><td class="yes">un seul état, une seule notion d'env · SQLMesh reste remplaçable (le prototype <code>cleyrop-dm</code> prouve le cœur en SQLGlot pur)</td></tr>
+          <tr><td class="feat">D1-c · Wrap (projet SQLMesh/dbt importé)</td><td>tout, dans <b>son</b> sous-univers (schémas dédiés, son state)</td><td>orchestre la région comme une boîte : trigger, attente, lecture des sorties</td><td class="mid">OK tel quel — les garanties Hemera (WAP, provenance) s'appliquent à la <i>frontière</i> de la région, pas à l'intérieur — à documenter honnêtement</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <div class="note tip"><b>Recommandation D1-b :</b> en mode intégration, SQLMesh est un <b>moteur de rendu et de fenêtrage</b>, pas un orchestrateur : Flows lui demande « rends-moi le SQL de ce modèle pour l'intervalle [start, end) », exécute le résultat via le gateway (Spark Connect/DuckDB), et matérialise via <code>lake</code> sous WAP. Les <code>audits</code> déclarés dans <code>MODEL()</code> sont <i>lus</i> par le compilateur et exécutés par <b>notre</b> garde WAP. Ça préserve la syntaxe SQLMesh/dbt pour les utilisateurs (la promesse du §16 archi) sans payer la double orchestration. <b>Gate E3 :</b> un POC de 2 jours valide que l'API bibliothèque de SQLMesh expose bien rendu + intervalles sans initialiser son state ; sinon, repli SQLGlot-only (perte : macros SQLMesh et fenêtrage automatique — recodé dans le compilateur, ~1 semaine).</div>
+  </section>
+
+  <section id="gouvernance">
+    <h2><span class="num">7</span> Couture F · Lakekeeper · OpenFGA · Keycloak <span class="tg nf">revue sur pièces — cluster requis</span></h2>
+    <p class="section-sub">Le PoC a validé le chemin critique (remote-signing OVH/Outscale) ; voici ce qui reste à épingler, version par version.</p>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Couture</th><th>État</th><th>À faire / épingler</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">Lakekeeper — remote-signing &amp; vending</td><td class="yes">✅ validé par PoC (OVH GRA, Outscale OOS, rustfs/MinIO — lecture+écriture, PyIceberg 0.11.1)</td><td>dimensionnement/HA : en remote-signing Lakekeeper est sur le chemin de <b>chaque</b> requête S3 — bench de charge en E4</td></tr>
+          <tr><td class="feat">Lakekeeper — change events (le flux du Catalog §21)</td><td class="mid">supporté (CloudEvents vers NATS/Kafka) — <b>version et sémantique de livraison non figées</b></td><td>E-INT : vérifier le sink Kafka de la version déployée, la garantie at-least-once, le comportement en panne du broker (bloque ou droppe ?) — c'est la couverture anti-angle-mort du Catalog, elle doit être fiable ou compensée par un réconciliateur par listing périodique</td></tr>
+          <tr><td class="feat">Lakekeeper — migration depuis iceberg-rest-catalog</td><td class="mid">outillée (<code>iceberg-catalog-migrator</code>, sans copie de données)</td><td>répétition générale sur un tenant de test + fenêtre de gel des écritures pendant la bascule des pointeurs</td></tr>
+          <tr><td class="feat">OpenFGA — grants transitoires à TTL</td><td class="mid">⚠ OpenFGA n'a <b>pas de TTL natif</b> sur les tuples</td><td>mécanique précisée : <b>conditions ABAC</b> (tuple conditionné <code>grant_active(expires_at)</code>, contexte = horloge à la requête — supporté depuis les conditions GA) <b>plus</b> le réconciliateur qui purge les tuples expirés (déjà au design, FL-8). Épingler une version d'OpenFGA avec conditions GA ; vérifier que <b>Lakekeeper</b> transmet le contexte requis dans ses checks — sinon, repli : TTL purement par réconciliateur (fenêtre d'exposition = période de balayage, à borner ≤ 60 s)</td></tr>
+          <tr><td class="feat">Keycloak — token exchange (RFC 8693)</td><td class="mid">le token-exchange <b>standard</b> n'est GA que dans les Keycloak récents (le legacy était preview)</td><td>épingler la version plateforme ; valider le flux exact : token de service Flows → <code>requested_subject</code> utilisateur → <i>audience</i> Lakekeeper ; et le <b>refresh</b> pour les jobs longs (le worker ré-échange, jamais de refresh token utilisateur stocké)</td></tr>
+          <tr><td class="feat">Chaîne complète JWT→OpenFGA→S3</td><td class="yes">✅ démontrée par le PoC <code>spark-lakekeeper-auth</code> (serveur Connect mutualisé inclus)</td><td>reste : TLS gRPC, HTTPS Keycloak, OpenFGA authentifié (déjà listés §9 archi)</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+  </section>
+
+  <section id="infra">
+    <h2><span class="num">8</span> Couture G · Opérateur Spark · workers · Kafka · Trino <span class="tg nf">revue sur pièces</span></h2>
+    <p class="section-sub">Les composants d'infrastructure, avec les points précis à valider en environnement réel.</p>
+    <div class="grid2">
+      <div class="benefit tone-warn"><div class="ic">☸️</div><b>Opérateur Spark K8s — serveur Connect long-vivant</b><p>La CR <code>SparkApplication</code> vise des <i>jobs</i> ; un serveur Connect est un <i>service</i>. À valider : politique de restart (Always), <code>Service</code> stable sur 15002 + readiness, budget de disruption, et surtout <b>dynamic allocation sans external shuffle service</b> → <code>spark.dynamicAllocation.shuffleTracking.enabled=true</code> obligatoire sur K8s. Vérifier l'artefact <b><code>iceberg-spark-runtime-4.1_2.13</code></b> (Iceberg 1.11) avant de figer l'image. Alternative si l'opérateur Apache coince : Deployment Helm simple — le serveur Connect n'exige pas d'opérateur.</p></div>
+      <div class="benefit tone-bad"><div class="ic">🔎</div><b>Trino — l'identité s'arrête à la porte (D2)</b><p>Trino s'authentifie <i>lui-même</i> auprès de Lakekeeper (credential de catalogue statique) : par défaut, tous les utilisateurs Trino deviennent <b>une seule identité</b> côté données — la politique OpenFGA par utilisateur ne s'applique plus. Options : ① Trino = identité de service <i>lecture seule</i> avec un périmètre réduit + authz par OPA côté Trino (deux systèmes de politique — dérive) ; ② passthrough des credentials utilisateur (« extra credentials » / catalogues par utilisateur — lourd) ; ③ restreindre Trino aux datasets non sensibles tant que ①/② non tranchés. <b>Décision D2 requise avant d'ouvrir Trino en libre-service.</b></p></div>
+      <div class="benefit tone-warn"><div class="ic">🛡️</div><b>Isolation worker — nsjail n'est pas gratuit (D3)</b><p>nsjail exige des privilèges kernel (namespaces, seccomp) que les PSS « restricted » de K8s refusent. Options : ① pods <code>privileged</code> dédiés aux workers (simple, à isoler par node pool) ; ② <b>gVisor/kata</b> en RuntimeClass (isolation forte, pas de privilège dans le pod) ; ③ un <b>pod éphémère par job</b> (l'isolation par K8s lui-même — plus lent, plus simple). Décision D3 = arbitrage sécurité/latence ; le design (un job = un process isolé) survit aux trois.</p></div>
+      <div class="benefit tone-info"><div class="ic">📨</div><b>Kafka — règles de flux pour Catalog &amp; lignage</b><p>Clé de partition = identifiant de table (ordre garanti par table) ; consommation idempotente par clé naturelle (<code>snapshot_id</code> pour les événements de données, <code>run_id+node</code> pour OpenLineage) ; rétention longue sur <code>lineage-events</code> (c'est la source de rejeu du Catalog event-sourcé) ; schémas d'événements versionnés (le socle protobuf existe, OpenLineage est JSON — les deux cohabitent, pas de registry à inventer en v1).</p></div>
+      <div class="benefit tone-good"><div class="ic">🐍</div><b>Workers — l'outillage vérifié ici</b><p><b>uv 0.8</b> présent et fonctionnel (le venv Spark de cette revue a été construit avec) ; <b>pyspark-client 4.1.2</b> disponible sur PyPI pour l'image légère ; cloudpickle 3.1 OK ; Python épinglé 3.11.x. Le pattern « cache uv + dedicated workers » ne présente pas de risque technique.</p></div>
+      <div class="benefit tone-good"><div class="ic">🗄️</div><b>Le reste du socle</b><p>Postgres 16 : file validée (I12) + state Flows + Catalog — un seul moteur de base à exploiter. Keycloak/Kafka/MinIO : déjà en production chez Hemera, pas de nouveau risque. Frontend React Flow : aucun couplage nouveau (client des API).</p></div>
+    </div>
+  </section>
+
+  <section id="decisions">
+    <h2><span class="num">9</span> Décisions ouvertes &amp; tickets d'intégration E-INT</h2>
+    <p class="section-sub">Trois décisions à trancher (aucune ne bloque E1–E2), et la checklist qui transforme les réserves en tests.</p>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>#</th><th>Décision</th><th>Options</th><th>Recommandation</th><th>Échéance</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">D1</td><td>Profondeur d'intégration SQLMesh</td><td>lib entière / <b>compilateur seul</b> / SQLGlot pur</td><td class="yes"><b>TRANCHÉE — compilateur seul, POC exécuté</b> (S1 : rendu + fenêtrage + deps + audits sans state) ; voir le document ② « Modèle de développement » (§11–14) (D1.1/D1.2, wrap dbt validé S3/S4)</td><td class="yes">résolue</td></tr>
+          <tr><td class="feat">D2</td><td>Identité utilisateur à travers Trino</td><td>service restreint + OPA / passthrough credentials / périmètre réduit</td><td class="yes"><b>RÉSOLUE PAR L'ÉCOSYSTÈME (vérifié 02/07/2026)</b> : Lakekeeper fournit un <b>pont OPA</b> avec couche de traduction Trino — un Trino partagé (OAuth2) applique les permissions OpenFGA <b>par utilisateur</b>, jusqu'au niveau colonne/ligne ; Lakekeeper 0.12 ajoute les extensions de règles Trino. Reste un test d'intégration (INT-14), plus une décision</td><td class="yes">→ INT-14 (E4)</td></tr>
+          <tr><td class="feat">D3</td><td>Mécanisme d'isolation des workers</td><td>nsjail (privilégié) / gVisor RuntimeClass / pod par job</td><td class="mid">gVisor si disponible chez OVH/Outscale managés, sinon node pool dédié + nsjail</td><td>avant E4 (ops IA/HTTP = code le moins confiné)</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <h4 class="mini">Checklist E-INT — les tests d'intégration issus de cette revue (gate des epics)</h4>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>#</th><th>Test</th><th>Gate</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">INT-1</td><td>Suite <b>golden SQL</b> : mêmes requêtes + mêmes données sur DuckDB et Spark Connect, résultats comparés bit à bit (I8)</td><td>E3</td></tr>
+          <tr><td class="feat">INT-2</td><td>JWT par session Connect contre le vrai serveur : interceptor 4.1.2, <b>refresh en cours de session</b>, isolation des artefacts entre sessions/tenants (couture A)</td><td>E1</td></tr>
+          <tr><td class="feat">INT-3</td><td>WAP concurrent en vraie grandeur : 2 runs sur la même table via Lakekeeper — sérialisation orchestrateur + publish à contrôle d'ascendance (I2)</td><td>E1</td></tr>
+          <tr><td class="feat">INT-4</td><td>Change events Lakekeeper : sink Kafka (NATS/Kafka confirmés), sémantique de livraison — <b>0.12 apporte un event handler d'audit à garanties exactly-once (vérifié 02/07/2026)</b> ; valider sur la version déployée + réconciliateur par listing en secours</td><td>E4/E6</td></tr>
+          <tr><td class="feat">INT-5</td><td>Grants OpenFGA conditionnels (TTL) évalués par Lakekeeper + purge réconciliateur ≤ 60 s (couture F)</td><td>E4</td></tr>
+          <tr><td class="feat">INT-6</td><td>Token-exchange Keycloak version cible : service → <code>requested_subject</code> → audience Lakekeeper, avec ré-échange pour job long (couture F)</td><td>E4</td></tr>
+          <tr><td class="feat">INT-7</td><td>Serveur Connect via opérateur : restart, Service 15002, <code>shuffleTracking</code> — <b>jar résolu (vérifié 02/07/2026)</b> : Iceberg <b>1.11.0</b> (19/05/2026) ajoute le support Spark 4.1 et en fait une cible par défaut ; l'opérateur Apache (0.4.0) documente le déploiement de serveurs Connect</td><td>E1</td></tr>
+          <tr><td class="feat">INT-8</td><td>Multi-moteurs × schéma en transition : Spark/Trino/PyIceberg lisant la même table pendant une migration (annexe schéma, matrice §11)</td><td>E3</td></tr>
+          <tr><td class="feat">INT-9</td><td>POC SQLMesh « compilateur seul » : rendu + fenêtre incrémentale sans state (D1)</td><td>E3 (ouverture)</td></tr>
+          <tr><td class="feat">INT-10</td><td>Image worker sur <code>pyspark-client</code> : parité fonctionnelle avec le client complet (couture A)</td><td>E1</td></tr>
+          <tr><td class="feat">INT-14 <span class="tg emp">nouveau</span></td><td>Pont OPA Lakekeeper × Trino : un Trino partagé (OAuth2) applique les permissions OpenFGA par utilisateur — colonne/ligne incluses (résolution de D2)</td><td>E4</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <div class="note tip"><b>Verdict d'ensemble :</b> l'architecture v2 tient l'assemblage. Les fondations les plus risquées — Spark Connect client/serveur en 4.1.2, la file anti-zombie, le WAP Iceberg, le SQL multi-moteurs, le lignage par AST, la chaîne d'auth (PoC) — sont <b>validées par exécution</b>. Les trois vrais sujets restants sont des <b>décisions de périmètre</b> (SQLMesh D1, Trino D2, isolation D3), pas des inconnues techniques : chacune a une option par défaut viable. Deux correctifs concrets sortent de la revue (retry-refresh PyIceberg, publish à contrôle d'ascendance) et une optimisation d'image (pyspark-client) — intégrés aux tickets E1.</div>
+  </section>
+
+  <section id="statuts">
+    <h2><span class="num">10</span> Statuts épinglés au 2 juillet 2026 <span class="tg emp">passe de fraîcheur</span></h2>
+    <p class="section-sub">Versions PyPI vérifiées en direct (pip index) et statuts des composants non-Python vérifiés par sources — la référence pour les pins d'images et de dépendances.</p>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Composant</th><th>Dernière version (02/07/2026)</th><th>Statut / mouvement récent</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">pyiceberg</td><td class="num">0.11.1 <span class="tg ok">= notre pin</span></td><td>audit GitHub (02/07) : <b>écriture v3 hors roadmap</b> — #1551 ouvert sans PR ni assigné ni milestone, <b>absent du milestone 0.12.0</b> (41 %, tooling/correctifs). Sur <code>main</code> depuis 0.11.1 : bump Java Iceberg 1.11, durcissement <b>lecture</b> DV (#3576/#3491), <b>Incremental Append Scan #3512</b> (utile à nos modèles incrémentaux : lire seulement l'ajouté entre deux snapshots), et au milestone 0.12 : <b>remove orphan files #3361 + expire snapshots CLI #3379</b> (outillage direct de nos flows de maintenance LN-6) et <b>#819 IsolationLevels/validation de concurrence</b> (l'upstream confirme le manque relevé en I1/I2)</td></tr>
+          <tr><td class="feat">Apache Iceberg (Java)</td><td class="num">1.11.0 (19/05/2026)</td><td class="yes"><b>support Spark 4.1</b> (cible par défaut — INT-7 résolu) · <b>feature set v3 « production-ready »</b> (DV, Variant, géo, ns) · scan planning REST côté serveur · chiffrement de table (KMS) · requiert Java 17/21 · ⚠ <code>MERGE … WITH SCHEMA EVOLUTION</code> (Spark 4.1) = expansion implicite → <b>interdit par lake</b> (règle R1, annexe schéma)</td></tr>
+          <tr><td class="feat">pyspark / pyspark-client</td><td class="num">4.1.2 <span class="tg ok">= notre pin</span></td><td>testés ici (I10–I11, S6)</td></tr>
+          <tr><td class="feat">sqlmesh</td><td class="num">0.235.4 <span class="tg ok">= notre pin</span></td><td>compilateur-seul validé (S1)</td></tr>
+          <tr><td class="feat">dbt-core · dbt-spark · dbt-duckdb</td><td class="num">1.11.12 · 1.10.3 · 1.10.1 <span class="tg ok">= nos pins</span></td><td><b>dbt Core v2 (Fusion) pas encore sur PyPI</b> — 1.11.12 reste la ligne stable ; Fusion : GA Snowflake seulement, <b>Iceberg non supporté</b> (bloquant, veille INT-12)</td></tr>
+          <tr><td class="feat">Lakekeeper</td><td class="num">0.12.0 (avril 2026)</td><td class="yes">change events <b>NATS et Kafka</b> confirmés · event handler d'audit <b>exactly-once</b> · <b>pont OPA × Trino</b> (permissions par utilisateur, colonne/ligne) — résout D2 · extensions de règles Trino · OPA batch</td></tr>
+          <tr><td class="feat">Keycloak</td><td class="num">≥ 26.2 requis</td><td class="mid">token exchange standard (RFC 8693) <b>GA depuis 26.2</b> — limité à l'<b>internal-internal</b> (même realm) ; l'<b>impersonation</b> (run au nom de l'utilisateur) passe par l'identity chaining / JWT authorization grant de <b>26.5</b> (01/2026) → INT-6 précisé : valider sur 26.5+</td></tr>
+          <tr><td class="feat">Spark K8s Operator (Apache)</td><td class="num">0.4.0</td><td class="mid">déploiement de <b>serveurs Connect documenté</b> par le projet — INT-7 (restart/Service/shuffleTracking) reste à exécuter</td></tr>
+          <tr><td class="feat">Moteurs × Iceberg v3</td><td>—</td><td class="mid">v3 <b>GA sur les principales plateformes au S1 2026</b> (côté Java/moteurs) — les conditions de levée de R11 se rapprochent, mais restent bloquées par PyIceberg (write) ; l'ordre de bascule : PyIceberg → test multi-moteurs INT-8 → migration par flow système</td></tr>
+          <tr><td class="feat">sqlglot · duckdb · openlineage-python · uv</td><td class="num">30.12.0 · 1.5.4 · 1.50.0 · 0.11.26</td><td>pins courants (uv : montée mineure sans impact)</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <div class="note tip"><b>Ce que la passe change au plan :</b> ① <b>D2 passe de « à trancher » à « à intégrer »</b> (pont OPA Lakekeeper×Trino, INT-14) — il ne reste qu'une décision ouverte, D3 (isolation worker) ; ② INT-7 perd son inconnue (runtime Spark 4.1 publié) ; ③ INT-4 gagne une garantie (exactly-once 0.12) ; ④ INT-6 se précise (Keycloak 26.5 pour l'impersonation) ; ⑤ une <b>nouvelle règle</b> remonte à l'annexe schéma : interdire <code>MERGE … WITH SCHEMA EVOLUTION</code> dans lake (expansion implicite, contourne le plan) ; ⑥ opportunités ouvertes par Iceberg 1.11 à instruire plus tard : scan planning REST (perf Lakekeeper) et chiffrement de table KMS (souveraineté).</div>
+  </section>
+
+  <footer>
+    <p><b>Hemera v2 — revue technique d'intégration.</b> Complète : architecture v2 · design frontend · annexe schéma Iceberg.<br>
+    Méthode : campagnes I1–I12 exécutées dans cet environnement — Spark Connect <b>4.1.2</b> réel (serveur local + client, Java 21), PostgreSQL <b>16</b>, PyIceberg <b>0.11.1</b> + warehouse local, SQLGlot <b>30.12</b>, cloudpickle <b>3.1.2</b>, uv <b>0.8</b> ; pyspark-client 4.1.2 vérifié sur PyPI. Revue sur pièces (versions à épingler) : Lakekeeper events, OpenFGA conditions, Keycloak RFC 8693, opérateur Spark K8s, Trino, nsjail/gVisor.</p>
+  </footer>
+
+</div>
+
+
+</body></html>

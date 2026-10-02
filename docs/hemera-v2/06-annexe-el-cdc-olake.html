@@ -1,0 +1,370 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}</style></head><body>
+<title>Hemera — ⑥ Annexe : EL &amp; CDC (étude OLake)</title>
+<style>
+  :root {
+    --bg:#eff1f5; --bg-soft:#e6e9ef; --card:#fff; --card-alt:#dce0e8;
+    --text:#4c4f69; --text-soft:#6c6f85; --text-dim:#8c8fa1; --line:#ccd0da;
+    --accent:#e25a1c; --accent-2:#1e66f5; --green:#40a02b; --mauve:#8839ef;
+    --red:#d20f39; --yellow:#df8e1d; --teal:#179299;
+    --code-bg:#1e1e2e; --code-text:#cdd6f4;
+    --shadow:0 1px 3px rgba(76,79,105,.12),0 8px 24px rgba(76,79,105,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#1e1e2e; --bg-soft:#181825; --card:#313244; --card-alt:#11111b;
+      --text:#cdd6f4; --text-soft:#bac2de; --text-dim:#9399b2; --line:#45475a;
+      --accent:#fab387; --accent-2:#89b4fa; --green:#a6e3a1; --mauve:#cba6f7;
+      --red:#f38ba8; --yellow:#f9e2af; --teal:#94e2d5;
+      --code-bg:#11111b; --code-text:#cdd6f4;
+      --shadow:0 1px 3px rgba(0,0,0,.3),0 8px 28px rgba(0,0,0,.35);
+    }
+  }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.65; -webkit-font-smoothing:antialiased; }
+  code,pre,.mono { font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  .wrap { max-width:980px; margin:0 auto; padding:0 22px 110px; }
+  a { color:var(--accent-2); text-decoration:none; } a:hover { text-decoration:underline; }
+
+  header.hero {
+    background:radial-gradient(1200px 420px at 10% -10%,rgba(226,90,28,.18),transparent 60%),
+      radial-gradient(950px 380px at 96% 0%,rgba(23,146,153,.14),transparent 55%),var(--bg-soft);
+    border-bottom:1px solid var(--line); padding:56px 22px 44px; text-align:center;
+  }
+  .badge { display:inline-flex; align-items:center; gap:8px; background:var(--card);
+    border:1px solid var(--line); color:var(--text-soft); padding:6px 14px;
+    border-radius:999px; font-size:13px; font-weight:600; margin-bottom:18px; }
+  .badge .dot { width:8px; height:8px; border-radius:50%; background:var(--teal); box-shadow:0 0 0 4px rgba(23,146,153,.18); }
+  header.hero h1 { margin:0 0 12px; font-size:clamp(26px,4.2vw,38px); line-height:1.14; letter-spacing:-.02em; text-wrap:balance; }
+  header.hero h1 em { color:var(--accent); font-style:normal; }
+  header.hero p.lead { margin:0 auto; max-width:760px; font-size:16.5px; color:var(--text-soft); }
+  .meta-pills { margin-top:20px; display:flex; gap:9px; justify-content:center; flex-wrap:wrap; }
+  .pill { font-size:12.5px; font-weight:600; padding:5px 12px; border-radius:8px; background:var(--card); border:1px solid var(--line); color:var(--text-soft); }
+
+  .toc { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px 22px; margin-top:32px; box-shadow:var(--shadow); }
+  .toc b { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim); display:block; margin-bottom:6px; }
+  .toc ol { margin:2px 0 0; padding-left:20px; } .toc li { margin:3px 0; font-size:14px; }
+  .toc .cols { display:grid; grid-template-columns:1fr 1fr; gap:0 30px; }
+  @media (max-width:640px){ .toc .cols{ grid-template-columns:1fr; } }
+
+  section { margin-top:46px; }
+  h2 { font-size:22px; letter-spacing:-.01em; margin:0 0 6px; display:flex; align-items:center; gap:11px; flex-wrap:wrap; }
+  h2 .num { flex:none; min-width:34px; height:32px; padding:0 9px; border-radius:9px; background:var(--teal); color:#fff; font-size:14px; font-weight:800; display:grid; place-items:center; }
+  @media (prefers-color-scheme: dark){ h2 .num{ color:#1e1e2e; } }
+  .section-sub { color:var(--text-dim); margin:0 0 18px; font-size:14.5px; }
+  h4.mini { font-size:13.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-dim); margin:20px 0 8px; }
+  p { margin:0 0 13px; }
+  ul { margin:6px 0 13px; padding-left:20px; } li { margin:3px 0; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:20px 22px; box-shadow:var(--shadow); }
+  p code,li code,td code { background:var(--card-alt); color:var(--accent); padding:1.5px 6px; border-radius:6px; font-size:.88em; font-weight:600; }
+
+  pre { background:var(--code-bg); color:var(--code-text); border-radius:12px; padding:15px 17px; overflow-x:auto; font-size:12.4px; line-height:1.6; margin:13px 0; border:1px solid rgba(255,255,255,.06); }
+  pre .c{color:#6c7086;font-style:italic} pre .k{color:#cba6f7} pre .s{color:#a6e3a1}
+  pre .f{color:#89b4fa} pre .n{color:#fab387} pre .o{color:#f5c2e7}
+  .code-label { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim); margin:16px 0 0; }
+  .code-label::before { content:""; width:10px; height:10px; border-radius:3px; background:var(--teal); }
+
+  .tablewrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; margin-top:8px; font-size:13px; }
+  th,td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+  thead th { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-dim); background:var(--bg-soft); }
+  tbody tr:last-child td { border-bottom:none; }
+  td.feat { font-weight:600; }
+  .yes{color:var(--green);font-weight:700} .no{color:var(--red);font-weight:700} .mid{color:var(--yellow);font-weight:700}
+
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:13px; }
+  @media (max-width:700px){ .grid2{ grid-template-columns:1fr; } }
+  .benefit { background:var(--card); border:1px solid var(--line); border-radius:15px; padding:16px 17px; }
+  .benefit .ic { display:inline-grid; place-items:center; width:38px; height:38px; border-radius:11px; background:var(--bg-soft); border:1px solid var(--line); font-size:19px; margin-bottom:10px; }
+  .benefit > b { display:block; margin-bottom:4px; font-size:14px; }
+  .benefit p { font-size:12.9px; color:var(--text-soft); margin:0; line-height:1.55; }
+  .benefit p b { color:var(--text); }
+  .tone-good .ic{ background:color-mix(in srgb,var(--green) 15%,var(--card)); border-color:color-mix(in srgb,var(--green) 42%,var(--line)); }
+  .tone-bad .ic{ background:color-mix(in srgb,var(--red) 14%,var(--card)); border-color:color-mix(in srgb,var(--red) 40%,var(--line)); }
+  .tone-warn .ic{ background:color-mix(in srgb,var(--yellow) 16%,var(--card)); border-color:color-mix(in srgb,var(--yellow) 42%,var(--line)); }
+  .tone-info .ic{ background:color-mix(in srgb,var(--accent-2) 14%,var(--card)); border-color:color-mix(in srgb,var(--accent-2) 38%,var(--line)); }
+
+  .note { border:1px solid color-mix(in srgb,var(--accent-2) 32%,var(--line)); background:color-mix(in srgb,var(--accent-2) 7%,var(--card)); border-radius:13px; padding:13px 17px; margin:14px 0; font-size:13.6px; line-height:1.6; }
+  .note.warn{ border-color:color-mix(in srgb,var(--yellow) 40%,var(--line)); background:color-mix(in srgb,var(--yellow) 10%,var(--card)); }
+  .note.tip{ border-color:color-mix(in srgb,var(--green) 36%,var(--line)); background:color-mix(in srgb,var(--green) 8%,var(--card)); }
+  .note.danger{ border-color:color-mix(in srgb,var(--red) 36%,var(--line)); background:color-mix(in srgb,var(--red) 7%,var(--card)); }
+  .note b { color:var(--text); }
+
+  .diagram { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; box-shadow:var(--shadow); margin:14px 0; }
+  .layer { border:1.5px solid var(--line); border-radius:11px; padding:10px 13px; margin:8px 0; background:var(--bg-soft); }
+  .layer > b { display:block; font-size:13.5px; } .layer small { display:block; margin-top:3px; color:var(--text-dim); font-size:11.5px; line-height:1.45; }
+  .layer.l-teal{border-color:var(--teal)} .layer.l-acc{border-color:var(--accent)} .layer.l-grn{border-color:var(--green)} .layer.l-mau{border-color:var(--mauve)} .layer.l-red{border-color:var(--red)} .layer.l-yel{border-color:var(--yellow)}
+  .layer-row { display:flex; gap:8px; } .layer-row .layer { flex:1; margin:8px 0 0; }
+  @media (max-width:640px){ .layer-row{ flex-direction:column; } }
+  .arrow { text-align:center; color:var(--text-dim); font-size:13px; margin:3px 0; }
+  .arrow.lbl{color:var(--accent);font-weight:700;font-size:11.5px}
+  .cap { text-align:center; font-size:11.5px; color:var(--text-dim); margin:8px auto 18px; max-width:820px; line-height:1.55; }
+  .tg { font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; padding:2px 8px; border-radius:5px; vertical-align:middle; }
+  .tg.ok{ background:color-mix(in srgb,var(--green) 15%,var(--card)); color:var(--green); }
+  .tg.ko{ background:color-mix(in srgb,var(--red) 13%,var(--card)); color:var(--red); }
+  .tg.wr{ background:color-mix(in srgb,var(--yellow) 16%,var(--card)); color:var(--yellow); }
+  .tg.nf{ background:var(--bg-soft); color:var(--text-dim); border:1px solid var(--line); }
+
+  footer { margin-top:60px; padding-top:22px; border-top:1px solid var(--line); text-align:center; color:var(--text-dim); font-size:13px; }
+</style>
+
+<header class="hero">
+  <div class="badge"><span class="dot"></span> Annexe technique &middot; Plateforme Hemera &middot; approfondit le §9 du modèle de développement</div>
+  <h1>EL &amp; CDC : <em>l'étude OLake</em><br>backfill chunké · WAL borné · exactly-once ancré destination</h1>
+  <p class="lead">Comment améliorer l'Extract-Load des flows — surtout le <b>CDC des bases</b> et les <b>streams</b>. Méthode : lecture du code d'<b>OLake</b> (Apache 2.0, Go — commit <code>8dcefff</code> du 04/07/2026, cloné ici) <b>et</b> banc d'essai exécuté (S7 : build Go réel, sync Postgres 16 → Parquet, backfill CTID + CDC pgoutput, insert/update/delete vérifiés dans les fichiers produits). Résultat : 13 faits vérifiés, et le design « EL v2 » de Hemera — ce qu'on adopte, ce qu'on fait autrement, ce que notre modèle d'éditions résout qu'OLake n'a pas. <b>La planche visuelle de l'intégration complète (graphe source → worker → lakehouse, chronologie exactly-once) : <a href="07-planche-olake-classes-flux.html">planche OLake</a>.</b></p>
+  <div class="meta-pills">
+    <span class="pill">🔬 S7 exécutée (PG16 réel)</span>
+    <span class="pill">📖 13 faits, code cité</span>
+    <span class="pill">⚙️ CDC = runs bornés</span>
+    <span class="pill">🎯 exactly-once = édition</span>
+    <span class="pill">🧩 OLake = moteur wrappé</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div style="font-size:12px; color:var(--text-soft); border:1px solid var(--line); border-radius:10px; padding:9px 14px; margin:0 0 18px; line-height:1.9;"><b>Série Hemera v2 — document ⑥ · Annexe — EL &amp; CDC (approfondit le §9 du document ②).</b> Ordre de lecture : ① <a href="01-architecture-flows-datasets.html">Architecture</a> → ② <a href="02-modele-de-developpement.html">Modèle de développement</a> → ③ <a href="03-design-frontend.html">Design frontend</a> → ④ <a href="04-annexe-schema-iceberg.html">Annexe schéma Iceberg</a> → ⑤ <a href="05-revue-integration.html">Revue d'intégration</a> → ⑥ ce document.</div>
+
+  <div class="toc">
+    <b>Sommaire</b>
+    <div class="cols">
+      <div>
+        <ol>
+          <li><a href="#pourquoi">Pourquoi OLake, et la méthode</a></li>
+          <li><a href="#anatomie">L'anatomie vérifiée — 13 faits (E1–E13)</a></li>
+          <li><a href="#s7">Le banc S7 — la preuve exécutée</a></li>
+        </ol>
+      </div>
+      <div>
+        <ol start="4">
+          <li><a href="#design">Le design EL v2 — sept améliorations</a></li>
+          <li><a href="#iot">Industrie 4.0 — brancher l'usine (OPC UA · Sparkplug · historians)</a></li>
+          <li><a href="#code">Le code — manifeste, moteurs, Kafka exactly-once</a></li>
+          <li><a href="#tickets">Règles ops &amp; tickets EL-1…EL-12</a></li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <section id="pourquoi">
+    <h2><span class="num">1</span> Pourquoi OLake, et la méthode</h2>
+    <p class="section-sub">Le §9 du document ② définit le modèle EL (sources = nœuds de flow, éditions, curseurs). Cette annexe le confronte au meilleur moteur open-source du moment pour en durcir l'exécution.</p>
+    <div class="card">
+      <p><b>OLake</b> (datazip-inc/olake, <b>Apache 2.0</b>, Go) est un moteur d'ingestion spécialisé : réplication <b>full + CDC</b> de PostgreSQL, MySQL, MongoDB, Oracle, DB2, MSSQL, <b>Kafka</b> et S3 vers <b>Iceberg</b> (catalogues REST/Glue/Hive/JDBC) ou Parquet — throughput annoncé 580 k lignes/s (PG). Architecture : un binaire Go par driver (protocole <code>spec / check / discover / sync</code>, façon Airbyte mais sans conteneur par connecteur), et pour Iceberg un <b>sidecar Java</b> piloté en gRPC (écritures Arrow, equality deletes). C'est exactement le périmètre où notre étage « natif Python » sera court : gros backfills parallèles et CDC log-based.</p>
+      <p style="margin-top:8px;"><b>Méthode</b> : ① lecture dirigée du code (fichiers cités fait par fait) ; ② <b>banc S7 exécuté ici</b> — build Go du driver Postgres, cluster PG 16 local passé en <code>wal_level=logical</code>, publication + slot <code>pgoutput</code>, deux syncs réels, inspection des Parquet produits. Aucun fait ci-dessous n'est déclaratif : chaque ligne est soit du code cité, soit un comportement observé.</p>
+    </div>
+  </section>
+
+  <section id="anatomie">
+    <h2><span class="num">2</span> L'anatomie vérifiée — 13 faits <span class="tg ok">code cité + S7</span></h2>
+    <p class="section-sub">Ce qu'OLake fait vraiment, fait par fait — c'est la matière première du design §4.</p>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>#</th><th>Fait vérifié</th><th>Où (fichier · S7)</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">E1</td><td>4 modes par stream : <code>full_refresh</code> · <code>incremental</code> (double curseur, <b>borné</b> par un max-cursor lu au départ) · <code>cdc</code> (backfill + flux) · <code>strict_cdc</code> (flux seul, sans backfill)</td><td class="num">abstract/abstract.go:111-120</td></tr>
+          <tr><td class="feat">E2</td><td><b>Backfill par chunks repris</b> : le jeu de chunks est persisté dans l'état, chaque chunk retiré à sa fin — un crash reprend là où on était, chunk par chunk</td><td class="num">abstract/backfill.go:19-65</td></tr>
+          <tr><td class="feat">E3</td><td>Chunking Postgres : <b>plages CTID par pages</b> (taille de bloc lue, tables partitionnées gérées via <code>pg_partition_tree</code> PG12+), ou <b>colonne PK</b> (découpe arithmétique int/float, sinon next-query) ; un chunk = une transaction <code>REPEATABLE READ</code></td><td class="num">postgres/backfill.go:63-205 · S7 : chunk '(0,0)'→'(4294967295,0)', 5 000 lignes</td></tr>
+          <tr><td class="feat">E4</td><td><b>Idempotence de chunk côté destination</b> : la liste des chunks déjà commités (<code>FullRefreshCommittedIDs</code>) est relue depuis l'état 2PC stocké dans la table Iceberg — un chunk re-tenté après crash est sauté, pas re-écrit</td><td class="num">abstract/backfill.go:70-75 · iceberg.go:123-129</td></tr>
+          <tr><td class="feat">E5</td><td><b>CDC = job borné, pas un démon</b> : la position WAL courante est capturée au départ (cible), le réplicateur sort dès <code>ClientXLogPos ≥ cible</code> — un « sync » CDC a un début et une fin</td><td class="num">waljs/waljs.go:63-64 · S7 : « finishing sync, reached wal position » ×2</td></tr>
+          <tr><td class="feat">E6</td><td><b>Handoff snapshot→CDC par fenêtre de dédup</b> : pendant le chevauchement backfill/flux, les inserts CDC sont émis <code>"i"</code> (equality delete + insert — idempotent) ; en régime établi <code>"c"</code> (write simple)</td><td class="num">abstract/cdc.go:117-119, 167-179</td></tr>
+          <tr><td class="feat">E7</td><td><b>Exactly-once ancré DESTINATION (Postgres)</b> : le LSN commité est relu depuis les métadonnées de la table Iceberg (<code>olake_2pc_state</code>) ; si les métadonnées sont EN AVANCE sur le state file (crash entre commit et state), un <b>recovery sync borné</b> rejoue le WAL jusqu'au LSN des métadonnées, <b>épinglé exactement</b> (anti-dépassement : sans ça, l'ack du slot sauterait des enregistrements)</td><td class="num">postgres/cdc.go:69-179</td></tr>
+          <tr><td class="feat">E8</td><td>Ordre d'ack strict : slot avancé <b>avant</b> l'écriture du state file (si l'ack échoue, les deux restent cohérents) ; désaccord state ↔ <code>confirmed_flush_lsn</code> ⇒ refus net : « clear destination » (jamais de dédup silencieuse)</td><td class="num">postgres/cdc.go:182-248</td></tr>
+          <tr><td class="feat">E9</td><td>Plugins : <code>pgoutput</code> (publication obligatoire) ou <code>wal2json</code> — choisi par le plugin du <b>slot</b> (factory) ; le slot doit préexister</td><td class="num">waljs/replicator.go:121 · postgres/cdc.go:214-230</td></tr>
+          <tr><td class="feat">E10</td><td>Écriture Iceberg : <b>sidecar Java en gRPC</b> (proto <code>IcebergPayload</code>), écritures <b>Arrow</b> optionnelles, upsert = <b>equality delete</b> sur <code>_olake_id</code> (hash des PK) ; <code>GET_OR_CREATE_TABLE</code> retourne schéma + état 2PC ; évolution de schéma côté serveur</td><td class="num">destination/iceberg/iceberg.go:96-143 · java_client.go</td></tr>
+          <tr><td class="feat">E11</td><td>Kafka : lecteurs <b>parallèles par partition</b> (franz-go), consumer group persisté dans l'état, restart du client pour purger les offsets non commités — mais <b>pas de 2PC</b> (« TODO, difficulty: hard ») : la voie Kafka est <b>at-least-once</b></td><td class="num">kafka/cdc.go:20, 70-80</td></tr>
+          <tr><td class="feat">E12</td><td>Colonnes méta systématiques : <code>_olake_id</code> (hash PK), <code>_op_type</code> (r/c/i/u/d), <code>_cdc_lsn</code>, <code>_cdc_timestamp</code>, <code>_olake_timestamp</code> — chaque ligne CDC porte <b>sa</b> position de log</td><td class="num">abstract.go:30-35 · S7 : vérifié dans le Parquet</td></tr>
+          <tr><td class="feat">E13</td><td><b>REPLICA IDENTITY</b> : sans <code>FULL</code>, les colonnes TOAST non modifiées sont <b>perdues</b> sur UPDATE — OLake le signale en warning à l'exécution ; le delete ne porte que la PK</td><td class="num">S7 : warning observé + delete à colonnes nulles</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+
+    <div class="diagram">
+      <div class="layer l-acc"><b>Un run CDC OLake (borné) — la séquence vérifiée</b><small>① PreCDC : slot lu, LSN de départ fixé · ② backfill des streams pas encore chargés (chunks repris) · ③ capture de la cible = position WAL courante · ④ replay pgoutput/wal2json → records (c/u/d + LSN par ligne) · ⑤ sortie dès cible atteinte · ⑥ commit Iceberg (état 2PC : LSN dans les métadonnées) · ⑦ ack du slot PUIS state file</small></div>
+      <div class="arrow lbl">▼ au crash entre ⑥ et ⑦ — le chemin de recovery (E7)</div>
+      <div class="layer l-mau"><b>Recovery borné, ancré destination</b><small>métadonnées Iceberg (LSN commité) EN AVANCE sur le state → rejouer le WAL jusqu'à CE LSN exactement (épinglé, anti-dépassement) pour les streams en retard · puis ack du slot au même point · les streams déjà commités ne sont PAS rejoués</small></div>
+      <div class="cap">La leçon structurante : <b>le curseur de vérité vit dans la destination</b>, pas dans le state file ni dans l'ack du slot. C'est exactement notre « provenance dans les snapshot properties » — OLake le valide en production.</div>
+    </div>
+  </section>
+
+  <section id="s7">
+    <h2><span class="num">3</span> Le banc S7 — la preuve exécutée <span class="tg ok">PG 16 réel · pgoutput</span></h2>
+    <p class="section-sub">Build Go du driver Postgres, deux syncs contre un cluster local en wal_level=logical, Parquet inspectés.</p>
+    <div class="card">
+      <p><b>Montage</b> : PG 16 local (<code>wal_level=logical</code>), table <code>public.orders</code> (PK <code>order_id</code>, 5 000 lignes), publication <code>olake_publication</code>, slot logique <code>pgoutput</code>. Destination : Parquet local (pas de sidecar Java requis — le protocole d'état est identique). <b>Sync 1</b> : backfill 1 chunk CTID (5 000 lignes, <code>_op_type "r"</code>) puis CDC borné qui sort immédiatement (départ = cible). <b>Mutations</b> : 2 INSERT, 1 UPDATE, 1 DELETE. <b>Sync 2</b> : backfill sauté (état), replay borné <code>0/1E58640 → 0/1E588D0</code>, <b>exactement 4 enregistrements</b> :</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>_op_type</th><th>order_id</th><th>données</th><th>_cdc_lsn</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">c</td><td class="num">9001</td><td class="num">nouveau_client · 42.50</td><td class="num">0/1E58640</td></tr>
+          <tr><td class="feat">c</td><td class="num">9002</td><td class="num">autre_client · 13.37</td><td class="num">0/1E586E0</td></tr>
+          <tr><td class="feat">u</td><td class="num">42</td><td class="num">client_42 · 999.99 (nouvelles valeurs)</td><td class="num">0/1E587B0</td></tr>
+          <tr><td class="feat">d</td><td class="num">100</td><td class="num">autres colonnes nulles (replica identity = PK)</td><td class="num">0/1E58860</td></tr>
+        </tbody>
+      </table></div>
+      <p style="margin-top:8px;">État final : <code>{"lsn":"0/1E588D0"}</code>, slot <code>confirmed_flush_lsn</code> aligné. Et le warning attendu : <i>« replica identity is not FULL, unchanged TOAST column values may be lost during CDC UPDATE events »</i> — d'où la règle de setup en §6.</p>
+    </div>
+  </section>
+
+  <section id="design">
+    <h2><span class="num">4</span> Le design EL v2 — sept améliorations pour les steps de flow</h2>
+    <p class="section-sub">Ce qu'on adopte d'OLake, ce que notre modèle d'éditions ajoute, et où chaque garantie s'applique.</p>
+    <div class="grid2">
+      <div class="benefit tone-info"><div class="ic">⏱️</div><b>A · CDC = runs bornés → éditions</b><p>Adopté tel quel (E5) : un sync CDC capture sa cible WAL et s'arrête — c'est un <b>job</b>, pas un démon. Chez nous : chaque run = une <b>édition</b> de la table d'atterrissage estampillée <code>origin.cursor = {lsn_from, lsn_to}</code>. Cadence = <code>refresh</code> de la source (ex. <code>@5m</code>), garde de retard = lag du slot. La file SKIP LOCKED, les leases et les retries s'appliquent sans rien inventer.</p></div>
+      <div class="benefit tone-info"><div class="ic">🎯</div><b>B · Exactly-once généralisé : le curseur vit dans l'édition</b><p>Adopté et renforcé (E7/E8) : le curseur de vérité = <b>snapshot properties de la dernière édition publiée</b> ; le state du Postgres de Flows n'est qu'un cache. Recovery = replay borné jusqu'au curseur ancré, épinglé exactement. L'ack du slot vient <b>après</b> le publish — jamais l'inverse.</p></div>
+      <div class="benefit tone-info"><div class="ic">🪓</div><b>C · Backfill chunké = jobs de la file</b><p>Adopté (E2/E3/E4) : <code>GetOrSplitChunks</code> (CTID ou PK) → <b>N jobs</b> avec lease/retry ; idempotence par chunk-ID relue depuis l'édition staged. Fenêtre de chevauchement backfill/CDC reprise telle quelle (E6) : colonnes <code>_hemera.op</code> (r/c/i/u/d), <code>_hemera.cdc_lsn</code>, <code>_hemera.row_id</code> sur les tables d'atterrissage CDC.</p></div>
+      <div class="benefit tone-warn"><div class="ic">🌿</div><b>D · WAP × CDC — la frontière à trancher</b><p>OLake écrit sur la table finale ; nous voulons la garde d'audits. Cible : atterrissage sur <b>branche staging</b> via le catalogue REST (Lakekeeper) puis audits → fast-forward — <b>à vérifier dans le writer Java</b> (support du branch ref) : ticket EL-4. Repli assumé : régime « STREAM » (audits post-publication sur la landing), déjà acté pour les flux.</p></div>
+      <div class="benefit tone-info"><div class="ic">🧩</div><b>E · Le moteur d'extraction devient un étage de plus</b><p>Même grille que dbt : outil tiers = <b>exécuteur encapsulé, garanties à la frontière</b>. Étages : ① natif Python (API/fichiers légers) · ② dlt (long tail) · ③ <b>OLake wrappé</b> = haute volumétrie DB full+CDC (binaire Go + sidecar Java sur workers <code>el-cdc</code>, piloté par le MÊME manifeste <code>source()</code>) · ④ <code>@source</code> custom. Le choix d'étage est un <b>placement</b>, pas une API différente.</p></div>
+      <div class="benefit tone-info"><div class="ic">🧬</div><b>F · Dérive de schéma CDC sous policy</b><p>OLake évolue le schéma côté writer, sans garde. Chez nous la dérive DDL amont (colonne ajoutée, type changé) passe par la policy du §9 : <code>additive="apply"</code> (expansion auto, règles R de l'annexe ④) · <code>breaking="quarantine"</code> (run bloqué + alerte S8). Ticket EL-8 : mapper les messages relation de pgoutput sur cette policy.</p></div>
+      <div class="benefit tone-warn"><div class="ic">🛰️</div><b>G · Kafka : le 2PC qu'OLake n'a pas, notre édition le donne</b><p>OLake Kafka est at-least-once (E11 — « TODO: hard »). Notre modèle le résout <b>par construction</b> : ① poll → ② <b>publier l'édition</b> avec <code>[offset_from, offset_to]</code> dans ses snapshot properties → ③ commit du consumer group (advisory). Crash entre ② et ③ ⇒ relecture, <b>dédupliquée par la plage déjà publiée</b>. Le commit d'offset n'est plus jamais la vérité.</p></div>
+    </div>
+    <div class="diagram">
+      <div class="layer l-grn"><b>Exactly-once Hemera — le même patron pour DB et streams</b><small>run borné → écritures sur staging → audits → <b>publish (édition estampillée du curseur : LSN range ou offset range)</b> → ack source (slot / consumer group) EN DERNIER</small></div>
+      <div class="layer-row">
+        <div class="layer l-blu"><b>Crash avant publish</b><small>rien n'existe (WAP) · re-run depuis le curseur de la dernière édition · chunks déjà commités sautés</small></div>
+        <div class="layer l-mau"><b>Crash entre publish et ack</b><small>recovery borné : rejouer jusqu'au curseur de l'édition, dédup par plage · puis ack — jamais de doublon, jamais de trou</small></div>
+      </div>
+      <div class="cap">Une seule règle mémorisable : <b>la source n'est acquittée qu'après la publication de l'édition qui la couvre</b> — le reste (recovery, dédup, reprise) en découle mécaniquement.</div>
+    </div>
+    <div class="note"><b>« Mais alors, le worker CDC/Kafka doit tourner h24 ? » — Non, et c'est le point.</b> Entre deux runs, <b>rien ne se perd</b> : côté Postgres le <b>slot logique retient le WAL sur le serveur source</b> tant qu'il n'est pas acquitté ; côté Kafka le broker retient les messages (rétention du topic) et la plage publiée dans l'édition fait foi. Ce qui doit être h24, c'est ce qui l'est déjà : le <b>scheduler Flows</b> et le <b>pool partagé de workers</b> (autoscalé) — mais <b>aucun process dédié par source</b>, contrairement au modèle Debezium/Kafka Connect (une task permanente par connecteur). Les workers sont fongibles : n'importe quel <code>el-cdc</code> peut prendre le prochain run puisque le curseur vit dans l'édition, pas en mémoire. Les deux vraies contraintes : ① la <b>cadence doit tenir le lag</b> — slot en retard = WAL accumulé = disque du serveur source (métrique S8, EL-6) ; côté Kafka, cadence &lt; rétention du topic ; ② la <b>latence = la cadence</b> : c'est du micro-batch (@1m–@5m réaliste), cohérent avec un modèle où la vérité est une <i>édition publiée</i>, pas un flux continu. Si un cas exige mieux : <b>mode continu = boucle de runs bornés sous un même lease</b> (chaque itération publie son édition, le crash reste trivial ; <code>initial_wait_time</code> réglé court) — une optimisation de placement, pas un changement d'architecture.</div>
+  </section>
+
+  <section id="iot">
+    <h2><span class="num">5</span> Industrie 4.0 — brancher l'usine : OPC UA, MQTT/Sparkplug, historians</h2>
+    <p class="section-sub">Les flux d'usine ne ressemblent ni à un WAL ni à un topic Kafka — mais le contrat d'édition s'applique dès qu'on leur donne ce qui leur manque : un journal rejouable.</p>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Étage OT → IT</th><th>Ce qu'on y trouve</th><th>Position Hemera</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">Terrain (OT)</td><td>PLC / SCADA — Modbus, PROFINET, S7, EtherNet/IP · LoRaWAN/NB-IoT pour les capteurs</td><td class="num"><b>hors périmètre</b> — c'est le métier des passerelles edge (Kepware, HighByte, Node-RED, Telegraf) ; on ne réimplémente pas une gateway IIoT</td></tr>
+          <tr><td class="feat">Standardisation</td><td><b>OPC UA</b> (address space navigable, subscriptions/monitored items, <b>HDA</b> pour l'historique, companion specs) · <b>MQTT + Sparkplug B</b> (NBIRTH/DBIRTH = <b>le schéma des métriques</b>, numéros <code>seq</code>, report-by-exception, certificats de mort NDEATH)</td><td class="num"><b>points d'entrée de nos connecteurs</b> — l'address space et les BIRTH sont notre <code>discover()</code></td></tr>
+          <tr><td class="feat">Backbone durable</td><td>broker MQTT en <b>UNS</b> (Unified Namespace, hiérarchie ISA-95 enterprise/site/area/line/cell — HiveMQ, EMQX) · pont vers <b>Kafka / NATS JetStream</b></td><td class="num"><b>notre frontière d'ingestion</b> — l'étage durable est à l'usine ce que le slot est à Postgres</td></tr>
+          <tr><td class="feat">Historians &amp; time-series</td><td>AVEVA/OSIsoft <b>PI</b>, Wonderware, Proficy, IP.21 · InfluxDB, TimescaleDB, QuestDB</td><td class="num"><b>sources EL</b> : backfill par <b>plages de temps</b> (l'équivalent temporel des chunks CTID) + incrémental par curseur ts</td></tr>
+          <tr><td class="feat">MES · LIMS · ERP</td><td>SQL Server / Oracle sous les applis d'usine — souvent LA donnée métier (OF, lots, contrôles qualité)</td><td class="num"><b>déjà couvert</b> : c'est l'étage OLake CDC (§4-E) tel quel</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+
+    <div class="grid2">
+      <div class="benefit tone-warn"><div class="ic">📜</div><b>R-IoT-1 · Pas de gouvernance sans journal rejouable</b><p>MQTT est un <b>transport</b>, pas une vérité : QoS 1/2 garantit la livraison, pas la <b>relecture</b> (un retained message n'est pas un historique). Toute voie MQTT/OPC UA-subscription passe par un étage durable (Kafka / JetStream, alimenté par le pont du broker) <b>avant</b> l'atterrissage gouverné — l'édition redevient alors une plage d'offsets, comme partout. Même règle, même recovery, même exactly-once qu'au §4.</p></div>
+      <div class="benefit tone-info"><div class="ic">⏰</div><b>R-IoT-2 · Éditions = fenêtres de temps + watermark</b><p>Les usines produisent du <b>retard structurel</b> : store-and-forward des passerelles, liens coupés, horloges edge décalées. Une édition d'atterrissage = fenêtre <code>[t_from, t_to]</code> + watermark ; la donnée tardive arrive en <b>édition de rattrapage</b> dédupliquée par <code>(tag_id, ts, seq)</code> (le <code>seq</code> Sparkplug sert exactement à ça) — jamais de réécriture silencieuse, l'audit de complétude dit ce qui manque.</p></div>
+      <div class="benefit tone-info"><div class="ic">🏷️</div><b>R-IoT-3 · La forme d'atterrissage : table longue + qualité</b><p>Schéma EAV canonique : <code>ts · tag_id · value · quality</code> + hiérarchie ISA-95 (site/ligne/cellule) en colonnes et en <b>labels Catalog</b>. Partition temps + bucket de tags. Les codes qualité OPC UA sont une <b>colonne auditée</b> (taux de bonne qualité ≥ seuil, complétude des tags attendus par fenêtre) — le veto WAP s'applique aux capteurs comme aux commandes.</p></div>
+      <div class="benefit tone-good"><div class="ic">🎛️</div><b>R-IoT-4 · Positionnement honnête : analytique, pas contrôle</b><p>Hemera ingère l'usine pour <b>l'analytique gouvernée</b> : maintenance prédictive, analyse qualité, traçabilité réglementaire, features du jumeau numérique — en micro-batch (fenêtres 1 s agrégées → rollups INCREMENTAL, du T ordinaire). Le temps réel de <b>contrôle/alerte</b> (&lt; 1 s) reste au niveau UNS/SCADA : on <b>consomme</b> l'UNS, on ne le remplace pas.</p></div>
+    </div>
+
+    <p class="code-label">Le code — trois connecteurs d'usine, même manifeste, mêmes éditions</p>
+    <pre><span class="c"># ── OPC UA — subscriptions via la passerelle + backfill HDA par plages de temps ──</span>
+plant = <span class="f">source</span>(<span class="s">"plant-a"</span>, connector=<span class="s">"opcua"</span>, secret=<span class="s">"OPCUA_GW"</span>)
+plant.<span class="f">stream</span>(<span class="s">"ns=2;s=Line1"</span>, output=<span class="s">"iot.line1_tags"</span>, mode=<span class="s">"append"</span>,
+             window=<span class="s">"1m"</span>, watermark=<span class="s">"30s"</span>, dedup_keys=[<span class="s">"tag_id"</span>, <span class="s">"ts"</span>])
+plant.<span class="f">backfill_hda</span>(from_=<span class="s">"2025-01-01"</span>, chunk=<span class="s">"6h"</span>)   <span class="c"># l'équivalent TEMPS des chunks CTID (E3)</span>
+
+<span class="c"># ── MQTT / Sparkplug B — TOUJOURS via l'étage durable (pont broker → Kafka/JetStream) ──</span>
+uns = <span class="f">source</span>(<span class="s">"uns"</span>, connector=<span class="s">"kafka"</span>, topic=<span class="s">"spBv1.0/plantA/#"</span>, codec=<span class="s">"sparkplug-b"</span>)
+<span class="c"># NBIRTH/DBIRTH = discover() (schéma des métriques) · seq = clé de dédup · NDEATH = santé du device (S8)</span>
+uns.<span class="f">stream</span>(<span class="s">"plantA/lineA"</span>, output=<span class="s">"iot.plant_a_landed"</span>, mode=<span class="s">"append"</span>)
+<span class="c"># éditions = plages d'offsets — publish-then-commit du §4-G, inchangé</span>
+
+<span class="c"># ── Historian — PI/AVEVA comme source EL ─────────────────────────────────────</span>
+pi = <span class="f">source</span>(<span class="s">"pi-historian"</span>, connector=<span class="s">"pi-webapi"</span>, secret=<span class="s">"PI_API"</span>)
+pi.<span class="f">stream</span>(<span class="s">"af/LineA"</span>, output=<span class="s">"iot.line_a_history"</span>, mode=<span class="s">"append"</span>, cursor=<span class="s">"ts"</span>, chunk=<span class="s">"24h"</span>)
+
+<span class="c"># ── Les rollups sont du T ordinaire — INCREMENTAL + audits de complétude ─────</span>
+<span class="f">MODEL</span> (<span class="k">name</span> iot.line1_1min, <span class="k">kind</span> INCREMENTAL_BY_TIME_RANGE (time_column minute),
+       <span class="k">audits</span> (expected_tags(1240), good_quality_rate(0.98), watermark_lag_max(<span class="s">'5m'</span>)));</pre>
+    <h4 class="mini">La grille unifiée — comment on gère TOUS les types de flux avec un seul pipeline</h4>
+    <div class="diagram">
+      <div class="layer l-teal" style="text-align:center;"><b>La question unique : ce flux a-t-il un journal rejouable adressable — et qui le tient ?</b><small>un « journal rejouable » = une plage qu'on peut relire à l'identique : LSN, offsets, IDs, plage de temps, liste de fichiers, curseur d'événements</small></div>
+      <div class="layer-row">
+        <div class="layer l-grn"><b>Classe A — journal chez la source</b><small>WAL/binlog · Kafka/JetStream/Pulsar · Redis Streams · historians (le temps) · dépôts de fichiers (les fichiers SONT le journal) · APIs à curseur d'événements → <b>consommer en runs bornés</b>, édition = plage, ack après publish</small></div>
+        <div class="layer l-acc"><b>Classe B — éphémère, pas de journal</b><small>MQTT · webhooks · AMQP pub/sub · WebSocket/SSE · subscriptions OPC UA → <b>interposer un étage durable</b> (pont Kafka/JetStream, ou réceptacle webhook idempotent) — le flux redevient Classe A</small></div>
+        <div class="layer l-mau"><b>Classe C — journal détruit à l'ack</b><small>files de messages (SQS, RabbitMQ queues) → <b>l'édition d'atterrissage DEVIENT le journal</b> ; ack seulement après publish ; dédup par message_id (les relivraisons sont la norme)</small></div>
+      </div>
+      <div class="cap">Trois classes, un seul pipeline : le cycle ⓪–⑤ du §4 ne change jamais — seuls quatre paramètres varient par type : <b>la plage</b>, <b>la clé de dédup</b>, <b>l'ack</b>, <b>le watermark</b>.</div>
+    </div>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Type de flux</th><th>Journal rejouable ?</th><th>Plage d'édition</th><th>Clé de dédup</th><th>Ack (après publish)</th><th>Classe · étage</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">CDC log-based (PG WAL · MySQL binlog · Mongo resume token · Oracle redo)</td><td class="yes">oui — le log du SGBD (slot)</td><td class="num">[lsn_from → lsn_to] · GTID · token</td><td class="num">PK + lsn</td><td class="num">avancer le slot</td><td class="num">A · OLake</td></tr>
+          <tr><td class="feat">Log d'événements (Kafka · JetStream · Pulsar · Kinesis)</td><td class="yes">oui — rétention du topic</td><td class="num">[offset_from → offset_to] / partition</td><td class="num">offset</td><td class="num">commit group (advisory)</td><td class="num">A · natif</td></tr>
+          <tr><td class="feat">Redis Streams</td><td class="yes">oui — entry IDs</td><td class="num">[id_from → id_to]</td><td class="num">entry id</td><td class="num">XACK</td><td class="num">A · natif</td></tr>
+          <tr><td class="feat">MQTT / Sparkplug B</td><td class="no">non — QoS ≠ relecture</td><td class="num">via le pont durable → offsets</td><td class="num">(tag_id, ts, seq)</td><td class="num">— (le pont tient le journal)</td><td class="num">B → A</td></tr>
+          <tr><td class="feat">Webhooks / push HTTP</td><td class="no">non — un POST perdu est perdu</td><td class="num">fenêtre de réception</td><td class="num">event_id (idempotence)</td><td class="num">200 OK immédiat, réceptacle durable derrière</td><td class="num">B · réceptacle (EL-13)</td></tr>
+          <tr><td class="feat">Files de messages (SQS · RabbitMQ)</td><td class="mid">détruit à l'ack</td><td class="num">fenêtre de consommation</td><td class="num">message_id</td><td class="num">ack/delete APRÈS publish</td><td class="num">C · natif</td></tr>
+          <tr><td class="feat">OPC UA subscriptions</td><td class="mid">non — mais HDA = l'historique</td><td class="num">fenêtre temps + watermark</td><td class="num">(tag_id, ts)</td><td class="num">— · NDEATH ⇒ backfill HDA du trou</td><td class="num">B, rattrapage A</td></tr>
+          <tr><td class="feat">Historians / TSDB (PI · Influx · Timescale)</td><td class="yes">oui — adressable par le temps</td><td class="num">[t_from → t_to] (time-chunks)</td><td class="num">(tag_id, ts)</td><td class="num">— (pull)</td><td class="num">A · natif</td></tr>
+          <tr><td class="feat">Dépôts de fichiers (S3/SFTP + notifications)</td><td class="yes">oui — les fichiers sont le journal</td><td class="num">liste de fichiers / préfixe horodaté</td><td class="num">content_hash</td><td class="num">—</td><td class="num">A · natif/FILESET</td></tr>
+          <tr><td class="feat">APIs à curseur d'événements (Stripe events, Salesforce CDC…)</td><td class="mid">oui — fenêtre de rétention</td><td class="num">[cursor_from → cursor_to]</td><td class="num">event_id</td><td class="num">— (cadence &lt; rétention !)</td><td class="num">A · dlt/natif</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <div class="note tip"><b>L'invariant qui rend tout gérable :</b> quel que soit le type, c'est le <b>même cycle ⓪–⑤</b> (curseur ← dernière édition · extract borné · staging+dédup · publish avec la plage · ack · lignage) exécuté par les <b>mêmes workers fongibles</b> — un type de flux se déclare entièrement par son quadruplet <b>(journal, plage, clé de dédup, ack)</b> plus un watermark pour les flux temporels. C'est ce que le manifeste encode déjà (<code>mode</code>, <code>dedup_keys</code>, <code>watermark</code> ; l'ack est impliqué par le connecteur). Corollaires : ① un flux de Classe B n'est <b>jamais</b> branché en direct sur la gouvernance — on lui donne d'abord un journal ; ② les subscriptions OPC UA gagnent un filet unique : une déconnexion (NDEATH) déclenche un <b>backfill HDA de la fenêtre manquée</b> — le trou se répare par le chemin batch. Ticket ajouté : <b>EL-13</b> (réceptacle webhooks : endpoint APISIX+OpenFGA, 200 immédiat, journal durable, dédup par event_id). <b>Représentation visuelle des trois classes + carte des services + panneaux frontend par type : <a href="07-planche-olake-classes-flux.html">planche, section 4</a>.</b></div>
+
+    <div class="note"><b>Tickets ajoutés :</b> EL-9 (connecteur OPC UA : subscriptions + backfill HDA par plages de temps) · EL-10 (codec Sparkplug B sur la voie Kafka : BIRTH→discover, seq→dédup, NDEATH→santé S8) · EL-11 (connecteur historian PI Web API : time-chunks + curseur) · EL-12 (politique late-data : watermark, édition de rattrapage, audits de complétude par fenêtre) · EL-13 (réceptacle webhooks durable et idempotent).</div>
+  </section>
+
+  <section id="code">
+    <h2><span class="num">6</span> Le code — manifeste, moteurs, Kafka exactly-once</h2>
+    <p class="section-sub">La déclaration du §9 (document ②) ne change pas — le moteur devient un choix de placement, le CDC un mode de stream.</p>
+    <pre><span class="c"># ── La même source(), avec l'étage moteur et le mode cdc ─────────────────────</span>
+crm = <span class="f">source</span>(<span class="s">"crm"</span>, connector=<span class="s">"postgresql"</span>, secret=<span class="s">"CRM_DB"</span>,
+             engine=<span class="s">"olake"</span>,                        <span class="c"># ① natif · ② dlt · ③ olake (volumétrie / CDC) · ④ custom</span>
+             refresh=<span class="s">"@5m"</span>)
+crm.<span class="f">stream</span>(<span class="s">"public.orders"</span>, output=<span class="s">"crm.orders"</span>, mode=<span class="s">"cdc"</span>,
+           chunk_column=<span class="s">"order_id"</span>,                 <span class="c"># backfill parallèle par plages de PK (sinon CTID)</span>
+           replica_identity=<span class="s">"full"</span>)                 <span class="c"># exigé au setup (E13) — sinon quarantaine</span>
+crm.<span class="f">on_schema_drift</span>(additive=<span class="s">"apply"</span>, breaking=<span class="s">"quarantine"</span>)
+
+<span class="c"># ── Ce que le worker el-cdc exécute (wrap OLake — garanties à la frontière) ──</span>
+<span class="c"># 1. curseur ← snapshot properties de la DERNIÈRE édition publiée (pas le state file)</span>
+<span class="c"># 2. olake sync --config … --state &lt;reconstruit&gt;    # backfill chunké repris + WAL replay borné</span>
+<span class="c"># 3. atterrissage staging (catalogue REST Lakekeeper) → audits → publish</span>
+<span class="c"># 4. édition estampillée origin.cursor={lsn_from,lsn_to} · ack du slot APRÈS le publish</span>
+
+<span class="c"># ── La table d'atterrissage CDC — lisible telle quelle, ou en vue « état courant » ──</span>
+lake.<span class="f">sql</span>(<span class="s">"""
+  CREATE VIEW crm.orders_current AS            -- dernière version de chaque ligne, deletes exclus
+  SELECT * EXCLUDE (_hemera_op, _hemera_cdc_lsn) FROM crm.orders
+  QUALIFY row_number() OVER (PARTITION BY order_id ORDER BY _hemera_cdc_lsn DESC) = 1
+    AND _hemera_op != 'd'
+"""</span>)
+
+<span class="c"># ── Kafka — exactly-once par l'édition (résout le TODO 2PC d'OLake, E11) ─────</span>
+s = lake.<span class="f">stream</span>(<span class="s">"orders_events"</span>)
+run = s.<span class="f">sync</span>()          <span class="c"># ① poll → ② publish édition [offset_from, offset_to] → ③ commit group (advisory)</span>
+s.<span class="f">offsets</span>(s.<span class="f">edition</span>(<span class="s">"latest"</span>))   <span class="c"># la plage publiée = la vérité ; crash ②→③ ⇒ relecture dédupliquée</span>
+s.<span class="f">replay</span>(s.<span class="f">edition</span>(88))          <span class="c"># rejouabilité exacte par plage — déjà au contrat du kind STREAM</span></pre>
+  </section>
+
+  <section id="tickets">
+    <h2><span class="num">7</span> Règles ops &amp; tickets</h2>
+    <p class="section-sub">Les règles apprises au banc, puis le travail tracé.</p>
+    <div class="note"><b>Règles ops (issues d'E8/E9/E13 + S7) :</b> ① <b>REPLICA IDENTITY FULL</b> vérifié à la création de la source (assistant S9 : check bloquant, sinon les UPDATE perdent les colonnes TOAST et les DELETE ne portent que la PK) ; ② <b>lag du slot</b> = métrique de santé de la source (S8) avec alerte — un slot en retard retient le WAL et remplit le disque du serveur source ; ③ <b>publication par table</b> (jamais <code>FOR ALL TABLES</code>) — l'ajout d'un stream est un changement de plan ; ④ le protocole « clear destination » d'OLake (E8) devient chez nous <b>ré-initialisation d'édition</b> : on repart d'une édition 0 propre, l'historique reste (jamais de suppression silencieuse) ; ⑤ droits minimaux du user de réplication : <code>REPLICATION</code> + SELECT sur les tables publiées, rien d'autre.</div>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Ticket</th><th>Contenu</th><th>Dépend de</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">EL-1</td><td>Wrap OLake sur workers <code>el-cdc</code> : image (binaire Go + sidecar Java), compilation manifeste <code>source()</code> → configs OLake (source/streams/state), logs remontés en events de run</td><td class="num">—</td></tr>
+          <tr><td class="feat">EL-2</td><td>Curseur re-ancré : reconstruire le state OLake depuis les snapshot properties de la dernière édition publiée ; refuser tout state file en désaccord (E8)</td><td class="num">EL-1</td></tr>
+          <tr><td class="feat">EL-3</td><td>Mode <code>cdc</code> du kind TABLE : colonnes <code>_hemera.op/_cdc_lsn/_row_id</code>, vue « état courant » générée, audits d'atterrissage (fraîcheur <code>cdc_ts</code>, unicité PK post-merge, counts vs stats WAL)</td><td class="num">—</td></tr>
+          <tr><td class="feat">EL-4</td><td>Écriture sur <b>branche</b> via catalogue REST dans le writer Java d'OLake (WAP complet) ; repli : staging + fast-forward, ou régime STREAM (audits post-publication)</td><td class="num">EL-1 · INT-2</td></tr>
+          <tr><td class="feat">EL-5</td><td>Kafka publish-then-commit : plage d'offsets dans l'édition, commit groupe advisory, dédup de relecture par plage publiée</td><td class="num">ST-1</td></tr>
+          <tr><td class="feat">EL-6</td><td>Checks de setup S9 (replica identity, publication, droits, slot) + monitoring lag de slot en S8</td><td class="num">—</td></tr>
+          <tr><td class="feat">EL-7</td><td>Bench : backfill natif (PyIceberg) vs OLake sur volumétries croissantes → seuil documenté de bascule d'étage moteur</td><td class="num">EL-1</td></tr>
+          <tr><td class="feat">EL-8</td><td>Dérive DDL : messages relation pgoutput → policy <code>on_schema_drift</code> (expansion auto règles R / quarantaine)</td><td class="num">EL-3</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <div class="note danger"><b>Ce qu'on ne prend PAS d'OLake :</b> son state file local (notre état vit dans le Postgres de Flows + ancré dans les éditions), son UI (S8/S9 pilotent le même manifeste), sa maintenance séparée (OLake Fusion — nos flows de maintenance couvrent compaction/expiration), et son écriture directe sur la table finale sans garde (notre frontière WAP/audits reste la règle, le régime STREAM l'exception assumée).</div>
+  </section>
+
+  <footer>
+    <p><b>Hemera — document ⑥ : annexe EL &amp; CDC.</b> Approfondit le §9 du document ② (sources EL) et alimente les tickets EL-1…EL-8.<br>
+    Méthode : OLake clone commit <code>8dcefff</code> (04/07/2026) · lecture dirigée (fichiers cités par fait) · banc S7 exécuté ici : Go 1.24, PostgreSQL 16 (<code>wal_level=logical</code>), slot <code>pgoutput</code> + publication, backfill CTID 5 000 lignes, replay borné <code>0/1E58640→0/1E588D0</code>, 4 enregistrements c/c/u/d vérifiés dans les Parquet produits.</p>
+  </footer>
+
+</div>
+
+</body></html>

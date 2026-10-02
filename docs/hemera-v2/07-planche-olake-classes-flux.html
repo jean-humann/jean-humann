@@ -1,0 +1,632 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}</style></head><body>
+<title>Hemera — Planche : intégration OLake dans Flows / EL / lakehouse</title>
+<style>
+  :root {
+    --bg:#eff1f5; --bg-soft:#e6e9ef; --card:#fff; --card-alt:#dce0e8;
+    --text:#4c4f69; --text-soft:#6c6f85; --text-dim:#8c8fa1; --line:#ccd0da;
+    --accent:#e25a1c; --accent-2:#1e66f5; --green:#40a02b; --mauve:#8839ef;
+    --red:#d20f39; --yellow:#df8e1d; --teal:#179299;
+    --code-bg:#1e1e2e; --code-text:#cdd6f4;
+    --shadow:0 1px 3px rgba(76,79,105,.12),0 8px 24px rgba(76,79,105,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#1e1e2e; --bg-soft:#181825; --card:#313244; --card-alt:#11111b;
+      --text:#cdd6f4; --text-soft:#bac2de; --text-dim:#9399b2; --line:#45475a;
+      --accent:#fab387; --accent-2:#89b4fa; --green:#a6e3a1; --mauve:#cba6f7;
+      --red:#f38ba8; --yellow:#f9e2af; --teal:#94e2d5;
+      --code-bg:#11111b; --code-text:#cdd6f4;
+      --shadow:0 1px 3px rgba(0,0,0,.3),0 8px 28px rgba(0,0,0,.35);
+    }
+  }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.65; -webkit-font-smoothing:antialiased; }
+  code,pre,.mono { font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  .wrap { max-width:980px; margin:0 auto; padding:0 22px 110px; }
+  a { color:var(--accent-2); text-decoration:none; } a:hover { text-decoration:underline; }
+
+  header.hero {
+    background:radial-gradient(1200px 420px at 10% -10%,rgba(226,90,28,.18),transparent 60%),
+      radial-gradient(950px 380px at 96% 0%,rgba(23,146,153,.14),transparent 55%),var(--bg-soft);
+    border-bottom:1px solid var(--line); padding:56px 22px 44px; text-align:center;
+  }
+  .badge { display:inline-flex; align-items:center; gap:8px; background:var(--card);
+    border:1px solid var(--line); color:var(--text-soft); padding:6px 14px;
+    border-radius:999px; font-size:13px; font-weight:600; margin-bottom:18px; }
+  .badge .dot { width:8px; height:8px; border-radius:50%; background:var(--teal); box-shadow:0 0 0 4px rgba(23,146,153,.18); }
+  header.hero h1 { margin:0 0 12px; font-size:clamp(26px,4.2vw,38px); line-height:1.14; letter-spacing:-.02em; text-wrap:balance; }
+  header.hero h1 em { color:var(--accent); font-style:normal; }
+  header.hero p.lead { margin:0 auto; max-width:760px; font-size:16.5px; color:var(--text-soft); }
+  .meta-pills { margin-top:20px; display:flex; gap:9px; justify-content:center; flex-wrap:wrap; }
+  .pill { font-size:12.5px; font-weight:600; padding:5px 12px; border-radius:8px; background:var(--card); border:1px solid var(--line); color:var(--text-soft); }
+
+  .toc { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px 22px; margin-top:32px; box-shadow:var(--shadow); }
+  .toc b { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim); display:block; margin-bottom:6px; }
+  .toc ol { margin:2px 0 0; padding-left:20px; } .toc li { margin:3px 0; font-size:14px; }
+  .toc .cols { display:grid; grid-template-columns:1fr 1fr; gap:0 30px; }
+  @media (max-width:640px){ .toc .cols{ grid-template-columns:1fr; } }
+
+  section { margin-top:46px; }
+  h2 { font-size:22px; letter-spacing:-.01em; margin:0 0 6px; display:flex; align-items:center; gap:11px; flex-wrap:wrap; }
+  h2 .num { flex:none; min-width:34px; height:32px; padding:0 9px; border-radius:9px; background:var(--teal); color:#fff; font-size:14px; font-weight:800; display:grid; place-items:center; }
+  @media (prefers-color-scheme: dark){ h2 .num{ color:#1e1e2e; } }
+  .section-sub { color:var(--text-dim); margin:0 0 18px; font-size:14.5px; }
+  h4.mini { font-size:13.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-dim); margin:20px 0 8px; }
+  p { margin:0 0 13px; }
+  ul { margin:6px 0 13px; padding-left:20px; } li { margin:3px 0; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:20px 22px; box-shadow:var(--shadow); }
+  p code,li code,td code { background:var(--card-alt); color:var(--accent); padding:1.5px 6px; border-radius:6px; font-size:.88em; font-weight:600; }
+
+  pre { background:var(--code-bg); color:var(--code-text); border-radius:12px; padding:15px 17px; overflow-x:auto; font-size:12.4px; line-height:1.6; margin:13px 0; border:1px solid rgba(255,255,255,.06); }
+  pre .c{color:#6c7086;font-style:italic} pre .k{color:#cba6f7} pre .s{color:#a6e3a1}
+  pre .f{color:#89b4fa} pre .n{color:#fab387} pre .o{color:#f5c2e7}
+  .code-label { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim); margin:16px 0 0; }
+  .code-label::before { content:""; width:10px; height:10px; border-radius:3px; background:var(--teal); }
+
+  .tablewrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; margin-top:8px; font-size:13px; }
+  th,td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+  thead th { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-dim); background:var(--bg-soft); }
+  tbody tr:last-child td { border-bottom:none; }
+  td.feat { font-weight:600; }
+  .yes{color:var(--green);font-weight:700} .no{color:var(--red);font-weight:700} .mid{color:var(--yellow);font-weight:700}
+
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:13px; }
+  @media (max-width:700px){ .grid2{ grid-template-columns:1fr; } }
+  .benefit { background:var(--card); border:1px solid var(--line); border-radius:15px; padding:16px 17px; }
+  .benefit .ic { display:inline-grid; place-items:center; width:38px; height:38px; border-radius:11px; background:var(--bg-soft); border:1px solid var(--line); font-size:19px; margin-bottom:10px; }
+  .benefit > b { display:block; margin-bottom:4px; font-size:14px; }
+  .benefit p { font-size:12.9px; color:var(--text-soft); margin:0; line-height:1.55; }
+  .benefit p b { color:var(--text); }
+  .tone-good .ic{ background:color-mix(in srgb,var(--green) 15%,var(--card)); border-color:color-mix(in srgb,var(--green) 42%,var(--line)); }
+  .tone-bad .ic{ background:color-mix(in srgb,var(--red) 14%,var(--card)); border-color:color-mix(in srgb,var(--red) 40%,var(--line)); }
+  .tone-warn .ic{ background:color-mix(in srgb,var(--yellow) 16%,var(--card)); border-color:color-mix(in srgb,var(--yellow) 42%,var(--line)); }
+  .tone-info .ic{ background:color-mix(in srgb,var(--accent-2) 14%,var(--card)); border-color:color-mix(in srgb,var(--accent-2) 38%,var(--line)); }
+
+  .note { border:1px solid color-mix(in srgb,var(--accent-2) 32%,var(--line)); background:color-mix(in srgb,var(--accent-2) 7%,var(--card)); border-radius:13px; padding:13px 17px; margin:14px 0; font-size:13.6px; line-height:1.6; }
+  .note.warn{ border-color:color-mix(in srgb,var(--yellow) 40%,var(--line)); background:color-mix(in srgb,var(--yellow) 10%,var(--card)); }
+  .note.tip{ border-color:color-mix(in srgb,var(--green) 36%,var(--line)); background:color-mix(in srgb,var(--green) 8%,var(--card)); }
+  .note.danger{ border-color:color-mix(in srgb,var(--red) 36%,var(--line)); background:color-mix(in srgb,var(--red) 7%,var(--card)); }
+  .note b { color:var(--text); }
+
+  .diagram { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; box-shadow:var(--shadow); margin:14px 0; }
+  .layer { border:1.5px solid var(--line); border-radius:11px; padding:10px 13px; margin:8px 0; background:var(--bg-soft); }
+  .layer > b { display:block; font-size:13.5px; } .layer small { display:block; margin-top:3px; color:var(--text-dim); font-size:11.5px; line-height:1.45; }
+  .layer.l-teal{border-color:var(--teal)} .layer.l-acc{border-color:var(--accent)} .layer.l-grn{border-color:var(--green)} .layer.l-mau{border-color:var(--mauve)} .layer.l-red{border-color:var(--red)} .layer.l-yel{border-color:var(--yellow)}
+  .layer-row { display:flex; gap:8px; } .layer-row .layer { flex:1; margin:8px 0 0; }
+  @media (max-width:640px){ .layer-row{ flex-direction:column; } }
+  .arrow { text-align:center; color:var(--text-dim); font-size:13px; margin:3px 0; }
+  .arrow.lbl{color:var(--accent);font-weight:700;font-size:11.5px}
+  .cap { text-align:center; font-size:11.5px; color:var(--text-dim); margin:8px auto 18px; max-width:820px; line-height:1.55; }
+  .tg { font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; padding:2px 8px; border-radius:5px; vertical-align:middle; }
+  .tg.ok{ background:color-mix(in srgb,var(--green) 15%,var(--card)); color:var(--green); }
+  .tg.ko{ background:color-mix(in srgb,var(--red) 13%,var(--card)); color:var(--red); }
+  .tg.wr{ background:color-mix(in srgb,var(--yellow) 16%,var(--card)); color:var(--yellow); }
+  .tg.nf{ background:var(--bg-soft); color:var(--text-dim); border:1px solid var(--line); }
+
+  footer { margin-top:60px; padding-top:22px; border-top:1px solid var(--line); text-align:center; color:var(--text-dim); font-size:13px; }
+  svg { font-family:inherit; width:100%; height:auto; display:block; }
+  svg .zone { fill:none; stroke:var(--line); stroke-dasharray:5 4; }
+  svg .zlbl { fill:var(--text-dim); font-size:11px; font-weight:800; letter-spacing:.08em; }
+  svg .box { fill:var(--card); stroke:var(--line); stroke-width:1.4; }
+  svg .box.acc{stroke:var(--accent)} svg .box.grn{stroke:var(--green)} svg .box.mau{stroke:var(--mauve)} svg .box.blu{stroke:var(--accent-2)} svg .box.teal{stroke:var(--teal)}
+  svg .t { fill:var(--text); font-size:12.5px; font-weight:700; }
+  svg .s { fill:var(--text-soft); font-size:10.5px; }
+  svg .d { fill:var(--text-dim); font-size:9.8px; }
+  svg .lbl { fill:var(--accent); font-size:12px; font-weight:800; }
+  svg path.a, svg line.a { stroke:var(--text-dim); stroke-width:1.6; fill:none; marker-end:url(#ah); }
+  svg path.dash, svg line.dash { stroke-dasharray:5 4; stroke:var(--mauve); }
+</style>
+
+<header class="hero">
+  <div class="badge"><span class="dot"></span> Planche visuelle &middot; Plateforme Hemera &middot; illustre le document ⑥ (annexe EL &amp; CDC)</div>
+  <h1>L'intégration OLake : <em>une vue, tout le chemin</em><br>source → flow → worker → lakehouse → consommation</h1>
+  <p class="lead">Le graphe complet de l'EL v2 : où vit OLake (un <b>moteur wrappé</b> dans les workers <code>el-cdc</code>, jamais un service à part), comment le CDC borné devient une <b>édition estampillée</b> de son curseur, où s'appliquent WAP, OpenFGA et le lignage — et la chronologie exactly-once avec ses deux points de crash. Fondé sur les faits E1–E13 et le banc S7 du <a href="06-annexe-el-cdc-olake.html">document ⑥</a>.</p>
+  <div class="meta-pills">
+    <span class="pill">🗺️ un graphe, tout le chemin</span>
+    <span class="pill">⓪–⑤ le cycle exactly-once</span>
+    <span class="pill">💥 2 crashs, 0 doublon, 0 trou</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div style="font-size:12px; color:var(--text-soft); border:1px solid var(--line); border-radius:10px; padding:9px 14px; margin:0 0 18px; line-height:1.9;"><b>Planche — intégration OLake.</b> Complète le <a href="06-annexe-el-cdc-olake.html">document ⑥ (annexe EL &amp; CDC)</a> · série : ① <a href="01-architecture-flows-datasets.html">Architecture</a> · ② <a href="02-modele-de-developpement.html">Modèle de développement</a> · ③ <a href="03-design-frontend.html">Frontend</a> · ④ <a href="04-annexe-schema-iceberg.html">Schéma Iceberg</a> · ⑤ <a href="05-revue-integration.html">Revue d'intégration</a>.</div>
+
+  <section id="graphe">
+    <h2><span class="num">1</span> Le graphe d'intégration</h2>
+    <p class="section-sub">OLake n'apparaît nulle part comme un service : c'est un binaire (+ sidecar Java) DANS le worker, piloté par le manifeste, encadré par le WAP.</p>
+    <div class="card" style="padding:14px;">
+<svg viewBox="0 0 1220 790" role="img" aria-label="Intégration OLake dans Flows, EL et le lakehouse">
+  <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8f93a8"/></marker></defs>
+
+  <rect class="zone" x="15" y="70" width="200" height="565" rx="14"/><text class="zlbl" x="25" y="92">SOURCES</text>
+  <rect class="zone" x="235" y="70" width="360" height="565" rx="14"/><text class="zlbl" x="245" y="92">FLOWS — CONTRÔLE &amp; WORKERS</text>
+  <rect class="zone" x="615" y="70" width="340" height="565" rx="14"/><text class="zlbl" x="625" y="92">LAKEHOUSE GOUVERNÉ</text>
+  <rect class="zone" x="975" y="70" width="230" height="360" rx="14"/><text class="zlbl" x="985" y="92">CONSOMMATION</text>
+  <rect class="zone" x="235" y="655" width="970" height="115" rx="14"/><text class="zlbl" x="245" y="677">GOUVERNANCE</text>
+
+  <rect class="box" x="28" y="115" width="174" height="100" rx="10"/>
+  <text class="t" x="36" y="135">PostgreSQL · MySQL · Oracle</text>
+  <text class="s" x="36" y="152">WAL / binlog — CDC log-based</text>
+  <text class="d" x="36" y="168">publication + slot pgoutput</text>
+  <text class="d" x="36" y="182">REPLICA IDENTITY FULL (E13)</text>
+  <text class="d" x="36" y="196">lag de slot surveillé (S8)</text>
+
+  <rect class="box" x="28" y="300" width="174" height="66" rx="10"/>
+  <text class="t" x="36" y="320">Kafka — topics</text>
+  <text class="s" x="36" y="337">lecture ∥ par partition</text>
+  <text class="d" x="36" y="352">[offset_from → offset_to]</text>
+
+  <rect class="box" x="28" y="470" width="174" height="58" rx="10"/>
+  <text class="t" x="36" y="490">SFTP · API · fichiers</text>
+  <text class="s" x="36" y="507">long tail — natif / dlt</text>
+
+  <rect class="box blu" x="248" y="110" width="334" height="86" rx="10"/>
+  <text class="t" x="256" y="130">Service Flows — plan de contrôle</text>
+  <text class="s" x="256" y="147">manifeste source() → plan / apply</text>
+  <text class="s" x="256" y="162">file Postgres SKIP LOCKED · refresh @5m</text>
+  <text class="d" x="256" y="178">lease · retry · backfill = 1 job PAR CHUNK (E2/E3)</text>
+
+  <rect class="box acc" x="248" y="248" width="334" height="170" rx="10"/>
+  <text class="t" x="256" y="268">Worker tag el-cdc</text>
+  <rect class="box" x="258" y="280" width="152" height="60" rx="8"/>
+  <text class="s" x="264" y="297" font-weight="700">OLake (Go)</text>
+  <text class="d" x="264" y="312">backfill chunké CTID/PK</text>
+  <text class="d" x="264" y="326">replay WAL borné (E5)</text>
+  <rect class="box" x="420" y="280" width="152" height="60" rx="8"/>
+  <text class="s" x="426" y="297" font-weight="700">sidecar Java (gRPC)</text>
+  <text class="d" x="426" y="312">écritures Iceberg · Arrow</text>
+  <text class="d" x="426" y="326">equality deletes (E10)</text>
+  <text class="d" x="256" y="362">⓪ curseur lu depuis la DERNIÈRE édition publiée (E7)</text>
+  <text class="d" x="256" y="377">état du Postgres de Flows = cache, jamais la vérité</text>
+  <text class="d" x="256" y="392">wrap : garanties à la frontière — même grille que dbt</text>
+
+  <rect class="box" x="248" y="470" width="334" height="62" rx="10"/>
+  <text class="t" x="256" y="490">Worker tag el — natif Python · dlt</text>
+  <text class="s" x="256" y="507">API paginées · SFTP · fichiers · Sheets…</text>
+  <text class="d" x="256" y="522">même manifeste — l'étage moteur est un placement</text>
+
+  <rect class="box mau" x="628" y="110" width="314" height="76" rx="10"/>
+  <text class="t" x="636" y="130">Lakekeeper — catalogue REST</text>
+  <text class="s" x="636" y="147">décision OpenFGA (PEP 1) · remote signing</text>
+  <text class="d" x="636" y="163">credentials S3 éphémères, scopés table</text>
+
+  <rect class="box grn" x="628" y="238" width="314" height="212" rx="10"/>
+  <text class="t" x="636" y="258">Table d'atterrissage 🏞️ crm.orders</text>
+  <rect class="box acc" x="640" y="272" width="142" height="66" rx="8"/>
+  <text class="s" x="646" y="290">branche staging (WAP)</text>
+  <text class="d" x="646" y="305">_hemera.op · _cdc_lsn</text>
+  <text class="d" x="646" y="319">fenêtre dédup i/c (E6)</text>
+  <rect class="box" x="800" y="272" width="130" height="66" rx="8"/>
+  <text class="s" x="806" y="290">audits d'atterrissage</text>
+  <text class="d" x="806" y="305">fraîcheur cdc_ts · PK</text>
+  <text class="d" x="806" y="319">veto ⇒ rien n'existe</text>
+  <line class="a" x1="782" y1="305" x2="800" y2="305"/>
+  <line class="a" x1="865" y1="338" x2="865" y2="362"/>
+  <rect class="box grn" x="640" y="362" width="290" height="72" rx="8"/>
+  <text class="s" x="646" y="380" font-weight="700">main — ③ publish (fast-forward)</text>
+  <text class="s" x="646" y="397">édition N · origin.cursor =</text>
+  <text class="d" x="646" y="412">{lsn_from → lsn_to} ou [offsets] — exactly-once (E7)</text>
+
+  <rect class="box" x="628" y="500" width="314" height="60" rx="10"/>
+  <text class="t" x="636" y="520">S3 — OVH / Outscale</text>
+  <text class="s" x="636" y="537">parquet + delete files · zéro clé statique</text>
+
+  <rect class="box teal" x="988" y="110" width="204" height="82" rx="10"/>
+  <text class="t" x="996" y="130">Spark · DuckDB · Trino</text>
+  <text class="s" x="996" y="147">SQL · time travel</text>
+  <text class="d" x="996" y="162">gouverné (PEP 1)</text>
+
+  <rect class="box" x="988" y="240" width="204" height="88" rx="10"/>
+  <text class="t" x="996" y="260">vue orders_current</text>
+  <text class="s" x="996" y="277">dernier état par PK,</text>
+  <text class="s" x="996" y="291">deletes exclus</text>
+  <text class="d" x="996" y="306">apps · BI · featuresets</text>
+
+  <rect class="box mau" x="248" y="690" width="334" height="66" rx="10"/>
+  <text class="t" x="256" y="710">Cleyrop Catalog</text>
+  <text class="s" x="256" y="727">⑤ OpenLineage du run · éditions · lignage</text>
+  <text class="d" x="256" y="742">le lignage commence À la source (origin.*)</text>
+
+  <rect class="box" x="628" y="690" width="314" height="66" rx="10"/>
+  <text class="t" x="636" y="710">Keycloak (OIDC) · ExternalSecrets</text>
+  <text class="s" x="636" y="727">identité du worker · secrets résolus au run</text>
+  <text class="d" x="636" y="742">jamais de credential dans le manifeste</text>
+
+  <path class="a" d="M202,165 C228,165 222,300 248,300"/><text class="lbl" x="212" y="238">①</text>
+  <line class="a" x1="202" y1="332" x2="248" y2="332"/><text class="lbl" x="218" y="326">①</text>
+  <line class="a" x1="202" y1="499" x2="248" y2="499"/>
+  <line class="a" x1="415" y1="196" x2="415" y2="248"/><text class="d" x="423" y="226">jobs (lease)</text>
+  <path class="a" d="M582,300 C608,300 602,150 628,150"/><text class="lbl" x="597" y="232">②</text>
+  <line class="a" x1="785" y1="186" x2="785" y2="238"/><text class="d" x="793" y="216">commits</text>
+  <line class="a" x1="785" y1="450" x2="785" y2="500"/><text class="d" x="793" y="480">fichiers</text>
+  <path class="a" d="M942,392 C968,392 962,152 988,152"/>
+  <path class="a" d="M942,404 C968,404 962,282 988,282"/>
+  <path class="a dash" d="M248,400 C214,400 208,246 203,218"/><text class="lbl" x="214" y="330">④</text>
+  <path class="a dash" d="M628,404 C602,404 608,366 584,366"/><text class="lbl" x="598" y="394">⓪</text>
+  <line class="a dash" x1="415" y1="532" x2="415" y2="690"/><text class="lbl" x="423" y="616">⑤</text>
+</svg>
+    </div>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Étape</th><th>Ce qui se passe</th><th>Garantie</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">⓪ curseur</td><td>le worker lit le curseur dans les <b>snapshot properties de la dernière édition publiée</b> (LSN ou offsets) — l'état du Postgres de Flows n'est qu'un cache, le state file OLake est reconstruit à partir de là (EL-2)</td><td class="num">la destination est la vérité (E7)</td></tr>
+          <tr><td class="feat">① extract</td><td><b>run borné</b> : backfill par chunks CTID/PK (1 chunk = 1 job de la file, repris chunk par chunk) puis replay WAL jusqu'à la position capturée au départ ; Kafka : poll d'une plage d'offsets</td><td class="num">jobs · lease · retry (E2/E3/E5)</td></tr>
+          <tr><td class="feat">② staging</td><td>écritures Iceberg via le catalogue REST Lakekeeper (décision OpenFGA, S3 remote-signé) sur la <b>branche staging</b>, colonnes <code>_hemera.op/_cdc_lsn</code>, fenêtre de dédup i/c pendant le chevauchement backfill↔CDC</td><td class="num">PEP 1 · WAP (E6/E10)</td></tr>
+          <tr><td class="feat">③ publish</td><td>audits d'atterrissage (fraîcheur <code>cdc_ts</code>, unicité PK, counts) puis fast-forward : <b>édition N estampillée <code>origin.cursor</code></b> — veto ⇒ rien n'existe</td><td class="num">atomique · auditée</td></tr>
+          <tr><td class="feat">④ ack</td><td>le slot Postgres est acquitté / le consumer group commité <b>APRÈS</b> le publish — jamais avant</td><td class="num">la règle unique de l'exactly-once</td></tr>
+          <tr><td class="feat">⑤ lignage</td><td>OpenLineage du run vers le Cleyrop Catalog : le lignage commence À la source (<code>origin.system/uri/cursor</code>)</td><td class="num">traçable de bout en bout</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+  </section>
+
+  <section id="chrono">
+    <h2><span class="num">2</span> La chronologie exactly-once — et ses deux crashs</h2>
+    <p class="section-sub">Une seule règle : la source n'est acquittée qu'après la publication de l'édition qui la couvre. Tout le reste en découle.</p>
+    <div class="diagram">
+      <div class="layer-row">
+        <div class="layer"><b>⓪ curseur</b><small>← édition N-1</small></div>
+        <div class="layer l-acc"><b>① extract borné</b><small>chunks ∥ · WAL → cible · offsets</small></div>
+        <div class="layer l-acc"><b>② staging</b><small>branche WAP · dédup i/c</small></div>
+        <div class="layer l-grn"><b>③ publish</b><small>édition N (curseur inclus)</small></div>
+        <div class="layer l-mau"><b>④ ack source</b><small>slot / consumer group</small></div>
+        <div class="layer"><b>⑤ lignage</b><small>OpenLineage → Catalog</small></div>
+      </div>
+      <div class="layer-row">
+        <div class="layer" style="border-color:var(--red);"><b>💥 crash avant ③</b><small>rien n'existe (WAP) — re-run depuis le curseur de l'édition N-1 ; les chunks déjà commités sont sautés (E4) ; le WAL/les offsets ne sont pas acquittés, donc rien n'est perdu</small></div>
+        <div class="layer" style="border-color:var(--red);"><b>💥 crash entre ③ et ④</b><small>l'édition N existe mais la source ne le sait pas — recovery <b>borné</b> : rejouer jusqu'au curseur de l'édition N exactement (épinglé, anti-dépassement E7), dédupliquer par plage, puis acquitter — zéro doublon, zéro trou</small></div>
+      </div>
+      <div class="cap">Les deux crashs sont les SEULS cas possibles — et les deux convergent vers le même état final. C'est la propriété qu'OLake démontre pour Postgres (E7) et que notre modèle d'éditions étend à Kafka (E11 résolu).</div>
+    </div>
+  </section>
+
+  <section id="etages">
+    <h2><span class="num">3</span> Où passe chaque source — les quatre étages du même manifeste</h2>
+    <p class="section-sub">L'étage moteur est un placement décidé à la compilation du manifeste — jamais une API différente pour l'auteur du flow.</p>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Source</th><th>Étage moteur</th><th>Worker</th><th>Ce qui atterrit</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">DB volumineuse · CDC log-based (PG/MySQL/Oracle…)</td><td><b>③ OLake wrappé</b> (Go + sidecar Java)</td><td class="num">el-cdc</td><td class="num">éditions = plages de LSN · colonnes _hemera.op/_cdc_lsn · vue « état courant » générée</td></tr>
+          <tr><td class="feat">Kafka / flux</td><td><b>natif</b> (kind STREAM — publish-then-commit)</td><td class="num">el</td><td class="num">éditions = plages d'offsets · replay exact par plage</td></tr>
+          <tr><td class="feat">API SaaS · long tail (Jira, HubSpot…)</td><td><b>② dlt</b> (E par dlt, L par le lake)</td><td class="num">el</td><td class="num">éditions incrémentales à curseur</td></tr>
+          <tr><td class="feat">JDBC léger · fichiers · Sheets</td><td><b>① catalogue natif</b> (spec + discover → no-code S9)</td><td class="num">el</td><td class="num">full_refresh / append / merge</td></tr>
+          <tr><td class="feat">Tout le reste</td><td><b>④ @source Python libre</b></td><td class="num">el</td><td class="num">le runtime fait le L (WAP), l'auteur fait le E</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <div class="note"><b>La règle d'or du wrap</b> (identique à dbt/SQLMesh/MLflow) : l'outil tiers travaille <b>à l'intérieur</b> de la frontière — entrées gouvernées, écritures sur staging, publication par le flow, provenance dans l'édition. Changer d'étage moteur (natif → OLake quand la volumétrie monte) ne change ni le manifeste, ni les écrans S8/S9, ni le lignage — c'est un placement, comme le backend d'un embedding.</div>
+  </section>
+
+
+  <section id="classes">
+    <h2><span class="num">4</span> Les trois classes de flux — visuel, services responsables, écrans</h2>
+    <p class="section-sub">La grille du document ⑥ §5, rendue visible : un schéma par classe, la brique qui tient chaque maillon, et ce que le frontend montre pour chaque type.</p>
+
+    <div class="diagram">
+      <svg viewBox="0 0 1220 645" role="img" aria-label="Classe A — journal chez la source, graphe détaillé">
+        <rect class="zone" x="15" y="66" width="225" height="430" rx="12"/><text class="zlbl" x="25" y="88">SOURCE — EX. POSTGRESQL</text>
+        <rect class="zone" x="260" y="66" width="330" height="430" rx="12"/><text class="zlbl" x="270" y="88">FLOWS — CONTRÔLE &amp; WORKER</text>
+        <rect class="zone" x="610" y="66" width="345" height="430" rx="12"/><text class="zlbl" x="620" y="88">LAKEHOUSE GOUVERNÉ</text>
+        <rect class="zone" x="975" y="66" width="230" height="430" rx="12"/><text class="zlbl" x="985" y="88">MÊME CLASSE, AUTRES JOURNAUX</text>
+        <rect class="zone" x="260" y="520" width="695" height="100" rx="12"/><text class="zlbl" x="270" y="542">GOUVERNANCE</text>
+
+        <rect class="box" x="25" y="100" width="205" height="72" rx="9"/>
+        <text class="t" x="33" y="120">Base métier</text>
+        <text class="s" x="33" y="137">tables publiées (publication)</text>
+        <text class="d" x="33" y="152">REPLICA IDENTITY FULL (E13)</text>
+        <rect class="box grn" x="25" y="200" width="205" height="98" rx="9"/>
+        <text class="t" x="33" y="220">JOURNAL — slot logique</text>
+        <text class="s" x="33" y="237">pgoutput · confirmed_flush_lsn</text>
+        <text class="d" x="33" y="253">retient le WAL tant que pas ack</text>
+        <text class="d" x="33" y="268">lag = disque source → alerte S8</text>
+        <text class="d" x="33" y="283">tenu par la source (DBA)</text>
+
+        <rect class="box blu" x="270" y="100" width="310" height="88" rx="9"/>
+        <text class="t" x="278" y="120">Service Flows</text>
+        <text class="s" x="278" y="137">manifeste stream(mode=cdc) · plan/apply</text>
+        <text class="s" x="278" y="152">cadence @5m · file SKIP LOCKED</text>
+        <text class="d" x="278" y="168">backfill : 1 chunk = 1 job · lease · retry</text>
+        <rect class="box acc" x="270" y="222" width="310" height="148" rx="9"/>
+        <text class="t" x="278" y="242">Worker el-cdc (fongible)</text>
+        <rect class="box" x="280" y="254" width="142" height="56" rx="7"/>
+        <text class="s" x="286" y="271">OLake (Go)</text>
+        <text class="d" x="286" y="285">chunks CTID/PK ∥</text>
+        <text class="d" x="286" y="298">WAL borné (E5)</text>
+        <rect class="box" x="432" y="254" width="140" height="56" rx="7"/>
+        <text class="s" x="438" y="271">sidecar Java</text>
+        <text class="d" x="438" y="285">Iceberg gRPC · Arrow</text>
+        <text class="d" x="438" y="298">equality deletes</text>
+        <text class="d" x="280" y="330">⓪ curseur ← édition N-1 (snapshot properties)</text>
+        <text class="d" x="280" y="345">dédup PK+lsn · fenêtre de chevauchement i/c</text>
+        <text class="d" x="280" y="360">state OLake reconstruit — jamais de state file cru</text>
+
+        <rect class="box mau" x="620" y="100" width="325" height="70" rx="9"/>
+        <text class="t" x="628" y="120">Lakekeeper — REST · OpenFGA (PEP 1)</text>
+        <text class="s" x="628" y="137">remote signing S3 — credential éphémère</text>
+        <text class="d" x="628" y="152">scopé table · zéro clé statique</text>
+        <rect class="box grn" x="620" y="200" width="325" height="172" rx="9"/>
+        <text class="t" x="628" y="220">Atterrissage 🏞️ crm.orders</text>
+        <rect class="box acc" x="632" y="232" width="132" height="62" rx="7"/>
+        <text class="s" x="638" y="249">staging (WAP)</text>
+        <text class="d" x="638" y="263">_hemera.op · _cdc_lsn</text>
+        <text class="d" x="638" y="277">dédup i/c</text>
+        <rect class="box" x="782" y="232" width="130" height="62" rx="7"/>
+        <text class="s" x="788" y="249">audits</text>
+        <text class="d" x="788" y="263">fraîcheur cdc_ts · PK</text>
+        <text class="d" x="788" y="277">veto ⇒ néant</text>
+        <line class="a" x1="764" y1="263" x2="782" y2="263"/>
+        <line class="a" x1="847" y1="294" x2="847" y2="312"/>
+        <rect class="box grn" x="632" y="312" width="290" height="50" rx="7"/>
+        <text class="s" x="638" y="330">③ main — édition N (fast-forward)</text>
+        <text class="d" x="638" y="345">origin.cursor = {lsn_from → lsn_to}</text>
+        <rect class="box" x="620" y="402" width="325" height="56" rx="9"/>
+        <text class="t" x="628" y="422">S3 — OVH / Outscale</text>
+        <text class="s" x="628" y="439">parquet + delete files</text>
+
+        <rect class="box" x="985" y="100" width="210" height="66" rx="9"/>
+        <text class="t" x="992" y="119">Kafka</text>
+        <text class="d" x="992" y="134">journal = topic (rétention)</text>
+        <text class="d" x="992" y="148">plage [offsets] · ack = commit group</text>
+        <rect class="box" x="985" y="190" width="210" height="66" rx="9"/>
+        <text class="t" x="992" y="209">Historian / OPC HDA</text>
+        <text class="d" x="992" y="224">journal = le temps</text>
+        <text class="d" x="992" y="238">plage [t_from → t_to] · pas d'ack</text>
+        <rect class="box" x="985" y="280" width="210" height="66" rx="9"/>
+        <text class="t" x="992" y="299">Dépôt S3 / SFTP</text>
+        <text class="d" x="992" y="314">journal = les fichiers</text>
+        <text class="d" x="992" y="328">clé = content_hash</text>
+        <rect class="box" x="985" y="370" width="210" height="66" rx="9"/>
+        <text class="t" x="992" y="389">API à curseur (Stripe…)</text>
+        <text class="d" x="992" y="404">journal = events retenus</text>
+        <text class="d" x="992" y="418">règle : cadence &lt; rétention</text>
+
+        <rect class="box mau" x="270" y="548" width="310" height="60" rx="9"/>
+        <text class="t" x="278" y="567">Cleyrop Catalog</text>
+        <text class="s" x="278" y="584">⑤ OpenLineage · éditions &amp; curseurs (vérité)</text>
+        <rect class="box" x="620" y="548" width="325" height="60" rx="9"/>
+        <text class="t" x="628" y="567">Keycloak · ExternalSecrets</text>
+        <text class="s" x="628" y="584">identité du worker · secrets résolus au run</text>
+
+        <line class="a" x1="425" y1="188" x2="425" y2="222"/><text class="d" x="433" y="209">job (lease)</text>
+        <path class="a" d="M230,248 C252,248 250,290 270,290"/><text class="lbl" x="240" y="270">①</text>
+        <path class="a" d="M580,290 C605,290 600,140 620,140"/><text class="lbl" x="596" y="222">②</text>
+        <line class="a" x1="785" y1="170" x2="785" y2="200"/><text class="d" x="793" y="190">commits</text>
+        <line class="a" x1="785" y1="372" x2="785" y2="402"/>
+        <path class="a dash" d="M632,338 C602,338 604,312 580,312"/><text class="lbl" x="596" y="332">⓪</text>
+        <path class="a dash" d="M270,352 C238,352 232,290 230,268"/><text class="lbl" x="240" y="330">④</text>
+        <line class="a dash" x1="425" y1="370" x2="425" y2="548"/><text class="lbl" x="433" y="465">⑤</text>
+        <line class="a dash" x1="700" y1="548" x2="588" y2="368"/><text class="d" x="655" y="470">JWT · secrets</text>
+      </svg>
+      <div class="layer" style="background:var(--card);"><b>🖥️ Ce que montre le frontend (fiche source S8, classe A)</b><small>jauge <b>lag du journal</b> (slot : 42 Mo retenus — alerte disque source · Kafka : 1 240 msgs/partition) · dernière édition <b>e88 [0/1E58640 → 0/1E588D0]</b>, il y a 3 min · backfill : <b>14/18 chunks ✓</b> (repris) · checks setup : replica identity ✓ · publication ✓ · actions : <b>sync now</b> · <b>backfill par plage</b> · <b>replay d'édition</b></small></div>
+    </div>
+
+    <div class="diagram">
+      <svg viewBox="0 0 1220 665" role="img" aria-label="Classe B — flux éphémère, étage durable interposé, graphe détaillé">
+        <rect class="zone" x="15" y="66" width="200" height="430" rx="12"/><text class="zlbl" x="25" y="88">FLUX ÉPHÉMÈRES</text>
+        <rect class="zone" x="235" y="66" width="250" height="430" rx="12"/><text class="zlbl" x="245" y="88">ÉTAGE DURABLE — PLATEFORME</text>
+        <rect class="zone" x="505" y="66" width="280" height="430" rx="12"/><text class="zlbl" x="515" y="88">FLOWS &amp; WORKER</text>
+        <rect class="zone" x="805" y="66" width="400" height="430" rx="12"/><text class="zlbl" x="815" y="88">LAKEHOUSE GOUVERNÉ</text>
+        <rect class="zone" x="505" y="520" width="700" height="100" rx="12"/><text class="zlbl" x="515" y="542">GOUVERNANCE</text>
+
+        <rect class="box acc" x="25" y="100" width="180" height="100" rx="9"/>
+        <text class="t" x="33" y="120">Usine / OT</text>
+        <text class="s" x="33" y="137">devices Sparkplug B</text>
+        <text class="s" x="33" y="152">broker UNS (MQTT)</text>
+        <text class="d" x="33" y="168">NBIRTH = schéma</text>
+        <text class="d" x="33" y="183">NDEATH = trou à combler</text>
+        <rect class="box" x="25" y="230" width="180" height="70" rx="9"/>
+        <text class="t" x="33" y="250">Émetteurs webhooks</text>
+        <text class="s" x="33" y="267">SaaS · partenaires</text>
+        <text class="d" x="33" y="283">POST signé, jamais rejoué</text>
+        <rect class="box" x="25" y="330" width="180" height="70" rx="9"/>
+        <text class="t" x="33" y="350">Subscriptions OPC UA</text>
+        <text class="s" x="33" y="367">via passerelle edge</text>
+        <text class="d" x="33" y="383">HDA = le rattrapage</text>
+
+        <rect class="box mau" x="245" y="100" width="230" height="72" rx="9"/>
+        <text class="t" x="253" y="120">Pont broker → Kafka/JetStream</text>
+        <text class="s" x="253" y="137">extension HiveMQ / EMQX</text>
+        <text class="d" x="253" y="152">transforme QoS en journal</text>
+        <rect class="box mau" x="245" y="202" width="230" height="84" rx="9"/>
+        <text class="t" x="253" y="222">Ingress webhooks (EL-13)</text>
+        <text class="s" x="253" y="239">APISIX + OpenFGA · 200 OK immédiat</text>
+        <text class="d" x="253" y="255">event_id (idempotence)</text>
+        <text class="d" x="253" y="270">module du service Flows</text>
+        <rect class="box grn" x="245" y="320" width="230" height="86" rx="9"/>
+        <text class="t" x="253" y="340">JOURNAL : topic durable</text>
+        <text class="s" x="253" y="357">[offset_from → offset_to]</text>
+        <text class="d" x="253" y="373">rétention plateforme —</text>
+        <text class="d" x="253" y="388">le « slot » du flux éphémère</text>
+
+        <rect class="box blu" x="515" y="100" width="260" height="84" rx="9"/>
+        <text class="t" x="523" y="120">Service Flows</text>
+        <text class="s" x="523" y="137">cadence · file · lease</text>
+        <text class="d" x="523" y="153">NDEATH ⇒ job backfill HDA</text>
+        <text class="d" x="523" y="168">de la fenêtre manquée</text>
+        <rect class="box acc" x="515" y="218" width="260" height="128" rx="9"/>
+        <text class="t" x="523" y="238">Worker el</text>
+        <text class="s" x="523" y="255">① consumer borné [offsets]</text>
+        <text class="s" x="523" y="271">fenêtres [t] + watermark</text>
+        <text class="d" x="523" y="288">dédup (tag_id, ts, seq) · event_id</text>
+        <text class="d" x="523" y="303">⓪ curseur ← édition N-1</text>
+        <text class="d" x="523" y="318">late data ⇒ édition de rattrapage</text>
+
+        <rect class="box mau" x="815" y="100" width="380" height="60" rx="9"/>
+        <text class="t" x="823" y="120">Lakekeeper — OpenFGA (PEP 1) · remote signing</text>
+        <text class="d" x="823" y="137">credential éphémère scopé table</text>
+        <rect class="box grn" x="815" y="190" width="380" height="182" rx="9"/>
+        <text class="t" x="823" y="210">Atterrissage 🏞️ iot.plant_a</text>
+        <rect class="box acc" x="827" y="222" width="160" height="60" rx="7"/>
+        <text class="s" x="833" y="239">staging (WAP)</text>
+        <text class="d" x="833" y="253">ts · tag_id · value · quality</text>
+        <text class="d" x="833" y="267">fenêtre + watermark</text>
+        <rect class="box" x="1005" y="222" width="178" height="60" rx="7"/>
+        <text class="s" x="1011" y="239">audits</text>
+        <text class="d" x="1011" y="253">complétude tags · qualité</text>
+        <text class="d" x="1011" y="267">watermark_lag_max</text>
+        <line class="a" x1="987" y1="252" x2="1005" y2="252"/>
+        <line class="a" x1="1094" y1="282" x2="1094" y2="300"/>
+        <rect class="box grn" x="827" y="300" width="356" height="56" rx="7"/>
+        <text class="s" x="833" y="318">③ main — édition N [offsets]</text>
+        <text class="d" x="833" y="333">+ éditions de rattrapage (late), dédupliquées</text>
+        <rect class="box" x="815" y="402" width="380" height="52" rx="9"/>
+        <text class="t" x="823" y="422">S3 — parquet, partition temps + tags</text>
+
+        <rect class="box mau" x="515" y="548" width="260" height="58" rx="9"/>
+        <text class="t" x="523" y="567">Cleyrop Catalog</text>
+        <text class="s" x="523" y="583">⑤ lignage · curseurs · santé devices (S8)</text>
+        <rect class="box" x="815" y="548" width="380" height="58" rx="9"/>
+        <text class="t" x="823" y="567">Keycloak · ExternalSecrets</text>
+        <text class="s" x="823" y="583">identité worker · secrets (broker, gateway) au run</text>
+
+        <line class="a" x1="205" y1="136" x2="245" y2="136"/><text class="d" x="212" y="128">push</text>
+        <line class="a" x1="205" y1="262" x2="245" y2="250"/>
+        <path class="a" d="M205,362 C222,362 228,150 245,145"/>
+        <line class="a" x1="360" y1="172" x2="360" y2="202"/>
+        <line class="a" x1="360" y1="286" x2="360" y2="320"/>
+        <path class="a" d="M475,362 C495,362 495,282 515,282"/><text class="lbl" x="488" y="332">①</text>
+        <line class="a" x1="645" y1="184" x2="645" y2="218"/><text class="d" x="653" y="205">job</text>
+        <path class="a" d="M775,282 C795,282 795,130 815,130"/><text class="lbl" x="790" y="215">②</text>
+        <line class="a" x1="1000" y1="160" x2="1000" y2="190"/>
+        <line class="a" x1="1000" y1="372" x2="1000" y2="402"/>
+        <path class="a dash" d="M827,330 C800,330 800,310 775,310"/><text class="lbl" x="791" y="352">⓪</text>
+        <path class="a dash" d="M515,330 C495,330 490,368 475,368"/><text class="lbl" x="486" y="304">④</text>
+        <line class="a dash" x1="645" y1="346" x2="645" y2="548"/><text class="lbl" x="653" y="455">⑤</text>
+        <path class="a dash" d="M205,108 C330,58 420,70 515,108"/><text class="d" x="290" y="60">NDEATH ⇒ backfill HDA (le trou se répare en batch)</text>
+      </svg>
+      <div class="layer" style="background:var(--card);"><b>🖥️ Ce que montre le frontend (classe B)</b><small><b>santé du pont</b> (durable tier joignable, débit, retard) · <b>devices Sparkplug</b> : 38 vivants · 2 NDEATH → <b>backfill HDA du trou déclenché ✓</b> · watermark courant : 30 s, <b>1 édition de rattrapage</b> publiée (dédup tag/ts/seq) · webhooks : 240 req/min, <b>12 doublons event_id absorbés</b>, 0 rejet</small></div>
+    </div>
+
+    <div class="diagram">
+      <svg viewBox="0 0 1220 645" role="img" aria-label="Classe C — journal détruit à l'ack, graphe détaillé">
+        <rect class="zone" x="15" y="66" width="230" height="430" rx="12"/><text class="zlbl" x="25" y="88">FILE DE MESSAGES</text>
+        <rect class="zone" x="265" y="66" width="330" height="430" rx="12"/><text class="zlbl" x="275" y="88">FLOWS — CONTRÔLE &amp; WORKER</text>
+        <rect class="zone" x="615" y="66" width="345" height="430" rx="12"/><text class="zlbl" x="625" y="88">LAKEHOUSE GOUVERNÉ</text>
+        <rect class="zone" x="980" y="66" width="225" height="430" rx="12"/><text class="zlbl" x="990" y="88">INVARIANTS C</text>
+        <rect class="zone" x="265" y="520" width="695" height="100" rx="12"/><text class="zlbl" x="275" y="542">GOUVERNANCE</text>
+
+        <rect class="box mau" x="25" y="100" width="210" height="112" rx="9"/>
+        <text class="t" x="33" y="120">SQS · RabbitMQ</text>
+        <text class="s" x="33" y="137">visibility timeout pendant le run</text>
+        <text class="s" x="33" y="153">redelivery count par message</text>
+        <text class="d" x="33" y="170">l'ack est IRRÉVERSIBLE :</text>
+        <text class="d" x="33" y="185">le message n'existera plus</text>
+        <text class="d" x="33" y="200">la relivraison est la norme</text>
+        <rect class="box" x="25" y="250" width="210" height="72" rx="9"/>
+        <text class="t" x="33" y="270">DLQ</text>
+        <text class="s" x="33" y="287">messages poison</text>
+        <text class="d" x="33" y="303">rejoués via l'édition, jamais la file</text>
+
+        <rect class="box blu" x="275" y="100" width="310" height="72" rx="9"/>
+        <text class="t" x="283" y="120">Service Flows</text>
+        <text class="s" x="283" y="137">cadence · file de jobs · lease · retry</text>
+        <text class="d" x="283" y="153">alerte : âge du plus vieux &gt; cadence×3</text>
+        <rect class="box acc" x="275" y="210" width="310" height="128" rx="9"/>
+        <text class="t" x="283" y="230">Worker el</text>
+        <text class="s" x="283" y="247">① consomme un lot (invisible pour les autres)</text>
+        <text class="s" x="283" y="263">dédup message_id ← éditions récentes ⓪</text>
+        <text class="d" x="283" y="280">une relivraison (crash, timeout) est</text>
+        <text class="d" x="283" y="295">absorbée ici, silencieusement</text>
+        <text class="d" x="283" y="310">poison ⇒ DLQ (événement gouverné)</text>
+
+        <rect class="box mau" x="625" y="100" width="325" height="60" rx="9"/>
+        <text class="t" x="633" y="120">Lakekeeper — OpenFGA (PEP 1)</text>
+        <text class="s" x="633" y="137">remote signing S3</text>
+        <rect class="box grn" x="625" y="190" width="325" height="172" rx="9"/>
+        <text class="t" x="633" y="210">Atterrissage 🏞️ ops.events</text>
+        <rect class="box acc" x="637" y="222" width="132" height="60" rx="7"/>
+        <text class="s" x="643" y="239">staging (WAP)</text>
+        <text class="d" x="643" y="253">message_id · payload</text>
+        <text class="d" x="643" y="267">reçu_at</text>
+        <rect class="box" x="787" y="222" width="130" height="60" rx="7"/>
+        <text class="s" x="793" y="239">audits</text>
+        <text class="d" x="793" y="253">unicité message_id</text>
+        <text class="d" x="793" y="267">schéma du payload</text>
+        <line class="a" x1="769" y1="252" x2="787" y2="252"/>
+        <line class="a" x1="852" y1="282" x2="852" y2="300"/>
+        <rect class="box grn" x="637" y="300" width="290" height="52" rx="7"/>
+        <text class="s" x="643" y="318">③ main — édition = LE journal</text>
+        <text class="d" x="643" y="333">la seule trace rejouable qui existera jamais</text>
+        <rect class="box" x="625" y="392" width="325" height="52" rx="9"/>
+        <text class="t" x="633" y="412">S3 — parquet</text>
+
+        <rect class="box" x="990" y="100" width="205" height="100" rx="9"/>
+        <text class="t" x="997" y="119">Replay · diff · time travel</text>
+        <text class="d" x="997" y="136">tout se fait sur l'édition,</text>
+        <text class="d" x="997" y="150">plus jamais sur la file —</text>
+        <text class="d" x="997" y="164">y compris rejouer un</text>
+        <text class="d" x="997" y="178">message poison corrigé</text>
+        <rect class="box" x="990" y="230" width="205" height="86" rx="9"/>
+        <text class="t" x="997" y="249">Télémétrie S8</text>
+        <text class="d" x="997" y="266">profondeur de file</text>
+        <text class="d" x="997" y="280">âge du plus vieux message</text>
+        <text class="d" x="997" y="294">redeliveries dédupliquées</text>
+
+        <rect class="box mau" x="275" y="548" width="310" height="58" rx="9"/>
+        <text class="t" x="283" y="567">Cleyrop Catalog</text>
+        <text class="s" x="283" y="583">⑤ lignage · message_ids publiés (dédup ⓪)</text>
+        <rect class="box" x="625" y="548" width="325" height="58" rx="9"/>
+        <text class="t" x="633" y="567">Keycloak · ExternalSecrets</text>
+        <text class="s" x="633" y="583">identité worker · credentials de la file au run</text>
+
+        <line class="a" x1="430" y1="172" x2="430" y2="210"/><text class="d" x="438" y="196">job (lease)</text>
+        <path class="a" d="M235,156 C258,156 255,265 275,265"/><text class="lbl" x="245" y="220">①</text>
+        <path class="a" d="M585,270 C608,270 605,130 625,130"/><text class="lbl" x="601" y="210">②</text>
+        <line class="a" x1="790" y1="160" x2="790" y2="190"/>
+        <line class="a" x1="790" y1="362" x2="790" y2="392"/>
+        <path class="a dash" d="M637,326 C606,326 608,300 585,300"/><text class="lbl" x="601" y="322">⓪</text>
+        <path class="a dash" d="M275,320 C245,320 240,230 235,214"/><text class="lbl" x="246" y="300">④</text>
+        <path class="a dash" d="M235,120 C255,90 260,90 280,104"/><text class="d" x="250" y="80">relivraison si crash — absorbée en ①</text>
+        <path class="a dash" d="M275,300 C230,310 235,270 235,266"/>
+        <line class="a dash" x1="430" y1="338" x2="430" y2="548"/><text class="lbl" x="438" y="450">⑤</text>
+      </svg>
+      <div class="layer" style="background:var(--card);"><b>🖥️ Ce que montre le frontend (classe C)</b><small><b>profondeur de file</b> : 3 420 msgs · <b>âge du plus vieux</b> : 4 min (alerte si &gt; cadence×3) · dernier run : 1 812 messages → édition e41, <b>7 redeliveries dédupliquées</b> · in-flight : 0</small></div>
+    </div>
+
+    <h4 class="mini" style="font-size:13.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-dim); margin:20px 0 8px;">Qui tient quoi — la carte des services</h4>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Brique</th><th>Responsabilité</th><th>Classes</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">Service Flows (contrôle)</td><td>manifeste → plan/apply · cadence (refresh) · file de jobs SKIP LOCKED · leases &amp; retries · <b>ingress webhooks</b> (module derrière APISIX+OpenFGA : 200 OK, event_id → étage durable, EL-13)</td><td class="num">A · B · C</td></tr>
+          <tr><td class="feat">Pool de workers el / el-cdc</td><td>exécution des runs bornés · moteurs (natif · dlt · OLake+sidecar) · dédup · écriture staging · fongibles (curseur dans l'édition, pas en mémoire)</td><td class="num">A · B · C</td></tr>
+          <tr><td class="feat">Étage durable mutualisé</td><td>Kafka / NATS JetStream opéré par la plateforme : LE journal des flux éphémères ; les ponts MQTT (extension HiveMQ/EMQX) restent côté usine/UNS</td><td class="num">B</td></tr>
+          <tr><td class="feat">Lakekeeper + OpenFGA</td><td>atterrissage gouverné (PEP 1) : catalogue REST, branches staging, remote signing S3</td><td class="num">A · B · C</td></tr>
+          <tr><td class="feat">Cleyrop Catalog</td><td>la vérité des <b>éditions &amp; curseurs</b> · lignage OpenLineage · santé/fraîcheur des sources (alimente S8)</td><td class="num">A · B · C</td></tr>
+          <tr><td class="feat">Côté source (client / usine)</td><td>slot &amp; publication (DBA) · broker UNS &amp; pont (équipe OT) · rétention des topics · droits du user de réplication</td><td class="num">A · B</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+
+    <h4 class="mini" style="font-size:13.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-dim); margin:20px 0 8px;">Le frontend par type — quel panneau, quels éléments</h4>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Type de flux</th><th>Panneau spécifique (fiche source S8)</th><th>Actions</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">CDC DB (A)</td><td>jauge lag du slot (Mo de WAL retenus) · LSN de la dernière édition · progression des chunks de backfill · checks setup (replica identity, publication)</td><td class="num">sync now · backfill par plage · replay édition</td></tr>
+          <tr><td class="feat">Kafka / logs (A)</td><td>par partition : offset commité vs publié · lag · débit</td><td class="num">replay par plage d'offsets</td></tr>
+          <tr><td class="feat">Historian / OPC HDA (A)</td><td>couverture temporelle (fenêtres publiées vs attendues) · trous rattrapés · complétude des tags</td><td class="num">backfill time-chunks</td></tr>
+          <tr><td class="feat">MQTT / Sparkplug (B)</td><td>santé du pont durable · devices vivants / NDEATH · watermark courant · éditions de rattrapage</td><td class="num">déclencher le rattrapage HDA</td></tr>
+          <tr><td class="feat">Webhooks (B)</td><td>req/min de l'ingress · doublons event_id absorbés · rejets 4xx/5xx</td><td class="num">rotation du secret d'endpoint</td></tr>
+          <tr><td class="feat">Files SQS/AMQP (C)</td><td>profondeur de file · âge du plus vieux message · redeliveries dédupliquées</td><td class="num">purge gouvernée (événement)</td></tr>
+          <tr><td class="feat">Tous</td><td><b>timeline des éditions avec leur plage</b> (le S4 des sources) · audits par édition · lignage S17 depuis origin.*</td><td class="num">—</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <div class="cap" style="text-align:left;">Un seul écran S8, des panneaux par classe : l'utilisateur ne choisit jamais « une techno de pipeline » — il voit le même objet <i>source</i>, avec la télémétrie propre à sa classe. La grille complète (plage · clé de dédup · ack · watermark) : document ⑥ §5.</div>
+  </section>
+
+  <footer>
+    <p><b>Hemera — planche : intégration OLake.</b> Illustre le document ⑥ (13 faits E1–E13, banc S7 : PG16 réel, backfill CTID, CDC pgoutput borné 0/1E58640→0/1E588D0, 4 enregistrements c/c/u/d vérifiés).</p>
+  </footer>
+
+</div>
+
+</body></html>

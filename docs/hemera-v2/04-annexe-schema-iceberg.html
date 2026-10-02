@@ -1,0 +1,377 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}</style></head><body>
+<title>Hemera — Annexe : gestion de schéma Iceberg (branches, WAP, snapshots)</title>
+<style>
+  :root {
+    --bg:#eff1f5; --bg-soft:#e6e9ef; --card:#fff; --card-alt:#dce0e8;
+    --text:#4c4f69; --text-soft:#6c6f85; --text-dim:#8c8fa1; --line:#ccd0da;
+    --accent:#e25a1c; --accent-2:#1e66f5; --green:#40a02b; --mauve:#8839ef;
+    --red:#d20f39; --yellow:#df8e1d; --teal:#179299;
+    --code-bg:#1e1e2e; --code-text:#cdd6f4;
+    --shadow:0 1px 3px rgba(76,79,105,.12),0 8px 24px rgba(76,79,105,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#1e1e2e; --bg-soft:#181825; --card:#313244; --card-alt:#11111b;
+      --text:#cdd6f4; --text-soft:#bac2de; --text-dim:#9399b2; --line:#45475a;
+      --accent:#fab387; --accent-2:#89b4fa; --green:#a6e3a1; --mauve:#cba6f7;
+      --red:#f38ba8; --yellow:#f9e2af; --teal:#94e2d5;
+      --code-bg:#11111b; --code-text:#cdd6f4;
+      --shadow:0 1px 3px rgba(0,0,0,.3),0 8px 28px rgba(0,0,0,.35);
+    }
+  }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.65; -webkit-font-smoothing:antialiased; }
+  code,pre,.mono { font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  .wrap { max-width:980px; margin:0 auto; padding:0 22px 110px; }
+  a { color:var(--accent-2); text-decoration:none; } a:hover { text-decoration:underline; }
+
+  header.hero {
+    background:radial-gradient(1200px 420px at 10% -10%,rgba(226,90,28,.18),transparent 60%),
+      radial-gradient(950px 380px at 96% 0%,rgba(23,146,153,.14),transparent 55%),var(--bg-soft);
+    border-bottom:1px solid var(--line); padding:56px 22px 44px; text-align:center;
+  }
+  .badge { display:inline-flex; align-items:center; gap:8px; background:var(--card);
+    border:1px solid var(--line); color:var(--text-soft); padding:6px 14px;
+    border-radius:999px; font-size:13px; font-weight:600; margin-bottom:18px; }
+  .badge .dot { width:8px; height:8px; border-radius:50%; background:var(--teal); box-shadow:0 0 0 4px rgba(23,146,153,.18); }
+  header.hero h1 { margin:0 0 12px; font-size:clamp(26px,4.2vw,38px); line-height:1.14; letter-spacing:-.02em; text-wrap:balance; }
+  header.hero h1 em { color:var(--accent); font-style:normal; }
+  header.hero p.lead { margin:0 auto; max-width:760px; font-size:16.5px; color:var(--text-soft); }
+  .meta-pills { margin-top:20px; display:flex; gap:9px; justify-content:center; flex-wrap:wrap; }
+  .pill { font-size:12.5px; font-weight:600; padding:5px 12px; border-radius:8px; background:var(--card); border:1px solid var(--line); color:var(--text-soft); }
+
+  .toc { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px 22px; margin-top:32px; box-shadow:var(--shadow); }
+  .toc b { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim); display:block; margin-bottom:6px; }
+  .toc ol { margin:2px 0 0; padding-left:20px; } .toc li { margin:3px 0; font-size:14px; }
+  .toc .cols { display:grid; grid-template-columns:1fr 1fr; gap:0 30px; }
+  @media (max-width:640px){ .toc .cols{ grid-template-columns:1fr; } }
+
+  section { margin-top:46px; }
+  h2 { font-size:22px; letter-spacing:-.01em; margin:0 0 6px; display:flex; align-items:center; gap:11px; flex-wrap:wrap; }
+  h2 .num { flex:none; min-width:34px; height:32px; padding:0 9px; border-radius:9px; background:var(--teal); color:#fff; font-size:14px; font-weight:800; display:grid; place-items:center; }
+  @media (prefers-color-scheme: dark){ h2 .num{ color:#1e1e2e; } }
+  .section-sub { color:var(--text-dim); margin:0 0 18px; font-size:14.5px; }
+  h4.mini { font-size:13.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-dim); margin:20px 0 8px; }
+  p { margin:0 0 13px; }
+  ul { margin:6px 0 13px; padding-left:20px; } li { margin:3px 0; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:20px 22px; box-shadow:var(--shadow); }
+  p code,li code,td code { background:var(--card-alt); color:var(--accent); padding:1.5px 6px; border-radius:6px; font-size:.88em; font-weight:600; }
+
+  pre { background:var(--code-bg); color:var(--code-text); border-radius:12px; padding:15px 17px; overflow-x:auto; font-size:12.4px; line-height:1.6; margin:13px 0; border:1px solid rgba(255,255,255,.06); }
+  pre .c{color:#6c7086;font-style:italic} pre .k{color:#cba6f7} pre .s{color:#a6e3a1}
+  pre .f{color:#89b4fa} pre .n{color:#fab387} pre .o{color:#f5c2e7}
+  .code-label { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim); margin:16px 0 0; }
+  .code-label::before { content:""; width:10px; height:10px; border-radius:3px; background:var(--teal); }
+
+  .tablewrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; margin-top:8px; font-size:13px; }
+  th,td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+  thead th { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-dim); background:var(--bg-soft); }
+  tbody tr:last-child td { border-bottom:none; }
+  td.feat { font-weight:600; }
+  .yes{color:var(--green);font-weight:700} .no{color:var(--red);font-weight:700} .mid{color:var(--yellow);font-weight:700}
+
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:13px; }
+  @media (max-width:700px){ .grid2{ grid-template-columns:1fr; } }
+  .benefit { background:var(--card); border:1px solid var(--line); border-radius:15px; padding:16px 17px; }
+  .benefit .ic { display:inline-grid; place-items:center; width:38px; height:38px; border-radius:11px; background:var(--bg-soft); border:1px solid var(--line); font-size:19px; margin-bottom:10px; }
+  .benefit > b { display:block; margin-bottom:4px; font-size:14px; }
+  .benefit p { font-size:12.9px; color:var(--text-soft); margin:0; line-height:1.55; }
+  .benefit p b { color:var(--text); }
+  .tone-good .ic{ background:color-mix(in srgb,var(--green) 15%,var(--card)); border-color:color-mix(in srgb,var(--green) 42%,var(--line)); }
+  .tone-bad .ic{ background:color-mix(in srgb,var(--red) 14%,var(--card)); border-color:color-mix(in srgb,var(--red) 40%,var(--line)); }
+  .tone-warn .ic{ background:color-mix(in srgb,var(--yellow) 16%,var(--card)); border-color:color-mix(in srgb,var(--yellow) 42%,var(--line)); }
+  .tone-info .ic{ background:color-mix(in srgb,var(--accent-2) 14%,var(--card)); border-color:color-mix(in srgb,var(--accent-2) 38%,var(--line)); }
+
+  .note { border:1px solid color-mix(in srgb,var(--accent-2) 32%,var(--line)); background:color-mix(in srgb,var(--accent-2) 7%,var(--card)); border-radius:13px; padding:13px 17px; margin:14px 0; font-size:13.6px; line-height:1.6; }
+  .note.warn{ border-color:color-mix(in srgb,var(--yellow) 40%,var(--line)); background:color-mix(in srgb,var(--yellow) 10%,var(--card)); }
+  .note.tip{ border-color:color-mix(in srgb,var(--green) 36%,var(--line)); background:color-mix(in srgb,var(--green) 8%,var(--card)); }
+  .note.danger{ border-color:color-mix(in srgb,var(--red) 36%,var(--line)); background:color-mix(in srgb,var(--red) 7%,var(--card)); }
+  .note b { color:var(--text); }
+
+  .diagram { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; box-shadow:var(--shadow); margin:14px 0; }
+  .layer { border:1.5px solid var(--line); border-radius:11px; padding:10px 13px; margin:8px 0; background:var(--bg-soft); }
+  .layer > b { display:block; font-size:13.5px; } .layer small { display:block; margin-top:3px; color:var(--text-dim); font-size:11.5px; line-height:1.45; }
+  .layer.l-teal{border-color:var(--teal)} .layer.l-acc{border-color:var(--accent)} .layer.l-grn{border-color:var(--green)} .layer.l-mau{border-color:var(--mauve)} .layer.l-red{border-color:var(--red)} .layer.l-yel{border-color:var(--yellow)}
+  .layer-row { display:flex; gap:8px; } .layer-row .layer { flex:1; margin:8px 0 0; }
+  @media (max-width:640px){ .layer-row{ flex-direction:column; } }
+  .arrow { text-align:center; color:var(--text-dim); font-size:13px; margin:3px 0; }
+  .arrow.lbl{color:var(--accent);font-weight:700;font-size:11.5px}
+  .cap { text-align:center; font-size:11.5px; color:var(--text-dim); margin:8px auto 18px; max-width:820px; line-height:1.55; }
+  .tg { font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; padding:2px 8px; border-radius:5px; vertical-align:middle; }
+  .tg.ok{ background:color-mix(in srgb,var(--green) 15%,var(--card)); color:var(--green); }
+  .tg.ko{ background:color-mix(in srgb,var(--red) 13%,var(--card)); color:var(--red); }
+  .tg.wr{ background:color-mix(in srgb,var(--yellow) 16%,var(--card)); color:var(--yellow); }
+  .tg.nf{ background:var(--bg-soft); color:var(--text-dim); border:1px solid var(--line); }
+
+  footer { margin-top:60px; padding-top:22px; border-top:1px solid var(--line); text-align:center; color:var(--text-dim); font-size:13px; }
+</style>
+
+<header class="hero">
+  <div class="badge"><span class="dot"></span> Annexe technique &middot; Plateforme Hemera &middot; complète l'architecture v2 §18</div>
+  <h1>Gestion de schéma Iceberg : <em>le guide complet</em><br>branches · WAP · snapshots · moteurs</h1>
+  <p class="lead">Deux campagnes de tests empiriques (16 faits, F1–F16, tous exécutés sur PyIceberg 0.11 contre un warehouse Iceberg réel) et les règles de plateforme qui en découlent. Couvre : types imbriqués, couplages partition/tri/identifiants, tolérances d'écriture, estampillage des snapshots, rollback, concurrence, format v3 &amp; valeurs par défaut, <code>union_by_name</code>, name-mapping, matrice moteurs — et la machine à états d'une migration.</p>
+  <div class="meta-pills">
+    <span class="pill">🔬 16 faits vérifiés</span>
+    <span class="pill">🌿 schéma ≠ branche</span>
+    <span class="pill">🆔 field-ids partout</span>
+    <span class="pill">↔️ expand / contract</span>
+    <span class="pill">⚙️ règles R1–R14</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div style="font-size:12px; color:var(--text-soft); border:1px solid var(--line); border-radius:10px; padding:9px 14px; margin:0 0 18px; line-height:1.9;"><b>Série Hemera v2 — document ④ · Annexe — schéma Iceberg (fondement du §18 de l'architecture).</b> Ordre de lecture : ① <a href="01-architecture-flows-datasets.html">Architecture</a> → ② <a href="02-modele-de-developpement.html">Modèle de développement</a> → ③ <a href="03-design-frontend.html">Design frontend</a> → ④ ce document → ⑤ <a href="05-revue-integration.html">Revue d'intégration</a> → ⑥ <a href="06-annexe-el-cdc-olake.html">Annexe EL &amp; CDC (étude OLake)</a>.</div>
+
+
+  <div class="toc">
+    <b>Sommaire</b>
+    <div class="cols">
+      <div>
+        <ol>
+          <li><a href="#modele">Le modèle : où vit le schéma, vraiment</a></li>
+          <li><a href="#recap">Rappel — les 8 faits fondateurs (F1–F8)</a></li>
+          <li><a href="#nested">Types imbriqués : des field-ids à tous les étages (F9)</a></li>
+          <li><a href="#couplages">Couplages : partition, tri, identifiants (F10–F11)</a></li>
+          <li><a href="#tolerance">Tolérance d'écriture ≠ respect du contrat (F12)</a></li>
+          <li><a href="#stamping">Estampillage des snapshots &amp; rollback (F13)</a></li>
+        </ol>
+      </div>
+      <div>
+        <ol start="7">
+          <li><a href="#concurrence">Concurrence des commits de schéma (F16)</a></li>
+          <li><a href="#v3">Format v3, valeurs par défaut — et un piège v2 (F14)</a></li>
+          <li><a href="#union">union_by_name : la primitive de migration (F15)</a></li>
+          <li><a href="#namemapping">Name-mapping &amp; fichiers importés</a></li>
+          <li><a href="#moteurs">Matrice moteurs — vérifié vs à vérifier</a></li>
+          <li><a href="#regles">Le jeu de règles consolidé R1–R14 + machine à états</a></li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <section id="modele">
+    <h2><span class="num">1</span> Le modèle : où vit le schéma, vraiment</h2>
+    <p class="section-sub">Quatre objets, quatre durées de vie — tout le reste est une conséquence.</p>
+    <div class="diagram">
+      <div class="layer l-teal"><b>Métadonnées de table (globales — un seul exemplaire, toutes branches confondues)</b><small><code>schemas[]</code> : l'historique complet des schémas, chacun avec son <code>schema-id</code> · <code>current-schema-id</code> : LE schéma courant · <code>last-column-id</code> : compteur de field-ids, jamais réutilisé · <code>partition-specs[]</code>, <code>sort-orders[]</code> : référencent les colonnes <b>par field-id</b> · <code>identifier-field-ids</code> : l'identité de ligne (upsert)</small></div>
+      <div class="arrow">▼ chaque commit de données produit…</div>
+      <div class="layer-row">
+        <div class="layer l-grn"><b>Snapshot</b><small>immuable · estampille le <code>schema-id</code> <b>courant au moment du commit</b> (F13) · pointé par les refs</small></div>
+        <div class="layer l-acc"><b>Refs (branches &amp; tags)</b><small>de simples pointeurs vers des snapshots — <b>ne portent aucun schéma</b></small></div>
+        <div class="layer l-mau"><b>Fichiers de données</b><small>colonnes identifiées par field-id dans Parquet · jamais réécrits par une évolution — la projection fait tout</small></div>
+      </div>
+      <div class="cap">Corollaire : <code>update_schema()</code> est un commit de <b>métadonnées</b> (pas de snapshot, pas de branche) → global et immédiat pour tous les lecteurs « courants ». La lecture d'un snapshot précis projette son schéma d'époque ; la lecture d'une tête de branche projette le schéma courant. Les fichiers ne bougent jamais : ajout → NULL comblé à la lecture, drop → colonne ignorée, rename → résolution par field-id.</div>
+    </div>
+  </section>
+
+  <section id="recap">
+    <h2><span class="num">2</span> Rappel — les 8 faits fondateurs (F1–F8, spike n°1)</h2>
+    <p class="section-sub">Détaillés dans l'architecture v2 §18 ; rappelés ici pour que l'annexe se lise seule.</p>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>#</th><th>Fait vérifié</th><th>Règle induite</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">F1</td><td><code>update_schema</code> = global, immédiat, sans snapshot — <b>non isolé par branche/WAP</b></td><td>l'évolution de schéma est une opération de <b>plan</b>, jamais un effet de bord de run</td></tr>
+          <tr><td class="feat">F2</td><td>time travel par snapshot → <b>schéma d'époque</b> ; scan courant → schéma courant</td><td>deux sémantiques de lecture, affichées comme telles (S3/S5)</td></tr>
+          <tr><td class="feat">F3</td><td>drop : fichiers intacts, historique lisible pour toujours</td><td>« supprimé » = retiré du courant, pas effacé</td></tr>
+          <tr><td class="feat">F4</td><td>re-création même nom = <b>nouveau field-id</b>, zéro résurrection</td><td>l'identité d'une colonne est son field-id</td></tr>
+          <tr><td class="feat">F5</td><td>rename = métadonnée pure, même field-id</td><td>lignage/labels continus ; seul l'impact <i>par nom</i> est à analyser</td></tr>
+          <tr><td class="feat">F6</td><td><code>int→long</code> ✓ · <code>long→int</code> ✗</td><td>élargir = expansion ; rétrécir = contraction</td></tr>
+          <tr><td class="feat">F7</td><td>colonne <code>required</code> sans défaut ✗</td><td>ajouts <code>optional</code> par défaut (v3 : §8)</td></tr>
+          <tr><td class="feat">F8</td><td>write avec colonne inconnue ✗ (« update the schema first »)</td><td>ordre WAP imposé : expansion <b>avant</b> écriture</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+  </section>
+
+  <section id="nested">
+    <h2><span class="num">3</span> Types imbriqués : des field-ids à tous les étages <span class="tg ok">F9 vérifié</span></h2>
+    <p class="section-sub">struct, list, map évoluent comme le niveau racine — chaque champ imbriqué a son propre field-id.</p>
+    <div class="card">
+      <p>Vérifié : <code>add_column(("addr","country"))</code> ajoute un champ <b>dans</b> un struct ; <code>rename_column(("addr","zip"), "postcode")</code> renomme un champ imbriqué. Les field-ids sont attribués <b>à chaque niveau</b> (racine : 1–3 ; champs du struct : 4, 5, 7 — le compteur est global à la table) et les anciennes lignes se relisent avec le champ ajouté à <code>None</code> : <code>{"city": "Paris", "postcode": "75001", "country": None}</code>. Les éléments de <code>list</code>/<code>map</code> ont aussi leurs ids (element, key, value).</p>
+    </div>
+    <div class="grid2">
+      <div class="benefit tone-info"><div class="ic">🌳</div><b>Conséquence Catalog</b><p>Le modèle « colonne » du Catalog est en réalité un <b>arbre de champs</b> : clé = (table, field-id), avec un <i>chemin</i> (<code>addr.postcode</code>) qui peut changer par rename. Labels PII et lignage s'attachent au field-id <b>feuille</b> — un label sur <code>addr.country</code> ne couvre pas tout le struct.</p></div>
+      <div class="benefit tone-warn"><div class="ic">🪜</div><b>Conséquence contrat/plan</b><p>Le diff de schéma du <code>plan</code> doit descendre <b>récursivement</b> dans les types imbriqués : ajouter un champ dans un struct est une expansion ; en retirer un est une contraction — mêmes règles de différé qu'au niveau racine.</p></div>
+    </div>
+  </section>
+
+  <section id="couplages">
+    <h2><span class="num">4</span> Couplages : partition, tri, identifiants <span class="tg ok">F10–F11 vérifiés</span></h2>
+    <p class="section-sub">Le schéma n'évolue pas seul : specs de partition, ordres de tri et identifiants de ligne le référencent par field-id.</p>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Test</th><th>Résultat vérifié</th><th>Règle induite</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">Drop d'une colonne source d'un champ de partition (<code>day(ts)</code>)</td><td class="no">REJETÉ — « Cannot find source column for partition field »</td><td>ordre de décommission imposé : <b>① <code>update_spec().remove_field()</code> ② <code>delete_column()</code></b> — deux migrations ordonnées dans le même plan</td></tr>
+          <tr><td class="feat">Rename d'une colonne source de partition</td><td class="yes">OK — le spec suit le <b>field-id</b>, le partitionnement continue</td><td>rename toujours sûr côté métadonnées ; seul le SQL aval par nom est impacté</td></tr>
+          <tr><td class="feat">Historique des specs après remove_field</td><td class="yes">les anciens specs restent (<code>specs: [0, 1]</code>) — les données déjà écrites gardent leur layout</td><td>l'évolution de partition ne réécrit rien ; les anciens fichiers restent partitionnés à l'ancienne (scan hybride normal)</td></tr>
+          <tr><td class="feat">Drop d'un <b>identifier field</b> (clé d'upsert)</td><td class="no">REJETÉ — « update the identifier fields first »</td><td>changer la clé de merge = migration explicite : ① <code>set_identifier_fields</code> ② drop — et le <code>unique_key</code> du manifeste doit suivre</td></tr>
+          <tr><td class="feat">Identifier field → <code>optional</code></td><td class="no">REJETÉ — un identifiant doit rester <code>required</code></td><td>le contrat marque les colonnes-clés : toute mutation dessus est une contraction de fait</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <div class="note tip"><b>Pour le <code>plan</code> :</b> le compilateur classe une migration touchant une colonne <b>référencée</b> (partition, tri, identifiant, — et par extension : audits, <code>column_map</code>, lignage aval) comme <b>composite</b> : elle se décompose en étapes ordonnées (détacher la référence → migrer → rattacher le cas échéant), affichées telles quelles dans l'écran S14. Iceberg refuse de toute façon le mauvais ordre — le plan le rend juste <i>visible et volontaire</i>.</div>
+  </section>
+
+  <section id="tolerance">
+    <h2><span class="num">5</span> Tolérance d'écriture ≠ respect du contrat <span class="tg ok">F12 vérifié</span></h2>
+    <p class="section-sub">Iceberg est laxiste à l'écriture — c'est une feature pour lui, un risque pour nous. Le contrat doit être vérifié au-dessus.</p>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Écriture testée</th><th>Iceberg (PyIceberg)</th><th>Risque plateforme</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">Dataframe sans une colonne <code>optional</code></td><td class="yes">ACCEPTÉ — la colonne vaut NULL</td><td class="no"><b>régression silencieuse</b> : un step qui cesse d'alimenter une colonne publie des NULL sans erreur</td></tr>
+          <tr><td class="feat">Colonnes dans un ordre différent</td><td class="yes">ACCEPTÉ — résolution par nom/field-id</td><td>aucun</td></tr>
+          <tr><td class="feat">Arrow <code>int32</code> dans une colonne <code>long</code></td><td class="yes">ACCEPTÉ — up-cast à l'écriture</td><td>faible — mais le contrat doit noter le type <i>logique</i>, pas le type d'arrivée</td></tr>
+          <tr><td class="feat">Colonne inconnue du schéma</td><td class="no">REJETÉ (F8)</td><td>aucun — c'est la barrière qui impose l'ordre expansion→write</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <div class="note danger"><b>Règle majeure (nouvelle) — le contrôle de contrat à l'écriture :</b> <code>lake.write()</code> compare le schéma du dataframe au <b>contrat du nœud</b> (pas seulement au schéma Iceberg) en mode <b>strict</b> : colonne du contrat absente du dataframe = <b>erreur</b>, sauf si le plan l'a explicitement marquée « en cours de retrait » (contraction pendante, où les NULL sont attendus côté dev). Sans ce contrôle, la tolérance d'Iceberg transforme un bug de transformation en corruption <i>silencieuse</i> — que seuls des audits <code>not_null</code> exhaustifs rattraperaient par accident.</div>
+  </section>
+
+  <section id="stamping">
+    <h2><span class="num">6</span> Estampillage des snapshots &amp; rollback <span class="tg ok">F13 vérifié</span></h2>
+    <p class="section-sub">Ce que « le schéma d'une édition » veut dire exactement — et ce qu'un rollback restaure (et ne restaure pas).</p>
+    <div class="grid2">
+      <div class="benefit tone-info"><div class="ic">🏷️</div><b>Le snapshot estampille le schéma courant au commit</b><p>Vérifié : après une expansion, un write <i>sans</i> la nouvelle colonne produit quand même un snapshot marqué du <b>nouveau</b> <code>schema_id</code>. Le « schéma d'une édition » (S4) = l'état du schéma <b>à la publication</b>, pas la forme du dataframe écrit. Cohérent — et une raison de plus pour le contrôle de contrat (§5).</p></div>
+      <div class="benefit tone-warn"><div class="ic">⏪</div><b>Le rollback restaure les données, pas le schéma</b><p>Vérifié : <code>rollback_to_snapshot(old)</code> ramène la ref sur l'ancien snapshot, mais <code>current-schema-id</code> <b>garde</b> les évolutions postérieures. Lire la tête après rollback = anciennes données projetées dans le <b>nouveau</b> schéma (colonnes ajoutées → NULL). Si le contrat doit reculer aussi : <b>contre-migration explicite</b> (proposée par l'UI S4), qui n'est possible que si rien d'autre ne référence les colonnes ajoutées.</p></div>
+    </div>
+  </section>
+
+  <section id="concurrence">
+    <h2><span class="num">7</span> Concurrence des commits de schéma <span class="tg ok">F16 vérifié</span></h2>
+    <p class="section-sub">Deux évolutions simultanées : l'optimisme d'Iceberg, et la sérialisation que le runner doit ajouter.</p>
+    <div class="card">
+      <p>Vérifié : deux clients chargent la table, chacun fait un <code>update_schema</code> ; le second échoue en <code>CommitFailedException: Requirement failed: current schema id has changed (expected 1, found 2)</code>. Le commit de métadonnées est <b>optimiste avec pré-condition</b> — pas de merge automatique de deux évolutions concurrentes dans PyIceberg (le client doit recharger et rejouer).</p>
+    </div>
+    <div class="grid2">
+      <div class="benefit tone-good"><div class="ic">🔒</div><b>Règle runner</b><p>Les migrations de schéma d'une table sont <b>sérialisées par l'orchestrateur</b> (la file sait déjà sérialiser par dataset pour le WAP §16 archi) + <b>retry avec rebase</b> : recharger les métadonnées, revalider que la migration est toujours pertinente (le diff peut avoir été appliqué par un autre run du même plan), rejouer. Les migrations étant déclaratives (issues du contrat), le rejeu est idempotent.</p></div>
+      <div class="benefit tone-info"><div class="ic">🧷</div><b>Écriture vs migration</b><p>Un write de données pendant une évolution de schéma est sûr : le write valide son shape contre le schéma <i>au commit</i> et échoue proprement s'il est devenu incompatible (F8) — jamais d'état mixte. Le pire cas est un retry, pas une corruption.</p></div>
+    </div>
+  </section>
+
+  <section id="v3">
+    <h2><span class="num">8</span> Format v3, valeurs par défaut — et un piège v2 bien réel <span class="tg wr">F14 vérifié — piège</span></h2>
+    <p class="section-sub">Les default values débloqueront les ajouts required — mais aujourd'hui la zone est dangereuse.</p>
+    <div class="card">
+      <p><b>Le futur (spec v3)</b> : chaque champ peut porter <code>initial-default</code> (valeur projetée sur les lignes <i>antérieures</i> à l'ajout) et <code>write-default</code> (valeur si le writer omet la colonne). Cela rend l'ajout d'une colonne <code>required</code> légal et sûr — l'expansion la plus demandée. v3 apporte aussi de nouveaux types (variant, geometry…) et le row lineage natif.</p>
+      <p style="margin-bottom:0;"><b>Le présent, vérifié :</b> ① PyIceberg 0.11 <b>refuse d'écrire des tables v3</b> (« Writing V3 is not yet supported », issue apache/iceberg-python#1551) ; ② mais il <b>accepte</b> <code>add_column(required=True, default_value=…)</code> sur une table <b>v2</b>, et écrit <code>initial-default</code>/<code>write-default</code> dans le JSON de métadonnées <b>en format-version 2</b> — hors spec. Son propre lecteur les honore (les vieilles lignes rendent « N/A », vérifié jusque dans le fichier de métadonnées) ; un <b>autre moteur</b> lisant cette table v2 (Spark/Trino) peut légitimement les ignorer → la même table rend <code>"N/A"</code> ici et <code>NULL</code> (sur une colonne <i>required</i> !) ou une erreur là-bas.</p>
+    </div>
+    <h4 class="mini">État précis du support v3 dans PyIceberg 0.11.1 (dernière release PyPI — audit du code installé + tracking upstream)</h4>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Capacité v3</th><th>État 0.11.1</th><th>Preuve</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">Lire des métadonnées v3</td><td class="yes">✓ supporté</td><td>classe <code>TableMetadataV3</code> — vérifié en parsant un metadata.json v3 synthétique (defaults lus, <code>next-row-id</code> compris)</td></tr>
+          <tr><td class="feat">Lire les deletion vectors (Puffin)</td><td class="yes">✓ présent</td><td><code>table/puffin.py</code> (roaring bitmaps → Arrow) câblé dans le chemin de scan</td></tr>
+          <tr><td class="feat">Types v3</td><td class="mid">partiel</td><td><code>UnknownType</code>, <code>timestamp_ns</code> présents (gardés par <code>minimum_format_version()</code>) ; <b>variant / geometry / geography absents</b></td></tr>
+          <tr><td class="feat">Row lineage</td><td class="mid">plomberie seulement</td><td>validation <code>first-row-id</code>/<code>next-row-id</code> dans les handlers de commit + REST scan planning — pas d'exploitation</td></tr>
+          <tr><td class="feat"><b>Écrire une table v3</b></td><td class="no">✗ bloqué</td><td>garde unique : <code>TableMetadataV3.model_dump_json</code> → <code>NotImplementedError</code> (issue #1551)</td></tr>
+          <tr><td class="feat"><b>Upgrade v2 → v3</b></td><td class="no">✗ bloqué aussi</td><td><code>SUPPORTED_TABLE_FORMAT_VERSION = 2</code> : l'update <code>upgrade-format-version 3</code> est rejeté — aucun chemin de migration depuis Python</td></tr>
+          <tr><td class="feat">Default values</td><td class="no">⚠ le piège</td><td>l'API les accepte et les écrit <b>dans des métadonnées v2</b> (hors-spec, vérifié §8) — seul son propre lecteur les honore</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <div class="card">
+      <p style="margin-bottom:0;"><b>Côté upstream</b> (tracking « V3 » apache/iceberg-python#1818, consulté juillet 2026) : lecture v3 et DV read <b>faits</b> ; default values « PRs en cours » ; variant/geometry, row lineage et <b>DV write</b> non commencés ou à l'état d'issue ; <b>aucune version cible annoncée</b> pour l'écriture v3 — audit GitHub du 02/07/2026 : #1551 <b>sans PR liée, sans assigné, sans milestone</b>, et <b>absent du milestone 0.12.0</b> (le prochain train) ⇒ horizon réaliste : post-0.12 au plus tôt. <b>Actualisation 02/07/2026 :</b> côté <b>Java/moteurs</b>, la donne a changé — Iceberg <b>1.11.0</b> (mai 2026) déclare le feature set v3 « production-ready » (DV, Variant, géo, ns) et v3 est GA sur les principales plateformes au S1 2026. <b>PyIceberg (0.11.1, toujours la dernière release) est désormais LE goulot</b> : les conditions de levée ① et ④ ci-dessous restent bloquantes, ②/③ se rapprochent.</p>
+    </div>
+    <div class="note danger"><b>Règle plateforme (R11, précisée) :</b> les valeurs par défaut sont <b>interdites</b> (garde au build) et le lakehouse est <b>épinglé en format-version 2</b>. Comme PyIceberg bloque lui-même écriture <i>et</i> upgrade v3, le risque immédiat n'est pas nos workers — c'est un <b>upgrade par un autre moteur</b> (Spark saura le faire avant Python) qui rendrait la table illisible/inécrivable par la moitié de la plateforme. Donc : <b>le format-version est une propriété gérée par la plateforme</b> — verrouillée côté Lakekeeper (politique sur <code>upgrade-format-version</code>), un upgrade sauvage étant détecté par les change events → alerte Catalog. <b>Conditions de levée</b> (toutes) : ① release PyIceberg fermant #1551 avec DV write ; ② v3 GA (pas preview) sur Spark <i>et</i> Trino de la matrice ; ③ Lakekeeper validé sur métadonnées v3 ; ④ test d'intégration multi-moteurs vert sur une table v3 avec defaults + DV. La migration se fera alors table par table, par un flow système, jamais implicitement.</div>
+  </section>
+
+  <section id="union">
+    <h2><span class="num">9</span> <code>union_by_name</code> : la primitive de calcul des migrations <span class="tg ok">F15 vérifié</span></h2>
+    <p class="section-sub">Expansions automatisables, contractions jamais implicites — exactement la asymétrie du protocole expand/contract.</p>
+    <div class="card">
+      <p>Vérifié : <code>update_schema().union_by_name(nouveau_schema)</code> <b>ajoute</b> les colonnes manquantes (avec de bons field-ids), et — crucial — un union avec un schéma <b>plus petit</b> ne supprime <b>rien</b> : les colonnes absentes sont conservées. La primitive est donc <i>expansion-only par construction</i> : parfaite pour appliquer la partie « expand » d'un plan, structurellement incapable d'exécuter une contraction par accident.</p>
+    </div>
+    <p class="code-label">Calcul des migrations au plan — le diff de contrat se décompose ainsi</p>
+    <pre><span class="k">def</span> <span class="f">compute_migrations</span>(contract_old, contract_new) <span class="o">-></span> Migrations:
+    <span class="k">return</span> Migrations(
+        expansions   <span class="o">=</span> <span class="f">diff_additive</span>(contract_old, contract_new),   <span class="c"># add optional (union_by_name) · rename (par field-id) · widen · required→optional</span>
+        contractions <span class="o">=</span> <span class="f">diff_destructive</span>(contract_old, contract_new), <span class="c"># drop · narrow · optional→required — TOUJOURS explicites, différées à la promotion</span>
+        composites   <span class="o">=</span> <span class="f">order_references</span>(contractions),               <span class="c"># § 4 : détacher partition/tri/identifiants d'abord</span>
+    )
+<span class="c"># apply (env)   : apply_expansions() PUIS écriture WAP (F8)</span>
+<span class="c"># promote (prod): fast-forward des refs PUIS apply_contractions() — code prod déjà migré (§18 archi)</span></pre>
+  </section>
+
+  <section id="namemapping">
+    <h2><span class="num">10</span> Name-mapping &amp; fichiers importés <span class="tg nf">règle spec — à couvrir en test d'intégration</span></h2>
+    <p class="section-sub">Le cas des données qui n'ont pas de field-ids : imports de Parquet existants par l'ingestion.</p>
+    <div class="card">
+      <p>Toute la mécanique de ce document repose sur les field-ids <b>dans les fichiers</b>. Or un Parquet écrit hors Iceberg (import direct <code>add_files</code>, migration d'un lac existant) n'en a pas. Iceberg couvre ce cas avec la propriété <code>schema.name-mapping.default</code> : une table de correspondance nom→field-id utilisée en repli à la lecture. Conséquences pour Hemera : <b>(1)</b> les connecteurs d'ingestion qui <i>réécrivent</i> les données (le chemin normal : write via <code>lake</code>) produisent des fichiers avec field-ids — aucun sujet ; <b>(2)</b> un éventuel chemin « adoption sans copie » (<code>add_files</code>) doit <b>obligatoirement</b> poser le name-mapping à la création, sinon renames et drops ultérieurs liront de travers ; <b>(3)</b> après adoption, tout rename côté source ne doit plus jamais être répercuté par nom — le mapping fige la correspondance historique.</p>
+    </div>
+    <div class="note warn"><b>Décision associée :</b> le chemin par défaut de l'ingestion Hemera est la <b>réécriture gouvernée</b> (WAP, provenance, field-ids propres). <code>add_files</code>/adoption sans copie est une optimisation réservée aux gros volumes migrés une fois, avec name-mapping posé et vérifié par un test d'intégration dédié (ticket DS/annexe dans E5).</div>
+  </section>
+
+  <section id="moteurs">
+    <h2><span class="num">11</span> Matrice moteurs — vérifié vs à vérifier</h2>
+    <p class="section-sub">La sémantique de lecture n'est pas un détail d'implémentation : elle fait partie du contrat de la plateforme.</p>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Comportement</th><th>PyIceberg 0.11</th><th>Spark 4.1 (Iceberg 1.11)</th><th>Trino</th><th>DuckDB (ext. iceberg)</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">Time travel snapshot → schéma d'époque</td><td class="yes">✓ vérifié (F2)</td><td class="mid">documenté ✓ — à revalider en intégration</td><td class="mid">documenté ✓ (<code>FOR VERSION AS OF</code>)</td><td class="mid">à vérifier</td></tr>
+          <tr><td class="feat">Lecture de <b>branche</b> → quel schéma ?</td><td class="yes">notre <code>lake</code> lit la tête de branche par snapshot-id ⇒ schéma d'époque du head — <b>convention plateforme</b></td><td class="no">⚠ Spark lit une branche avec le <b>schéma courant</b> de la table (comportement documenté)</td><td class="mid">à vérifier</td><td class="mid">à vérifier</td></tr>
+          <tr><td class="feat">Défauts v3 (<code>initial-default</code>)</td><td class="no">écrit hors-spec sur v2 (piège §8) · v3 write non supporté</td><td class="mid">v3 en preview — hors périmètre prod</td><td class="mid">idem</td><td class="no">non</td></tr>
+          <tr><td class="feat">Écriture / WAP par branche</td><td class="yes">✓ vérifié (spike 1)</td><td class="yes"><code>spark.wap.branch</code>, <code>fast_forward</code> — natif</td><td class="mid">écriture limitée — pas sur le chemin WAP</td><td class="no">lecture seule</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <div class="note"><b>La divergence qui compte :</b> « lire l'environnement dev » via Spark (branche = schéma courant) et via <code>lake</code>/PyIceberg (head par snapshot-id = schéma du head) peut différer <i>pendant une transition de schéma</i>. La plateforme tranche : <b>lire un environnement = lire la tête de sa branche avec le schéma courant</b> (aligné Spark) ; <b>lire une édition = schéma d'époque</b>. <code>lake</code> encapsule cette convention pour tous les moteurs, et le test d'intégration multi-moteurs (Spark/Trino/PyIceberg lisant la même table en transition) est un gate de la checklist E3.</div>
+  </section>
+
+  <section id="regles">
+    <h2><span class="num">12</span> Le jeu de règles consolidé — R1–R14</h2>
+    <p class="section-sub">Tout ce document, réduit à ce que chaque composant doit garantir.</p>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>#</th><th>Règle</th><th>Garantie par</th><th>Source</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">R1</td><td>Aucune évolution de schéma hors plan — jamais d'auto-évolution à l'écriture · <b>y compris <code>MERGE … WITH SCHEMA EVOLUTION</code></b> (Spark 4.1 + Iceberg 1.11 : expansion implicite au merge — interdit par lake, la clause contourne le plan)</td><td>lake (pas de mergeSchema, clause bannie) + garde compilateur</td><td>F1, F8 · statuts 07/2026</td></tr>
+          <tr><td class="feat">R2</td><td>Expansions appliquées à l'apply, <b>avant</b> l'écriture WAP</td><td>runner (<code>apply_expansions</code> → write)</td><td>F8</td></tr>
+          <tr><td class="feat">R3</td><td>Contractions différées à la promotion prod, en dernière étape, impact acquitté</td><td>runner (<code>promote</code>) + UI S14/S20</td><td>F1, F3</td></tr>
+          <tr><td class="feat">R4</td><td>Contrôle de contrat <b>strict</b> à l'écriture (colonne manquante = erreur, sauf retrait planifié)</td><td>lake.write()</td><td>F12</td></tr>
+          <tr><td class="feat">R5</td><td>Colonnes, labels, lignage clés par <b>(table, field-id)</b>, à tous les niveaux d'imbrication</td><td>Catalog</td><td>F4, F5, F9</td></tr>
+          <tr><td class="feat">R6</td><td>Colonne re-créée = nouvel objet : pas d'héritage de label, re-classification requise</td><td>Catalog + UI S3</td><td>F4</td></tr>
+          <tr><td class="feat">R7</td><td>Migrations composites ordonnées : détacher partition/tri/identifiants avant drop ; <code>unique_key</code> du manifeste suit les identifier fields</td><td>compilateur (plan)</td><td>F10, F11</td></tr>
+          <tr><td class="feat">R8</td><td>Diff de schéma récursif (structs/lists/maps) dans le plan</td><td>compilateur</td><td>F9</td></tr>
+          <tr><td class="feat">R9</td><td>Migrations sérialisées par table + retry-rebase sur <code>CommitFailedException</code></td><td>orchestrateur</td><td>F16</td></tr>
+          <tr><td class="feat">R10</td><td>Rollback = données ; le schéma ne recule que par contre-migration explicite</td><td>lake + UI S4</td><td>F13</td></tr>
+          <tr><td class="feat">R11</td><td>Valeurs par défaut interdites jusqu'à v3 uniforme (piège v2 de PyIceberg neutralisé au build)</td><td>compilateur + matrice moteurs</td><td>F14</td></tr>
+          <tr><td class="feat">R12</td><td>Expansions calculées via primitives expansion-only (<code>union_by_name</code>) ; contractions toujours explicites</td><td>lake / compilateur</td><td>F15</td></tr>
+          <tr><td class="feat">R13</td><td>Sémantique de lecture unique : environnement = schéma courant · édition = schéma d'époque — encapsulée pour tous les moteurs</td><td>lake + UI (S3/S4/S5)</td><td>F2, §11</td></tr>
+          <tr><td class="feat">R14</td><td>Adoption sans copie (<code>add_files</code>) uniquement avec name-mapping posé et testé</td><td>connecteurs EL</td><td>§10</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+
+    <h4 class="mini">Machine à états d'une migration de schéma</h4>
+    <div class="diagram">
+      <div class="layer-row">
+        <div class="layer l-teal"><b>DRAFT</b><small>diff contrat vN→vN+1 calculé au build (expansions · contractions · composites ordonnés)</small></div>
+        <div class="layer l-mau"><b>PLANNED</b><small>plan publié — revu en MR avec impact aval (S14)</small></div>
+        <div class="layer l-grn"><b>EXPANDED</b><small>expansions appliquées à l'apply (avant WAP) — schéma physique vM+1, contrat vN+1 actif en dev</small></div>
+        <div class="layer l-yel"><b>CONTRACTION-PENDING</b><small>drop/narrow en attente — physique conserve, nouveau code n'alimente plus (NULL attendus, R4)</small></div>
+        <div class="layer l-acc"><b>APPLIED</b><small>promotion prod : fast-forward puis contractions — physique aligné sur le contrat</small></div>
+      </div>
+      <div class="arrow lbl">à tout moment : ABORTED (le plan est annulé avant EXPANDED) · ROLLED-BACK (contre-migration explicite, R10)</div>
+      <div class="cap">Chaque transition est un événement de gouvernance journalisé au Catalog (qui, quand, quel plan) — la version de contrat, le <code>schema-id</code> physique et la plage d'éditions concernée restent liés à jamais.</div>
+    </div>
+  </section>
+
+  <footer>
+    <p><b>Hemera — annexe technique : gestion de schéma Iceberg.</b> Complète l'architecture v2 (§18) et le design frontend (S3/S4/S14/S20).<br>
+    Méthode : tous les faits F1–F16 exécutés sur PyIceberg 0.11.1 + catalogue SQL + warehouse local (juin 2026) ; les comportements moteurs non exécutables localement sont marqués « à vérifier » et tracés dans la checklist d'intégration E3. Piège documenté : defaults écrits hors-spec sur v2 (apache/iceberg-python — write v3 non supporté, issue #1551).</p>
+  </footer>
+
+</div>
+
+</body></html>

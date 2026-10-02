@@ -1,0 +1,1021 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}</style></head><body>
+<title>Hemera — ② Le modèle de développement : 9 kinds, syntaxe, EL, interop</title>
+<style>
+  :root {
+    --bg:#eff1f5; --bg-soft:#e6e9ef; --card:#fff; --card-alt:#dce0e8;
+    --text:#4c4f69; --text-soft:#6c6f85; --text-dim:#8c8fa1; --line:#ccd0da;
+    --accent:#e25a1c; --accent-2:#1e66f5; --green:#40a02b; --mauve:#8839ef;
+    --red:#d20f39; --yellow:#df8e1d; --teal:#179299;
+    --code-bg:#1e1e2e; --code-text:#cdd6f4;
+    --shadow:0 1px 3px rgba(76,79,105,.12),0 8px 24px rgba(76,79,105,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#1e1e2e; --bg-soft:#181825; --card:#313244; --card-alt:#11111b;
+      --text:#cdd6f4; --text-soft:#bac2de; --text-dim:#9399b2; --line:#45475a;
+      --accent:#fab387; --accent-2:#89b4fa; --green:#a6e3a1; --mauve:#cba6f7;
+      --red:#f38ba8; --yellow:#f9e2af; --teal:#94e2d5;
+      --code-bg:#11111b; --code-text:#cdd6f4;
+      --shadow:0 1px 3px rgba(0,0,0,.3),0 8px 28px rgba(0,0,0,.35);
+    }
+  }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.65; -webkit-font-smoothing:antialiased; }
+  code,pre,.mono { font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  .wrap { max-width:980px; margin:0 auto; padding:0 22px 110px; }
+  a { color:var(--accent-2); text-decoration:none; } a:hover { text-decoration:underline; }
+
+  header.hero {
+    background:radial-gradient(1200px 420px at 10% -10%,rgba(136,57,239,.15),transparent 60%),
+      radial-gradient(950px 380px at 96% 0%,rgba(226,90,28,.12),transparent 55%),var(--bg-soft);
+    border-bottom:1px solid var(--line); padding:56px 22px 44px; text-align:center;
+  }
+  .badge { display:inline-flex; align-items:center; gap:8px; background:var(--card);
+    border:1px solid var(--line); color:var(--text-soft); padding:6px 14px;
+    border-radius:999px; font-size:13px; font-weight:600; margin-bottom:18px; }
+  .badge .dot { width:8px; height:8px; border-radius:50%; background:var(--mauve); box-shadow:0 0 0 4px rgba(136,57,239,.15); }
+  header.hero h1 { margin:0 0 12px; font-size:clamp(26px,4.2vw,38px); line-height:1.14; letter-spacing:-.02em; text-wrap:balance; }
+  header.hero h1 em { color:var(--mauve); font-style:normal; }
+  header.hero p.lead { margin:0 auto; max-width:770px; font-size:16.5px; color:var(--text-soft); }
+  .meta-pills { margin-top:20px; display:flex; gap:9px; justify-content:center; flex-wrap:wrap; }
+  .pill { font-size:12.5px; font-weight:600; padding:5px 12px; border-radius:8px; background:var(--card); border:1px solid var(--line); color:var(--text-soft); }
+
+  .toc { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px 22px; margin-top:32px; box-shadow:var(--shadow); }
+  .toc b { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim); display:block; margin-bottom:6px; }
+  .toc ol { margin:2px 0 0; padding-left:20px; } .toc li { margin:3px 0; font-size:14px; }
+  .toc .cols { display:grid; grid-template-columns:1fr 1fr; gap:0 30px; }
+  @media (max-width:640px){ .toc .cols{ grid-template-columns:1fr; } }
+
+  section { margin-top:46px; }
+  h2 { font-size:22px; letter-spacing:-.01em; margin:0 0 6px; display:flex; align-items:center; gap:11px; flex-wrap:wrap; }
+  h2 .num { flex:none; min-width:34px; height:32px; padding:0 10px; border-radius:9px; background:var(--mauve); color:#fff; font-size:14px; font-weight:800; display:grid; place-items:center; }
+  @media (prefers-color-scheme: dark){ h2 .num{ color:#1e1e2e; } }
+  .section-sub { color:var(--text-dim); margin:0 0 18px; font-size:14.5px; }
+  h4.mini { font-size:13.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-dim); margin:20px 0 8px; }
+  p { margin:0 0 13px; }
+  ul { margin:6px 0 13px; padding-left:20px; } li { margin:3px 0; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:20px 22px; box-shadow:var(--shadow); }
+  p code,li code,td code { background:var(--card-alt); color:var(--accent); padding:1.5px 6px; border-radius:6px; font-size:.88em; font-weight:600; }
+
+  pre { background:var(--code-bg); color:var(--code-text); border-radius:12px; padding:14px 16px; overflow-x:auto; font-size:12.2px; line-height:1.55; margin:12px 0; border:1px solid rgba(255,255,255,.06); }
+  pre .c{color:#6c7086;font-style:italic} pre .k{color:#cba6f7} pre .s{color:#a6e3a1} pre .f{color:#89b4fa} pre .n{color:#fab387} pre .v{color:#f9e2af}
+  .code-label { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim); margin:16px 0 0; }
+  .code-label::before { content:""; width:10px; height:10px; border-radius:3px; background:var(--mauve); }
+
+  .tablewrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; margin-top:8px; font-size:12.9px; }
+  th,td { text-align:left; padding:9px 11px; border-bottom:1px solid var(--line); vertical-align:top; }
+  thead th { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-dim); background:var(--bg-soft); }
+  tbody tr:last-child td { border-bottom:none; }
+  td.feat { font-weight:600; }
+  .yes{color:var(--green);font-weight:700} .no{color:var(--red);font-weight:700} .mid{color:var(--yellow);font-weight:700}
+
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:13px; }
+  @media (max-width:700px){ .grid2{ grid-template-columns:1fr; } }
+  .benefit { background:var(--card); border:1px solid var(--line); border-radius:15px; padding:16px 17px; }
+  .benefit .ic { display:inline-grid; place-items:center; width:38px; height:38px; border-radius:11px; background:var(--bg-soft); border:1px solid var(--line); font-size:19px; margin-bottom:10px; }
+  .benefit > b { display:block; margin-bottom:4px; font-size:14px; }
+  .benefit p { font-size:12.9px; color:var(--text-soft); margin:0; line-height:1.55; }
+  .benefit p b { color:var(--text); }
+  .tone-good .ic{ background:color-mix(in srgb,var(--green) 15%,var(--card)); border-color:color-mix(in srgb,var(--green) 42%,var(--line)); }
+  .tone-bad .ic{ background:color-mix(in srgb,var(--red) 14%,var(--card)); border-color:color-mix(in srgb,var(--red) 40%,var(--line)); }
+  .tone-warn .ic{ background:color-mix(in srgb,var(--yellow) 16%,var(--card)); border-color:color-mix(in srgb,var(--yellow) 42%,var(--line)); }
+  .tone-info .ic{ background:color-mix(in srgb,var(--accent-2) 14%,var(--card)); border-color:color-mix(in srgb,var(--accent-2) 38%,var(--line)); }
+
+  .note { border:1px solid color-mix(in srgb,var(--accent-2) 32%,var(--line)); background:color-mix(in srgb,var(--accent-2) 7%,var(--card)); border-radius:13px; padding:13px 17px; margin:14px 0; font-size:13.6px; line-height:1.6; }
+  .note.warn{ border-color:color-mix(in srgb,var(--yellow) 40%,var(--line)); background:color-mix(in srgb,var(--yellow) 10%,var(--card)); }
+  .note.tip{ border-color:color-mix(in srgb,var(--green) 36%,var(--line)); background:color-mix(in srgb,var(--green) 8%,var(--card)); }
+  .note.danger{ border-color:color-mix(in srgb,var(--red) 36%,var(--line)); background:color-mix(in srgb,var(--red) 7%,var(--card)); }
+  .note b { color:var(--text); }
+
+  .diagram { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; box-shadow:var(--shadow); margin:14px 0; }
+  .layer { border:1.5px solid var(--line); border-radius:11px; padding:10px 13px; margin:8px 0; background:var(--bg-soft); }
+  .layer > b { display:block; font-size:13.5px; } .layer small { display:block; margin-top:3px; color:var(--text-dim); font-size:11.5px; line-height:1.45; }
+  .layer.l-mau{border-color:var(--mauve)} .layer.l-acc{border-color:var(--accent)} .layer.l-grn{border-color:var(--green)} .layer.l-blu{border-color:var(--accent-2)} .layer.l-teal{border-color:var(--teal)}
+  .layer-row { display:flex; gap:8px; } .layer-row .layer { flex:1; margin:8px 0 0; }
+  @media (max-width:640px){ .layer-row{ flex-direction:column; } }
+  .arrow { text-align:center; color:var(--text-dim); font-size:13px; margin:3px 0; }
+  .arrow.lbl{color:var(--mauve);font-weight:700;font-size:11.5px}
+  .cap { text-align:center; font-size:11.5px; color:var(--text-dim); margin:8px auto 18px; max-width:840px; line-height:1.55; }
+  .tg { font-size:9.5px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; padding:2px 8px; border-radius:5px; vertical-align:middle; white-space:nowrap; }
+  .tg.ok{ background:color-mix(in srgb,var(--green) 15%,var(--card)); color:var(--green); }
+  .tg.ko{ background:color-mix(in srgb,var(--red) 13%,var(--card)); color:var(--red); }
+  .tg.wr{ background:color-mix(in srgb,var(--yellow) 16%,var(--card)); color:var(--yellow); }
+  .tg.nf{ background:var(--bg-soft); color:var(--text-dim); border:1px solid var(--line); }
+  .tg.emp{ background:color-mix(in srgb,var(--mauve) 13%,var(--card)); color:var(--mauve); }
+
+  footer { margin-top:60px; padding-top:22px; border-top:1px solid var(--line); text-align:center; color:var(--text-dim); font-size:13px; }
+  .pdiv { display:flex; align-items:center; gap:12px; margin:52px 0 4px; }
+  .pdiv .tagp { font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; color:var(--bg); background:var(--accent); border-radius:6px; padding:3px 10px; }
+  .pdiv .t { font-size:15px; font-weight:700; color:var(--text); }
+  .pdiv .ln { flex:1; height:1px; background:var(--line); }
+  .serie { font-size:12px; color:var(--text-soft); border:1px solid var(--line); border-radius:10px; padding:9px 14px; margin:0 0 18px; line-height:1.9; }
+</style>
+
+<header class="hero">
+  <div class="badge"><span class="dot"></span> Plateforme Hemera &middot; le modèle de développement &middot; tranche la décision D1</div>
+  <h1>Le modèle de développement Hemera :<br><em>9 kinds d'objets, une syntaxe familière, vos projets tels quels</em></h1>
+  <p class="lead">Ce document définit <b>ce qu'on manipule</b> (le contrat d'édition, les deux points d'application de l'autorisation, la taxonomie des 9 kinds — tables, fichiers, modèles, vecteurs, features, flux), <b>comment on l'écrit</b> (un IR unique, une syntaxe native SQLMesh-first qui accepte les idiomes dbt, le même <code>@step</code> Python pour tous les kinds), <b>comment la donnée entre</b> (sources EL en code et en no-code, imports one-shot), et <b>comment l'existant se branche sans réécriture</b> (wraps dbt, SQLMesh, MLflow). Chaque affirmation d'interop est adossée à une expérience exécutée (S1–S6).</p>
+  <div class="meta-pills">
+    <span class="pill">📦 9 kinds · 1 IR · 2 PEP</span>
+    <span class="pill">🔬 S1–S6 exécutées</span>
+    <span class="pill">🧬 sqlmesh 0.235 · dbt-core 1.11</span>
+    <span class="pill">✅ D1 tranchée : compilateur seul</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="serie"><b>Série Hemera v2 — document ② · Modèle de développement.</b> Ordre de lecture : ① <a href="01-architecture-flows-datasets.html">Architecture — flows &amp; datasets</a> → ② ce document → ③ <a href="03-design-frontend.html">Design frontend (30 écrans)</a> → ④ <a href="04-annexe-schema-iceberg.html">Annexe — schéma Iceberg (F1–F16, R1–R14)</a> → ⑤ <a href="05-revue-integration.html">Revue d'intégration (I1–I12, D1–D3)</a> → ⑥ <a href="06-annexe-el-cdc-olake.html">Annexe EL &amp; CDC (étude OLake)</a>.</div>
+
+  <div class="toc">
+    <b>Sommaire</b>
+    <div class="cols">
+      <div>
+        <b style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim);">I · Le modèle d'objet</b>
+        <ol>
+          <li><a href="#besoin">Le besoin : trois publics, tous les objets, zéro réécriture</a></li>
+          <li><a href="#edition">Le contrat d'édition &amp; les deux PEP</a></li>
+          <li><a href="#taxonomie">La taxonomie — 9 kinds, couverture 100 %</a></li>
+        </ol>
+        <b style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim);">II · Écrire</b>
+        <ol start="4">
+          <li><a href="#ir">La pièce maîtresse : un IR unique</a></li>
+          <li><a href="#natif">La syntaxe native — SQLMesh-first, dbt accepté <span class="tg emp">S1·S2</span></a></li>
+          <li><a href="#correspondance">La table de correspondance des concepts</a></li>
+          <li><a href="#flowref">Le flow de référence — 9 kinds en Python, CLI &amp; API</a></li>
+          <li><a href="#sdk">Le SDK <code>lake</code> — un objet par kind, cycle de vie complet</a></li>
+        </ol>
+        <b style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim);">III · La donnée entre &amp; sort</b>
+        <ol start="9">
+          <li><a href="#el">EL — les sources comme nœuds de flow</a></li>
+          <li><a href="#import">Faire entrer un existant — le one-shot</a></li>
+        </ol>
+      </div>
+      <div>
+        <b style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim);">IV · Vos projets tels quels</b>
+        <ol start="11">
+          <li><a href="#wrap-sqlmesh">Wrap SQLMesh — le projet intact</a></li>
+          <li><a href="#wrap-dbt">Wrap dbt — deux implémentations <span class="tg emp">S3·S4</span></a></li>
+          <li><a href="#inflow">dbt <i>dans</i> le flow · Spark Connect · Fusion <span class="tg emp">S5·S6</span></a></li>
+          <li><a href="#mlflow">Et MLflow ? — la même grille de lecture</a></li>
+        </ol>
+        <b style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-dim);">V · Garanties &amp; décisions</b>
+        <ol start="15">
+          <li><a href="#garanties">Qui garantit quoi, où — la matrice honnête</a></li>
+          <li><a href="#decision">D1 tranchée, sous-décisions &amp; tickets</a></li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <div class="pdiv"><span class="tagp">Partie I</span><span class="t">Le modèle d'objet — ce qu'un flow manipule</span><span class="ln"></span></div>
+
+  <section id="besoin">
+    <h2><span class="num">1</span> Le besoin : trois publics, tous les objets, zéro réécriture</h2>
+    <p class="section-sub">Le marché du T (transform) parle deux langues — Hemera doit parler les deux sans se dédoubler. Et le T ne produit pas que des tables : fichiers, modèles, vecteurs, features et flux doivent obéir aux mêmes règles (§2–3).</p>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Public</th><th>Ce qu'il apporte</th><th>Ce qu'il attend</th><th>Voie Hemera</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">Nouveau projet sur Hemera</td><td>rien — il démarre ici</td><td>une syntaxe SQL <b>qui ressemble à ce qu'il connaît</b> (dbt ou SQLMesh), toutes les garanties plateforme</td><td class="yes"><b>Natif</b> (§5) — MODEL() SQLMesh-style, idiomes dbt acceptés</td></tr>
+          <tr><td class="feat">Équipe SQLMesh existante</td><td>un projet SQLMesh complet (config.yaml, models/, audits/, son state)</td><td>que ça tourne <b>tel quel</b> : plan/apply, environnements virtuels, macros @</td><td class="mid"><b>Wrap SQLMesh</b> (§11) — région autonome, garanties à la frontière</td></tr>
+          <tr><td class="feat">Équipe dbt existante</td><td>un projet dbt (dbt_project.yml, Jinja, packages, tests)</td><td>que ça tourne <b>tel quel</b> — c'est le parc installé dominant</td><td class="mid"><b>Wrap dbt</b> (§12) — dbt-core natif <i>ou</i> adaptateur SQLMesh, au choix</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <div class="note"><b>Le piège à éviter :</b> trois moteurs d'orchestration concurrents (le nôtre, celui de SQLMesh, celui de dbt) qui se disputent l'état, les environnements et le scheduling. La réponse structurelle : <b>un seul orchestrateur</b> (Flows), <b>un seul IR</b>, et les outils tiers utilisés soit comme <b>compilateurs</b> (natif), soit comme <b>régions encapsulées</b> (wrap) dont Flows ne voit que la frontière.</div>
+  </section>
+
+  <section id="edition">
+    <h2><span class="num">2</span> Le contrat d'édition &amp; les deux PEP — ce qui rend un objet gouvernable <span class="tg emp">généralisation</span></h2>
+    <p class="section-sub">L'hypothèse attaquée : « le hand-off inter-nœuds = toujours une table Iceberg ». Verdict : l'hypothèse tombe, les invariants restent — un seul contrat d'édition, deux points d'application de l'autorisation.</p>
+    <h4 class="mini">Le principe de généralisation — un contrat d'ÉDITION, deux points d'application</h4>
+    <div class="card">
+      <p>Ce qui rend les tables gouvernables, ce ne sont pas les <i>lignes</i> : c'est le <b>contrat d'édition</b> — ① des éditions <b>immuables et identifiées</b>, ② une publication <b>atomique et gardée par des audits</b> (le WAP, quel que soit son mécanisme), ③ une <b>provenance portée par l'édition</b> (run, code, entrées épinglées), ④ un <b>rollback</b> = repointer. Tout type d'objet doit honorer ce contrat — mais <b>pas forcément via une table Iceberg</b>. Et l'autorisation a <b>deux points d'application (PEP), un par famille</b> :</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Famille</th><th>Qui touche la donnée</th><th>PEP (enforcement)</th><th>Métadonnées opérationnelles</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">Objets à <b>plan de données direct</b><br><small>tables, views, featuresets, embeddings (SQL)</small></td><td>les moteurs (Spark, Trino, PyIceberg) lisent <b>S3 directement</b></td><td class="yes"><b>Lakekeeper + OpenFGA</b> — l'authz DOIT être au catalogue/stockage (la leçon de la Partie III : un gateway ne voit pas ces lectures)</td><td>le catalogue Iceberg lui-même</td></tr>
+          <tr><td class="feat">Objets <b>médiés par un service</b><br><small>filesets (service Files), modèles (registry + poids), vector stores derrière le proxy Embeddings</small></td><td><b>uniquement l'API du service</b> — le service est le point de passage obligé des octets</td><td class="yes"><b>APISIX + OpenFGA</b> au service (le pattern Cleyrop existant, déjà en prod sur Files) — au PEP service, l'authz d'API <i>est</i> l'authz de données</td><td>le <b>Postgres du service</b> (sa vérité opérationnelle), projeté vers le Catalog par événements</td></tr>
+        </tbody>
+      </table></div>
+      <p style="margin:10px 0 0;"><b>Un seul modèle OpenFGA, plusieurs PEP</b> — les mêmes tuples (user→project→objet) sont évalués par Lakekeeper pour les uns, par le plugin APISIX/le service pour les autres : « même niveau d'autorisation » = même <i>politique</i>, pas même tuyau. Et l'<b>ancrage Iceberg devient un choix d'implémentation</b>, plus une règle : on le prend quand le SQL sur les métadonnées est une feature (embeddings, featuresets — qui sont de vraies tables) ou pour réutiliser la mécanique WAP telle quelle ; on prend le <b>Postgres du service + éditions applicatives</b> (manifestes immuables, blobs adressés par contenu) quand le service est le point de passage — c'est plus simple, ça évite les namespaces <code>_hemera</code>, et ça colle à l'existant. Un corpus peut ainsi vivre entièrement dans le service Files (manifeste d'édition en Postgres + blobs S3), tant qu'il honore le contrat d'édition et publie ses événements au Catalog.</p>
+    </div>
+
+
+    <div class="diagram">
+      <div class="layer l-teal" style="text-align:center;"><b>Un seul modèle OpenFGA</b><small>mêmes tuples user → group → project → namespace → dataset · mêmes rôles (owner / writer / reader) — écrits une fois, appliqués partout</small></div>
+      <div class="arrow lbl">▼ deux points d'application (PEP), selon le chemin des octets</div>
+      <div class="grid2">
+        <div>
+          <div class="layer l-blu"><b>PEP 1 · plan de données direct</b><small>TABLE · VIEW · INCREMENTAL · FEATURESET · EMBEDDINGS (table de vérité) · STREAM (landing)</small></div>
+          <div class="arrow">▼</div>
+          <div class="layer"><b>Moteur — Spark · DuckDB · Trino</b><small>parle Iceberg REST au catalogue</small></div>
+          <div class="arrow">▼</div>
+          <div class="layer"><b>Lakekeeper — décision OpenFGA</b><small>puis remote-signing S3 : credential éphémère, scopé à la table</small></div>
+          <div class="arrow">▼</div>
+          <div class="layer"><b>S3 (OVH / Outscale)</b><small>les octets, en direct — jamais de clé statique</small></div>
+        </div>
+        <div>
+          <div class="layer l-mau"><b>PEP 2 · médié par un service</b><small>FILESET (blobs) · MODEL (poids) · EMBEDDINGS (serving / query) · EXPORT</small></div>
+          <div class="arrow">▼</div>
+          <div class="layer"><b>App / SDK <code>lake</code></b><small>JWT OIDC — aucun credential de backend, jamais</small></div>
+          <div class="arrow">▼</div>
+          <div class="layer"><b>APISIX → service (Files · Embeddings) — décision OpenFGA</b><small>métadonnées dans le Postgres du service · journalisation par requête</small></div>
+          <div class="arrow">▼</div>
+          <div class="layer"><b>Backend — S3 blobs · qdrant / milvus / pgvector</b><small>credentials <b>du service</b> — le backend n'est pas joignable autrement</small></div>
+        </div>
+      </div>
+      <div class="cap">Même question (« ce user peut-il lire ce dataset ? »), même réponse, deux chemins d'application — et l'API du SDK ne montre jamais la différence (règle R-SDK-4, §8).</div>
+    </div>
+    <p class="code-label">Le contrat en action — mêmes verbes pour trois kinds, chemins d'enforcement différents</p>
+    <pre><span class="k">for</span> ds <span class="k">in</span> (lake.table(<span class="s">"crm.orders"</span>), lake.model(<span class="s">"churn_scorer"</span>), lake.fileset(<span class="s">"corpus.contracts_raw"</span>)):
+    ds.editions(limit=5); ds.lineage(); ds.grants.list(); ds.history()   <span class="c"># même contrat de base…</span>
+    ds.rollback(to=ds.edition(<span class="s">"latest-1"</span>))                              <span class="c"># …mêmes verbes, même sémantique</span>
+<span class="c"># seul le chemin d'enforcement diffère (PEP 1 : Lakekeeper+S3 signé · PEP 2 : APISIX+service) — invisible ici</span></pre>
+  </section>
+
+  <section id="taxonomie">
+    <h2><span class="num">3</span> La taxonomie — 9 kinds, une couverture 100 % <span class="tg emp">challengée &amp; validée</span></h2>
+    <p class="section-sub">De 6 nœuds table-centrés à 9 kinds — chaque type d'objet de l'écosystème (validé contre Unity Catalog et DataHub) a un statut, un lignage, une autorisation.</p>
+    <h4 class="mini">La taxonomie challengée — de 6 nœuds table-centrés à 9 kinds</h4>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Kind</th><th>Produit</th><th>Ancrage Iceberg</th><th>WAP / veto</th><th>Audits types</th><th>Tag worker</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">TABLE / INCREMENTAL / VIEW</td><td>table</td><td>la table elle-même</td><td class="yes">existant (§16 archi)</td><td>not_null · unique · expression</td><td class="num">sql · spark · python</td></tr>
+          <tr><td class="feat">FILESET <span class="tg emp">nouveau</span></td><td>corpus de fichiers (PDF, images, audio…)</td><td><b>service Files</b> : manifestes d'édition immuables (Postgres) + blobs adressés par hash — <i>ou</i> table d'index Iceberg si SQL-sur-corpus voulu (choix d'implémentation, contrat d'édition identique)</td><td class="yes">blobs en staging + manifeste candidat → audits → <b>publication atomique du manifeste</b> (le WAP version service ; fast-forward si option table)</td><td>count ≥ · mime ∈ · taille max · hash unique (dédup) · hook scan (antivirus/PII-doc)</td><td class="num">el · python</td></tr>
+          <tr><td class="feat">MODEL <span class="tg emp">nouveau</span></td><td>version de modèle ML</td><td>fileset (poids/checkpoint) + table (métriques, params, eval)</td><td class="yes"><b>publication gardée par les métriques</b> : le veto WAP devient « auc &lt; 0,82 → la version n'existe pas »</td><td>metric ≥ seuil · non-régression vs édition courante · taille artefact · signature</td><td class="num">gpu · python</td></tr>
+          <tr><td class="feat">EMBEDDINGS <span class="tg emp">nouveau</span></td><td>table de vecteurs</td><td>table Iceberg (id, chunk, vector fixed-size-list, source_hash) + <b>index de serving</b> matérialisé par le service Embeddings (une collection par édition dans qdrant/milvus/pgvector, exposée par alias)</td><td class="yes">WAP standard — c'est une table</td><td>dim = N · taux de null · drift stats vs édition précédente</td><td class="num">gpu · python</td></tr>
+          <tr><td class="feat">EXPORT / EXPOSURE <span class="tg emp">nouveau</span></td><td>synchronisation vers une cible <b>non-proxyfiable</b> (dépôt partenaire, extract BI, cache applicatif, CRM/API push) — le vectoriel n'en fait plus partie : il est <b>servi</b> par le proxy Embeddings</td><td>aucun — consomme une édition épinglée ; l'état de sync est journalisé</td><td class="mid">pas de WAP (le système cible n'est pas versionné) — mais <b>idempotent par édition</b> : « salesforce = churn_scores@c09a41 »</td><td>post-checks (counts cible = source)</td><td class="num">python</td></tr>
+          <tr><td class="feat">FEATURESET <span class="tg emp">nouveau</span></td><td>table de features ML (offline + serving)</td><td>table Iceberg spécialisée : clés d'entité (= identifier fields) + timestamp + métadonnées de serving</td><td class="yes">WAP standard + audit de <b>point-in-time correctness</b> (pas de fuite du futur)</td><td>unique(entity, ts) · fraîcheur · couverture des entités</td><td class="num">spark · python</td></tr>
+          <tr><td class="feat">STREAM <span class="tg emp">nouveau</span></td><td>topic Kafka (source ou sortie)</td><td>déclaré au Catalog (schéma, owner, labels) ; <b>l'ancrage versionné = la table Iceberg d'atterrissage</b> (le topic est un flux, pas un état)</td><td class="mid">pas de WAP sur le flux — le WAP s'applique à l'atterrissage ; côté sortie : EXPORT idempotent par édition</td><td>schéma (registry) · débit/retard</td><td class="num">el</td></tr>
+          <tr><td class="feat">SOURCE · OP (AI_LLM/HTTP) · TEST</td><td colspan="4">inchangés — AI_LLM se généralise : inférence batch = TRANSFORM qui écrit une table ; entraînement = MODEL ; l'op ponctuelle reste OP</td><td class="num">ai · el</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+
+
+    <h4 class="mini">EMBEDDINGS vs EXPORT — calculer &amp; servir vs déménager</h4>
+    <div class="grid2">
+      <div class="benefit tone-info"><div class="ic">🧲</div><b>EMBEDDINGS = un DATASET</b><p>Il <b>produit des données</b> : une table Iceberg de vecteurs, avec éditions, WAP, audits (dim, drift, recall@k), lignage (chunks ← fichiers ← corpus + le modèle d'embedding en code). C'est une <b>vérité versionnée</b> — et elle est <b>servie</b> : le service Embeddings matérialise chaque édition en <b>collection</b> dans le backend choisi (Qdrant, Milvus, pgvector…) et l'expose derrière un <b>alias</b> — publier = basculer l'alias, rollback = le repointer. Les apps appellent le proxy, jamais le store.</p></div>
+      <div class="benefit tone-warn"><div class="ic">📤</div><b>EXPORT = une SYNCHRONISATION</b><p>Il ne produit <b>rien</b> : il fait habiter une <b>édition épinglée</b> d'un dataset dans un système de service <i>non versionné</i> qu'on <b>ne peut pas proxyfier</b> (cache Redis, CRM, API push, dépôt partenaire). Pas d'édition propre, pas de WAP — juste l'idempotence « cible = dataset@édition » et un état de sync journalisé. Détruire la cible ne perd rien : re-sync = rejouer l'édition.</p></div>
+    </div>
+    <div class="note">En une phrase : <b>EMBEDDINGS calcule ET sert (via le proxy), EXPORT déménage — et on ne déménage que ce qu'on ne peut pas servir.</b> La chaîne RAG n'a plus besoin d'EXPORT : app → service Embeddings (proxy) → backend. Les <b>credentials des stores vivent côté service</b> — jamais dans les apps, jamais dans les steps ; chaque requête passe la décision OpenFGA (<code>can_read(user, dataset)</code>) et se journalise comme consommation dans le lignage. Corollaire : changer de backend (Qdrant → Milvus) est une opération de <b>placement</b> — aucune app ne change. L'EXPORT reste pour le reste : pousser une table vers un CRM, déposer un extract chez un partenaire.</div>
+    <div class="diagram">
+      <div class="layer l-grn"><b>DAG — @step embed</b><small>corpus@édition + modèle (code) → WAP → <b>éditions Iceberg</b> e4, e5 — la vérité versionnée (SQL, drift, time travel)</small></div>
+      <div class="arrow lbl">▼ e.index(e5) — le service matérialise l'édition en collection</div>
+      <div class="layer l-mau"><b>Service Embeddings — le PROXY</b><small>collections : c_e4 · <b>c_e5</b> · alias <b>prod → c_e5</b> (promote = bascule atomique, rollback = repointer) · credentials des stores dans <b>son</b> Postgres/Vault · décision OpenFGA + journal à chaque requête</small></div>
+      <div class="layer-row">
+        <div class="layer"><b>qdrant</b><small>collections c_e4, c_e5</small></div>
+        <div class="layer"><b>milvus</b><small>placement alternatif</small></div>
+        <div class="layer"><b>pgvector</b><small>placement alternatif</small></div>
+      </div>
+      <div class="arrow lbl">▲ query(alias="prod") : décision OpenFGA PUIS routage backend · hits journalisés (lignage)</div>
+      <div class="layer l-blu"><b>Apps RAG · notebooks · steps</b><small>un seul endpoint gouverné (APISIX) · JWT OIDC · <b>jamais</b> qdrant:6333, jamais de DSN pgvector</small></div>
+      <div class="cap">Changer de backend = re-matérialiser les collections ailleurs puis repointer l'alias — aucune app ne change (EM-2 : perfs du saut réseau, assumé contre la prolifération de credentials).</div>
+    </div>
+    <p class="code-label">Le point de vue de l'app RAG — zéro credential de store, un endpoint gouverné</p>
+    <pre>client = EmbeddingsClient(endpoint=<span class="s">"https://embeddings.hemera.cleyrop.io"</span>, token=oidc_token)
+hits = client.query(dataset=<span class="s">"cleyrop.contract_embeddings"</span>, alias=<span class="s">"prod"</span>,
+                    text=<span class="s">"clause de résiliation"</span>, k=10, filter={<span class="s">"lang"</span>: <span class="s">"fr"</span>})
+<span class="k">for</span> h <span class="k">in</span> hits: h.score, h.chunk, h.source_hash      <span class="c"># chaque hit référence son fichier source (lignage S27)</span>
+
+<span class="c"># équivalent HTTP :</span>
+<span class="c">#   curl -H "Authorization: Bearer $TOKEN" https://…/embeddings/v1/query \</span>
+<span class="c">#        -d '{"dataset":"cleyrop.contract_embeddings","alias":"prod","text":"…","k":10}'</span>
+<span class="c"># refus : 403 AccessDenied si can_read(user, dataset) est faux — le store n'est pas joignable en direct</span></pre>
+
+
+
+    <h4 class="mini">La couverture 100 % — chaque objet de l'écosystème a un statut, un lignage, une autorisation</h4>
+    <div class="card">
+      <p>Croisement avec les deux référentiels de l'industrie — les <i>securables</i> Unity Catalog (table, view, <b>volume</b>, function, <b>model</b>, feature, metric view) et les entités DataHub (dataset y c. <b>streams Kafka</b> et fichiers S3, mlModel/mlFeature, dashboard/chart/notebook, dataFlow/dataJob, dataProduct) : <b>tout objet tombe dans exactement une des quatre familles</b>, chacune avec sa mécanique de lignage et d'authz — c'est ça, « le même niveau pour tous les types ».</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Famille</th><th>Objets couverts</th><th>Lignage</th><th>Autorisation</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">📦 DATASETS<br><small>portent des éditions</small></td><td>tables · views · <b>filesets</b> (= volumes UC) · <b>modèles</b> · <b>embeddings</b> · <b>featuresets</b> · atterrissages de streams</td><td class="yes">éditions + provenance snapshot↔run + colonne/fichier (par hash)</td><td class="yes">OpenFGA <b>au catalogue</b> (Lakekeeper), délégation S3 — la mécanique §9 archi, identique pour tous</td></tr>
+          <tr><td class="feat">📝 CODE<br><small>fingerprinté, en repo</small></td><td>prompts · UDF/functions (= functions UC) · définitions de métriques (semantic layer) · notebooks · configs/hyperparamètres</td><td class="yes">fingerprint récursif → un changement salit l'aval (plan)</td><td class="yes">Git + revue MR — un prompt modifié passe par le même chemin qu'un modèle SQL</td></tr>
+          <tr><td class="feat">📤 CONSOMMATEURS<br><small>exposures</small></td><td>dashboards/BI · applications/API · apps RAG via le <b>proxy Embeddings</b> (alias) · cibles EXPORT (CRM, caches) · partenaires</td><td class="yes">déclarés (exposures) + observés (events Lakekeeper/Trino) — aval du graphe</td><td class="mid">consomment des <b>éditions épinglées</b> sous leur identité ; l'authz reste à la source (catalogue)</td></tr>
+          <tr><td class="feat">🗂️ ORGANISATION</td><td>projets (= data products) · domaines · owners · labels</td><td>—</td><td class="yes">le modèle ReBAC existant (user→group→project→…)</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+
+    <h4 class="mini">Les services Cleyrop existants = les exécuteurs des kinds <span class="tg ok">alignement produit</span></h4>
+    <div class="grid2">
+      <div class="benefit tone-good"><div class="ic">🗄️</div><b>Service « Files » (S3) → le PROPRIÉTAIRE du kind FILESET</b><p>Le pattern existant s'applique tel quel : <b>APISIX + OpenFGA</b> devant, <b>métadonnées dans son Postgres</b>, blobs S3 adressés par contenu. Il lui manque une seule chose pour honorer le contrat d'édition : des <b>manifestes d'édition immuables</b> (édition N = liste {hash, nom, méta} + provenance) avec publication atomique gardée par les audits (mime/scan/dédup) — le WAP version service. Le presign vérifie OpenFGA (l'API <i>est</i> le plan de données), le GC est un refcount local, et chaque édition publiée part en événement au Catalog. La table d'index Iceberg devient une <b>option</b> (si on veut du SQL sur le corpus), plus un prérequis.</p></div>
+      <div class="benefit tone-good"><div class="ic">🧲</div><b>Service « Embeddings » → le PROXY de serving du kind EMBEDDINGS</b><p>Même pattern : <b>APISIX + OpenFGA</b> devant, et dans son Postgres le mapping dataset → backend/collection ainsi que les <b>credentials des stores</b> (Qdrant, Milvus, pgvector… — jamais dans les apps, jamais dans les steps). La <b>table Iceberg de vecteurs reste la vérité</b> (le SQL dessus est une feature, produite par le DAG) ; le service <b>matérialise chaque édition en collection</b>, expose des <b>alias</b> (promote = bascule atomique, rollback = repointage) et sert <b>toutes</b> les requêtes : décision OpenFGA par requête, routage backend, journalisation en consommation de lignage. Multi-stores, zéro credential dans les apps, backend interchangeable sans changement d'application.</p></div>
+    </div>
+    <div class="note"><b>Ce qui n'est PAS un dataset (décision) :</b> les <b>prompts</b>, configs de modèles et hyperparamètres sont du <b>code</b> — versionnés dans le repo, fingerprintés dans le manifeste (un prompt modifié ⇒ nœud sale ⇒ rebuild), tracés dans la provenance (<code>prompt_hash</code>, déjà prévu §20 archi). Les mettre « en base » casserait le plan : un changement de prompt doit passer par une MR, pas par un UPDATE.</div>
+
+
+    <h4 class="mini">La règle de visibilité — l'ancrage Iceberg est un détail d'implémentation <span class="tg emp">règle V1–V3</span></h4>
+    <div class="card">
+      <p><b>L'objection à traiter :</b> « tout est backé par des tables Iceberg — un client qui parcourt son catalogue via Trino va voir des tables d'index, des métriques de modèles, du state SQLMesh mélangés à <i>ses</i> datasets ». L'ancrage est un choix de <i>mécanique</i> (une seule implémentation d'éditions/WAP/authz pour tous les types — vs N systèmes de versionnage) ; il ne doit <b>jamais</b> devenir l'expérience du client. Trois règles :</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>#</th><th>Règle</th><th>Mise en œuvre</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">V1</td><td><b>Namespaces système séparés</b> — les ancrages (index de filesets, métriques de modèles, state des régions, staging) vivent sous <code>_hemera.*</code> (option : warehouse Lakekeeper dédié)</td><td>les montages Trino/Spark clients n'exposent <b>que</b> les namespaces métier — un <code>SHOW TABLES</code> ne montre jamais un ancrage</td></tr>
+          <tr><td class="feat">V2</td><td><b>La navigation client = le Catalog métier</b>, pas le listing Iceberg — on montre des <i>objets</i> (corpus, modèle, index vectoriel) avec leurs fiches</td><td>« ancrage : table d'index (système) » n'apparaît que dans un panneau avancé des fiches S27–S29</td></tr>
+          <tr><td class="feat">V3</td><td><b>L'authz garantit ce que la convention promet</b></td><td>aucune relation <code>read</code> OpenFGA sur <code>_hemera.*</code> pour les utilisateurs ; accès via les API d'objet uniquement (lake.fileset, registry, service Files)</td></tr>
+        </tbody>
+      </table></div>
+      <p style="margin:10px 0 0;"><b>Et la frontière visible/caché est un choix par kind</b>, tranché par « le SQL dessus est-il une <i>feature</i> ? » : TABLE/VIEW/INCREMENTAL, <b>FEATURESET</b> et <b>EMBEDDINGS</b> (requêter vecteurs/métadonnées en SQL est utile) = tables métier visibles ; <b>FILESET</b> et <b>MODEL</b> = objets de service, consommés via leurs abstractions. Précédent industriel : volumes et modèles Unity Catalog sont des securables du <i>même</i> metastore que les tables — l'UX nomme, personne n'est dérouté. <b>Note :</b> avec le modèle « PEP service » (§ précédent), les objets médiés par un service (filesets, poids de modèles) n'ont <b>même plus besoin</b> d'ancrage dans le catalogue Iceberg — la question de la pollution disparaît à la racine pour eux ; V1–V3 ne s'appliquent qu'aux ancrages restants (option SQL, staging, state de régions).</p>
+    </div>
+
+
+    <div class="note tip"><b>Verdict du challenge :</b> la taxonomie s'ouvre sans casser l'uniformité — <b>un</b> DAG, <b>une</b> syntaxe (MODEL()/@step, mêmes <code>audits(…)</code>), <b>un</b> moteur de publication (WAP sur l'ancrage Iceberg), <b>un</b> registry (le Catalog — éditions pour tables, corpus, modèles, vecteurs, features), et les <b>services Cleyrop existants comme exécuteurs</b> (files → FILESET, embeddings → proxy de serving des EMBEDDINGS) plutôt que des systèmes parallèles. Couverture validée contre Unity Catalog et DataHub : chaque type d'objet de l'écosystème est soit un dataset à éditions, soit du code fingerprinté, soit un consommateur d'éditions, soit de l'organisation — <b>mêmes lignage et autorisation partout</b>. Tickets : FS-1 (kind FILESET + lake.fileset via service files), FS-2 (contrat GC Catalog↔files), ML-1 (kind MODEL + registry Catalog), ML-2 (wrap MLflow), EM-1 (kind EMBEDDINGS + service proxy multi-stores : collections par édition, alias), EM-2 (query-plane du proxy : perfs, matrice de capacités des backends), FT-1 (FEATURESET + audit point-in-time), ST-1 (STREAM + bridge ACL Kafka↔OpenFGA), INT-15 (presign du service files sous décision OpenFGA).</div>
+  </section>
+
+
+  <div class="pdiv"><span class="tagp">Partie II</span><span class="t">Écrire — une syntaxe, tous les kinds</span><span class="ln"></span></div>
+
+  <section id="ir">
+    <h2><span class="num">4</span> La pièce maîtresse : un IR unique</h2>
+    <p class="section-sub">Tout front-end compile vers la même représentation ; le runner (lake + WAP + file) ne connaît qu'elle.</p>
+    <div class="diagram">
+      <div class="layer-row">
+        <div class="layer l-mau"><b>Natif .sql</b><small>MODEL() + idiomes dbt (shim)</small></div>
+        <div class="layer l-acc"><b>@step Python</b><small>signatures typées</small></div>
+        <div class="layer l-blu"><b>No-code React Flow</b><small>graphe visuel</small></div>
+        <div class="layer l-grn"><b>Wrap SQLMesh / dbt</b><small>région → nœud composite</small></div>
+      </div>
+      <div class="arrow lbl">▼ compilent tous vers…</div>
+      <div class="layer l-teal"><b>Model IR — le nœud du manifeste (§14 archi)</b><small><code>name · kind (full/incremental_by_time/incremental_by_key/view/scd2*) · time_column · unique_key · cron · audits[] · refs[] (inférés) · schema_contract · sql_per_interval(start, end) | region_spec</code> — immuable, content-addressed, fingerprinté</small></div>
+      <div class="arrow lbl">▼ exécuté par…</div>
+      <div class="layer-row">
+        <div class="layer"><b>Runner Flows</b><small>file · fenêtres · retries</small></div>
+        <div class="layer"><b>lake</b><small>WAP · provenance · contrat strict</small></div>
+        <div class="layer"><b>Gateways</b><small>Spark Connect · DuckDB · Trino</small></div>
+      </div>
+      <div class="cap">Conséquence : les garanties (WAP, audits pré-publication, branches, provenance, lignage) sont des propriétés de l'<b>IR exécuté</b>, pas de la syntaxe d'entrée. Ajouter un front-end n'ajoute jamais un chemin d'exécution.</div>
+    </div>
+  </section>
+
+  <section id="natif">
+    <h2><span class="num">5</span> La syntaxe native — SQLMesh-first, idiomes dbt acceptés <span class="tg emp">S1 · S2 validées</span></h2>
+    <p class="section-sub">Le choix : la forme MODEL() de SQLMesh comme base (SQL pur, zéro templating obligatoire), et un shim qui accepte les habitudes dbt dans le même fichier.</p>
+    <div class="card">
+      <p><b>Pourquoi SQLMesh-first et pas dbt-first ?</b> Trois raisons techniques : ① la forme SQLMesh est du <b>SQL pur + un en-tête déclaratif</b> — parseable, transpilable, lignage colonne par AST — là où dbt est du <b>Jinja avant d'être du SQL</b> (le SQL n'existe qu'après rendu) ; ② SQLMesh <b>infère les dépendances des noms de tables</b> (vérifié S1b), exactement comme notre compilateur — dbt a <i>besoin</i> de <code>ref()</code> parce que Jinja ne voit pas le SQL ; ③ les audits sont déclarés <b>dans le modèle</b>, pas dans un YAML à côté — aligné avec notre garde WAP. Mais un DE dbt ne doit rien réapprendre : le <b>shim</b> (S2) accepte <code>{{ ref() }}</code>, <code>{{ source() }}</code>, <code>{{ config() }}</code>, <code>{% if is_incremental() %}</code>, <code>{{ this }}</code>, <code>{{ var() }}</code> — et les normalise vers le même IR en ~30 lignes de rendu Jinja contrôlé (vérifié : config capturée, refs résolus, SQL rendu parseable, IR identique).</p>
+    </div>
+    <p class="code-label">Le même modèle, écrit dans les deux styles — un seul IR à l'arrivée</p>
+    <pre><span class="c">-- Style A (canonique — SQLMesh) ------------------------------- transformations/fct_sales.sql</span>
+<span class="f">MODEL</span> (<span class="k">name</span> fct_sales, <span class="k">kind</span> INCREMENTAL_BY_TIME_RANGE (time_column order_date),
+       <span class="k">grain</span> order_id, <span class="k">cron</span> <span class="s">'@daily'</span>, <span class="k">audits</span> (not_null(columns := (order_id))));
+<span class="k">SELECT</span> o.order_id, o.order_date, o.amount * fx.rate <span class="k">AS</span> amount_eur
+<span class="k">FROM</span> orders_clean o <span class="k">JOIN</span> fx_rates fx <span class="k">ON</span> o.currency = fx.currency     <span class="c">-- deps inférées des noms (S1b)</span>
+<span class="k">WHERE</span> o.order_date <span class="k">BETWEEN</span> @start_ds <span class="k">AND</span> @end_ds
+
+<span class="c">-- Style B (habitudes dbt — le shim, S2) ------------------------ même fichier .sql accepté</span>
+{{ config(materialized=<span class="s">'incremental'</span>, unique_key=<span class="s">'order_id'</span>, audits=[<span class="s">'not_null(order_id)'</span>]) }}
+<span class="k">select</span> o.order_id, o.order_date, o.amount * fx.rate <span class="k">as</span> amount_eur
+<span class="k">from</span> {{ ref(<span class="s">'orders_clean'</span>) }} o <span class="k">join</span> {{ source(<span class="s">'crm'</span>,<span class="s">'fx_rates'</span>) }} fx <span class="k">on</span> o.currency = fx.currency
+{% <span class="k">if</span> is_incremental() %} <span class="k">where</span> o.order_date &gt; (<span class="k">select</span> max(order_date) <span class="k">from</span> {{ this }}) {% <span class="k">endif</span> %}</pre>
+    <h4 class="mini">Comment c'est compilé — S1 a validé le cœur (décision D1-b)</h4>
+    <div class="grid2">
+      <div class="benefit tone-good"><div class="ic">⚙️</div><b>SQLMesh en bibliothèque, sans état</b><p>Vérifié S1 : <code>load_sql_based_model()</code> parse le MODEL, infère les deps <b>sans ref()</b>, extrait les audits, et <code>render_query(start, end)</code> substitue la fenêtre — <b>aucun Context, aucune state DB, aucun environnement virtuel touché</b>. Et le même modèle se rend en dialecte <b>spark</b> (prod) et <b>duckdb</b> (dev) — le contrat des gateways tient.</p></div>
+      <div class="benefit tone-good"><div class="ic">🩹</div><b>Le shim dbt avant parse</b><p>Vérifié S2 : un environnement Jinja contrôlé (6 symboles : config/ref/source/is_incremental/this/var — <b>liste fermée</b>) rend le style B vers du SQL pur + une config capturée. Un fichier utilisant un symbole hors liste (macro de package, <code>run_query</code>…) = erreur de build avec message : « ceci nécessite le mode wrap dbt ».</p></div>
+    </div>
+    <div class="note warn"><b>La frontière du natif, dite franchement :</b> pas de macros custom, pas de packages dbt, pas de macros Python SQLMesh en mode natif — c'est <i>la</i> ligne qui garde le natif parseable, transpilable et lignagé colonne par colonne. Au-delà de la ligne : mode wrap (§11–12). Cette frontière est <b>vérifiée au build</b>, jamais découverte au run.</div>
+
+    <h4 class="mini">Même syntaxe — les trois exemples qui prouvent l'uniformité</h4>
+    <p class="code-label">① FILESET — ingestion et transformation de documents (le @step façon dbt/sqlmesh)</p>
+    <pre><span class="c"># sources/contracts.yml — connecteur SFTP → FILESET (au lieu de table)</span>
+<span class="k">id</span>: src-contracts
+<span class="k">connector</span>: SFTP
+<span class="k">output</span>: { <span class="k">kind</span>: fileset, <span class="k">name</span>: corpus.contracts_raw }
+<span class="k">audits</span>: [ <span class="s">"mime_in(application/pdf)"</span>, <span class="s">"max_size_mb(50)"</span>, <span class="s">"unique(content_hash)"</span> ]
+
+<span class="c"># transformations/extract_text.py — fichier → fichier, même contrat @step</span>
+<span class="n">@step</span>(output=<span class="f">Fileset</span>(<span class="s">"contracts_txt"</span>), audits=[<span class="s">"count_ratio(contracts_raw, 1.0)"</span>])
+<span class="k">def</span> <span class="f">extract_text</span>(contracts_raw: <span class="f">Fileset</span>, <span class="k">*</span>, ctx) -&gt; <span class="f">FilesetWriter</span>:
+    <span class="k">for</span> f <span class="k">in</span> contracts_raw:                  <span class="c"># FileRef : .uri, .content_hash, .meta, .open() signé par Lakekeeper</span>
+        <span class="k">yield</span> ctx.<span class="f">emit_file</span>(name=f.stem + <span class="s">".txt"</span>, data=<span class="f">pdf_to_text</span>(f.<span class="f">open</span>()), lineage_from=f)  <span class="c"># lignage FICHIER→FICHIER par hash</span></pre>
+    <p class="code-label">② Chaîne RAG complète — fileset → table → embeddings → export, un seul DAG</p>
+    <pre><span class="c"># chunking : FILESET → TABLE (SQL possible dès qu'on est tabulaire)</span>
+<span class="n">@step</span>(output=<span class="s">"contract_chunks"</span>, audits=[<span class="s">"not_null(chunk_id)"</span>])
+<span class="k">def</span> <span class="f">chunk</span>(contracts_txt: Fileset) -&gt; DataFrame: …
+
+<span class="c"># embeddings : kind dédié — le modèle utilisé entre dans le fingerprint ET la provenance</span>
+<span class="f">MODEL</span> (<span class="k">name</span> contract_embeddings, <span class="k">kind</span> EMBEDDINGS (source contract_chunks, model <span class="s">'bge-m3@1.2'</span>, dim 1024),
+       <span class="k">audits</span> (dim_equals(1024), null_rate_max(0.001), drift_max(0.15)));
+
+<span class="c"># serving : déclaré SUR le kind EMBEDDINGS — le service proxy indexe chaque édition, promote = bascule d'alias</span>
+<span class="f">MODEL</span> (<span class="k">name</span> contract_embeddings, <span class="k">serving</span> (backend <span class="s">'qdrant'</span>, alias <span class="s">'prod'</span>));   <span class="c"># les apps appellent le proxy, jamais qdrant:6333</span>
+
+<span class="c"># export : uniquement le non-proxyfiable (push CRM, dépôt partenaire) — le vectoriel est SERVI, pas exporté</span>
+<span class="f">MODEL</span> (<span class="k">name</span> scores_to_crm, <span class="k">kind</span> EXPORT (source churn_scores, target <span class="s">'crm://salesforce'</span>, mode sync));</pre>
+    <p class="code-label">③ MODEL — l'entraînement dont la publication est gardée par les métriques</p>
+    <pre><span class="n">@step</span>(output=<span class="f">Model</span>(<span class="s">"churn_scorer"</span>, framework=<span class="s">"sklearn"</span>),
+      audits=[<span class="s">"metric(auc) >= 0.82"</span>, <span class="s">"metric(auc) >= current - 0.01"</span>],   <span class="c"># ← non-régression vs l'édition publiée</span>
+      resources={<span class="s">"gpu"</span>: 0})
+<span class="k">def</span> <span class="f">train</span>(features: DataFrame, <span class="k">*</span>, ctx) -&gt; <span class="f">TrainedModel</span>:
+    m = <span class="f">fit</span>(features)                          <span class="c"># features = édition épinglée → reproductibilité exacte</span>
+    <span class="k">return</span> ctx.<span class="f">model</span>(m, metrics=<span class="f">evaluate</span>(m, ctx.<span class="f">ref</span>(<span class="s">"features_eval"</span>)), params=m.get_params())
+<span class="c"># publication = WAP : poids en staging + métriques auditées → l'édition « churn_scorer v12 » n'existe</span>
+<span class="c"># au Catalog QUE si les seuils passent. Rollback modèle = repointer l'édition — comme une table.</span></pre>
+
+  </section>
+
+  <section id="correspondance">
+    <h2><span class="num">6</span> La table de correspondance des concepts</h2>
+    <p class="section-sub">Chaque concept dbt et SQLMesh a une place dans l'IR — et une traduction Iceberg précise.</p>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Concept dbt</th><th>Concept SQLMesh</th><th>IR Hemera</th><th>Exécution Iceberg</th></tr></thead>
+        <tbody>
+          <tr><td class="num">materialized='table'</td><td class="num">kind FULL</td><td class="num">full</td><td class="yes">overwrite sur branche wap → publish</td></tr>
+          <tr><td class="num">materialized='view' / ephemeral</td><td class="num">kind VIEW / embedded</td><td class="num">view</td><td>inliné, jamais matérialisé (lignage conservé)</td></tr>
+          <tr><td class="num">incremental + unique_key (merge)</td><td class="num">INCREMENTAL_BY_UNIQUE_KEY</td><td class="num">incremental_by_key</td><td class="yes">upsert(join_cols) = MERGE — clés alignées sur les <b>identifier fields</b> (annexe schéma R7)</td></tr>
+          <tr><td class="num">incremental + is_incremental()</td><td class="num">INCREMENTAL_BY_TIME_RANGE + @start/@end</td><td class="num">incremental_by_time</td><td class="yes">fenêtre calculée par le runner · overwrite dynamique de partitions</td></tr>
+          <tr><td class="num">insert_overwrite</td><td class="num">INCREMENTAL_BY_PARTITION</td><td class="num">partition_overwrite</td><td>dynamic partition overwrite (branche wap)</td></tr>
+          <tr><td class="num">tests (schema.yml)</td><td class="num">audits (dans MODEL)</td><td class="num">audits[]</td><td class="yes"><b>garde WAP pré-publication</b> — plus fort que dbt (post-hoc)</td></tr>
+          <tr><td class="num">sources.yml</td><td class="num">external models</td><td class="num">nœud SOURCE / INPUT</td><td>sorties des connecteurs d'ingestion (§13 archi)</td></tr>
+          <tr><td class="num">snapshots (SCD2)</td><td class="num">kind SCD_TYPE_2</td><td class="num">scd2 <span class="tg nf">roadmap</span></td><td>merge Iceberg valid_from/valid_to — après v1</td></tr>
+          <tr><td class="num">seeds (csv)</td><td class="num">kind SEED</td><td class="num">SOURCE (fichier)</td><td>ingestion gouvernée standard</td></tr>
+          <tr><td class="num">exposures</td><td class="num">—</td><td class="num">consommateurs Catalog</td><td>déclaratif → lignage aval (§22 archi)</td></tr>
+          <tr><td class="num">vars / env_var</td><td class="num">@vars / variables gateway</td><td class="num">flows.yaml vars + ctx</td><td>injectés au rendu, jamais de secret inline</td></tr>
+          <tr><td class="num">pre/post-hooks</td><td class="num">pre/post-statements</td><td class="no">non supporté en natif</td><td>hostile au WAP (effets de bord hors publication) — wrap seulement, documenté</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+  </section>
+
+  <section id="flowref">
+    <h2><span class="num">7</span> Le flow de référence — tous les kinds en Python, pilotables CLI &amp; API</h2>
+    <p class="section-sub">Un seul flow qui traverse les 9 kinds (le canvas correspondant : document ③, module D) — puis la vérification « tout est pilotable » kind par kind.</p>
+    <p>Un seul repo, un seul DAG, les 9 kinds. Chaque bloc montre l'API <code>ctx</code>/<code>lake</code> du kind ; le canvas correspondant est dans le document ③ (module D).</p>
+    <pre><span class="c"># ── SOURCES (E/L) ─────────────────────────────────────────────────────────────</span>
+<span class="c"># sources/customers.yml   → TABLE  cleyrop.customers        (connecteur JDBC, merge)</span>
+<span class="c"># sources/contracts.yml   → FILESET corpus.contracts_raw    (connecteur SFTP, audits mime/hash/scan)</span>
+<span class="c"># sources/orders_stream.yml → STREAM kafka:orders_events → TABLE cleyrop.orders_landed (atterrissage micro-batch)</span>
+
+<span class="c"># ── TABLES : VIEW / INCREMENTAL — SQL natif ou @step ─────────────────────────</span>
+<span class="c"># transformations/stg_orders.sql : MODEL(kind VIEW) — éphémère</span>
+<span class="c"># transformations/orders_clean.sql : MODEL(kind INCREMENTAL_BY_UNIQUE_KEY (order_id))</span>
+
+<span class="c"># ── FILESET → FILESET : traitement de fichiers ────────────────────────────────</span>
+<span class="n">@step</span>(output=<span class="f">Fileset</span>(<span class="s">"contracts_txt"</span>), audits=[<span class="s">"count_ratio(contracts_raw, 1.0)"</span>])
+<span class="k">def</span> <span class="f">extract_text</span>(contracts_raw: Fileset, <span class="k">*</span>, ctx):
+    <span class="k">for</span> f <span class="k">in</span> contracts_raw:                              <span class="c"># FileRef — .open() presigné par le service Files</span>
+        <span class="k">yield</span> ctx.<span class="f">emit_file</span>(f.stem + <span class="s">".txt"</span>, <span class="f">pdf_to_text</span>(f.<span class="f">open</span>()), lineage_from=f)
+
+<span class="c"># ── FILESET → TABLE : retour au tabulaire ─────────────────────────────────────</span>
+<span class="n">@step</span>(output=<span class="s">"contract_chunks"</span>, audits=[<span class="s">"not_null(chunk_id)"</span>, <span class="s">"unique(chunk_id)"</span>])
+<span class="k">def</span> <span class="f">chunk</span>(contracts_txt: Fileset) -&gt; DataFrame:
+    <span class="k">return</span> <span class="f">split_paragraphs</span>(contracts_txt)              <span class="c"># chaque ligne garde source_hash → lignage fichier</span>
+
+<span class="c"># ── EMBEDDINGS : calcule des vecteurs (dataset) ───────────────────────────────</span>
+<span class="n">@step</span>(output=<span class="f">Embeddings</span>(<span class="s">"contract_embeddings"</span>, model=<span class="s">"bge-m3@1.2"</span>, dim=1024),
+      audits=[<span class="s">"dim_equals(1024)"</span>, <span class="s">"null_rate_max(0.001)"</span>, <span class="s">"recall_at_k(golden_contracts, 10, 0.9)"</span>],
+      resources={<span class="s">"gpu"</span>: 1})
+<span class="k">def</span> <span class="f">embed</span>(contract_chunks: DataFrame, <span class="k">*</span>, ctx) -&gt; DataFrame:
+    <span class="k">return</span> ctx.<span class="f">embedder</span>().<span class="f">encode</span>(contract_chunks, text_col=<span class="s">"chunk"</span>)   <span class="c"># le modèle vient du décorateur → fingerprint</span>
+
+<span class="c"># ── FEATURESET : features ML point-in-time ────────────────────────────────────</span>
+<span class="n">@step</span>(output=<span class="f">Featureset</span>(<span class="s">"churn_features"</span>, entity_keys=[<span class="s">"customer_id"</span>], ts_col=<span class="s">"feature_ts"</span>),
+      audits=[<span class="s">"unique(customer_id, feature_ts)"</span>, <span class="s">"point_in_time(feature_ts)"</span>])
+<span class="k">def</span> <span class="f">features</span>(orders_clean: DataFrame, customers: DataFrame) -&gt; DataFrame: …
+
+<span class="c"># ── MODEL : entraînement, publication gardée par les métriques ────────────────</span>
+<span class="n">@step</span>(output=<span class="f">Model</span>(<span class="s">"churn_scorer"</span>, framework=<span class="s">"sklearn"</span>),
+      audits=[<span class="s">"metric(auc) >= 0.82"</span>, <span class="s">"metric(auc) >= current - 0.01"</span>])
+<span class="k">def</span> <span class="f">train</span>(churn_features: DataFrame, <span class="k">*</span>, ctx) -&gt; TrainedModel:
+    m = <span class="f">fit</span>(churn_features)
+    <span class="k">return</span> ctx.<span class="f">model</span>(m, metrics=<span class="f">evaluate</span>(m, ctx.<span class="f">ref</span>(<span class="s">"features_eval"</span>)))
+
+<span class="c"># ── CONSOMMER un modèle dans un step (scoring batch) ──────────────────────────</span>
+<span class="n">@step</span>(output=<span class="s">"churn_scores"</span>, audits=[<span class="s">"expression(score between 0 and 1)"</span>])
+<span class="k">def</span> <span class="f">score</span>(churn_features: DataFrame, <span class="k">*</span>, ctx) -&gt; DataFrame:
+    model = ctx.<span class="f">model</span>(<span class="s">"churn_scorer"</span>)                   <span class="c"># version SERVIE, épinglée dans la provenance du run</span>
+    <span class="k">return</span> model.<span class="f">predict_df</span>(churn_features)
+
+<span class="c"># ── OP IA : classification LLM (table → table, gouverné) ──────────────────────</span>
+<span class="n">@step</span>(output=<span class="s">"contracts_tagged"</span>, kind=<span class="s">"ai_llm"</span>, audits=[<span class="s">"accepted_values(risk, 'low','med','high')"</span>])
+<span class="k">def</span> <span class="f">classify</span>(contract_chunks: DataFrame, <span class="k">*</span>, ctx) -&gt; DataFrame:
+    <span class="k">return</span> ctx.<span class="f">llm</span>(<span class="s">"claude-sonnet-5"</span>).<span class="f">map</span>(contract_chunks, prompt=PROMPTS.risk)   <span class="c"># PROMPTS = code, fingerprinté</span>
+
+<span class="c"># ── EXPORTS : déménager des éditions (aucune donnée produite) ─────────────────</span>
+<span class="c"># (vectoriel : PAS d'export — serving déclaré dans embeddings/contract_embeddings.yml : backend qdrant, alias prod)</span>
+<span class="c"># exports/scores_to_crm.yml: EXPORT churn_scores        → target crm://salesforce (push idempotent par édition)</span>
+
+<span class="c"># ── TEST cross-datasets ───────────────────────────────────────────────────────</span>
+<span class="n">@step</span>(kind=<span class="s">"test"</span>)
+<span class="k">def</span> <span class="f">coherence</span>(churn_scores: DataFrame, customers: DataFrame):
+    <span class="k">assert</span> churn_scores.<span class="f">count</span>() == customers.<span class="f">filter</span>(<span class="s">"active"</span>).<span class="f">count</span>()</pre>
+
+
+    <h4 class="mini">CLI / API — la vérification « tout est pilotable » kind par kind</h4>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Kind</th><th>Chemin de fabrication (source → build)</th><th>CLI</th><th>API</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">TABLE / VIEW / INCREMENTAL</td><td>connecteur (source déclarée) ou transform SQL/@step → WAP</td><td class="num">flows run --select orders_clean+ · datasets show/history/rollback</td><td class="num">flows/v1/runs · catalog/v1/datasets</td></tr>
+          <tr><td class="feat">FILESET</td><td>connecteur fichiers (SFTP/S3/upload) <b>ou</b> @step fileset→fileset → index WAP + blobs (service Files)</td><td class="num">flows run --select extract_text · datasets files ls/get/purge</td><td class="num">catalog/v1/filesets · files/v1/presign|purge</td></tr>
+          <tr><td class="feat">STREAM</td><td>topic déclaré (source) → atterrissage micro-batch en TABLE (le worker <code>el</code> consomme, WAP à l'atterrissage)</td><td class="num">sources ls · flows run --select orders_landed</td><td class="num">flows/v1/sources · catalog/v1 (topic déclaré)</td></tr>
+          <tr><td class="feat">FEATURESET</td><td>tables propres → @step features (clés d'entité + ts) → WAP + audit point-in-time</td><td class="num">flows run --select features · datasets show (grain entité)</td><td class="num">catalog/v1/datasets (kind=featureset)</td></tr>
+          <tr><td class="feat">MODEL</td><td>featureset@édition + eval set → @step train → publication gardée métriques → registry Catalog</td><td class="num">flows run --select train · models ls/compare/promote/rollback</td><td class="num">catalog/v1/models · files/v1/presign (poids, relation « use »)</td></tr>
+          <tr><td class="feat">EMBEDDINGS</td><td>fileset → extract → chunks → @step embed (modèle = code) → WAP</td><td class="num">flows run --select embed · embeddings serving/promote/rollback</td><td class="num">catalog/v1/datasets · embeddings/v1/query + /aliases (proxy gouverné — LE chemin des apps)</td></tr>
+          <tr><td class="feat">EXPORT</td><td>dataset@édition → cible <b>non-proxyfiable</b> (adapters push) — le vectoriel est servi par le proxy (ligne EMBEDDINGS)</td><td class="num">exports ls/sync/pause · exports status (cible = édition ?)</td><td class="num">embeddings/v1/targets · flows/v1/exports</td></tr>
+          <tr><td class="feat">OP (AI/HTTP) · TEST</td><td>datasets amont → op → table gouvernée / assertion</td><td class="num">flows run --select classify</td><td class="num">flows/v1/runs (facettes IA dans le lignage)</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <div class="note tip"><b>Vérification de complétude :</b> chaque kind a ① au moins un <b>chemin de fabrication depuis une source de données</b> (colonne 2 — aucun kind « orphelin » qui exigerait un objet préexistant), ② ses verbes <b>CLI</b> (fabriquer via <code>flows run</code>, inspecter/agir via les sous-commandes), ③ ses <b>endpoints API</b> (le frontend et la CLI sont les mêmes clients). Les seuls verbes hors <code>flows</code> sont les actions d'objet (promote/rollback de modèle, purge de fichier, sync d'export) — tous journalisés comme événements de gouvernance.</div>
+
+  </section>
+
+
+  <section id="sdk">
+    <h2><span class="num">8</span> Le SDK <code>lake</code> — un objet Python par kind, le cycle de vie complet <span class="tg emp">conception</span></h2>
+    <p class="section-sub">La critique reçue : <code>lake</code> savait manipuler des tables Iceberg, pas les 9 kinds. La réponse : un contrat de base unique (<code>DatasetHandle</code> + <code>stage()</code>), un handle typé par kind qui n'ajoute que ses spécificités, et le destructif gouverné par construction.</p>
+
+    <div class="card">
+      <div class="tablewrap"><table>
+        <thead><tr><th>Règle de conception</th><th>Concrètement</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">R-SDK-1 · <b>stage() est LA primitive d’écriture</b></td><td>le WAP généralisé : branche Iceberg (tables, vecteurs, features, atterrissage stream), manifeste staging + blobs <i>pending</i> (filesets), version <i>pending</i> (modèles). <code>publish</code> = repointage atomique après audits, partout ; veto ⇒ rien n’existe. Aucune méthode <code>write()</code> hors staging.</td></tr>
+          <tr><td class="feat">R-SDK-2 · <b>un contrat de base, des handles typés</b></td><td>tout code écrit contre <code>DatasetHandle</code> (éditions, rollback, grants, lignage, rétention) marche pour les 9 kinds ; un handle typé <b>ajoute</b> ce qui est propre au kind, ne retire jamais rien.</td></tr>
+          <tr><td class="feat">R-SDK-3 · <b>lecture = adressage par édition</b></td><td><code>ds.pin()</code>, <code>ds.at(ts)</code>, <code>ctx.inputs</code> auto-épinglés : toute lecture est reproductible, la provenance s’écrit toute seule.</td></tr>
+          <tr><td class="feat">R-SDK-4 · <b>les deux PEP sont invisibles dans l’API</b></td><td>même verbe, chemin différent : <code>t.read()</code> = Iceberg remote-signé (PEP 1) ; <code>f.url()</code> = presign du service Files après décision OpenFGA (PEP 2) ; <code>e.query()</code> = service Embeddings au query-time. Le SDK choisit le chemin, jamais l’utilisateur.</td></tr>
+          <tr><td class="feat">R-SDK-5 · <b>le destructif est gouverné</b></td><td><code>drop</code>, purge, contraction de schéma, <code>promote</code> : en prod ⇒ <code>PlanRequired</code> (plan/apply, MR, revue) ; direct seulement en environnement de dev. Chaque exécution émet un événement de gouvernance (<code>ds.history()</code>).</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="diagram">
+      <div class="layer-row">
+        <div class="layer"><b>① declare()</b><small>la spec au Catalog — en prod : via plan/apply</small></div>
+        <div class="layer l-blu"><b>② stage()</b><small>édition staged : branche Iceberg · manifeste · version <i>pending</i></small></div>
+        <div class="layer l-mau"><b>③ audits</b><small>SQL · métriques · dim/drift · point-in-time — selon le kind</small></div>
+        <div class="layer l-grn"><b>④ publish</b><small>repointage atomique + contrôle d'ascendance → <b>édition N</b></small></div>
+      </div>
+      <div class="layer-row">
+        <div class="layer" style="border-color:var(--red);"><b>veto ⇒ néant</b><small><code>AuditVeto</code> : l'édition staged n'existe pour personne — rien à nettoyer</small></div>
+        <div class="layer"><b>⑤ vivre</b><small>editions() · at(ts) · diff · pin() · grants · lineage</small></div>
+        <div class="layer"><b>⑥ revenir</b><small>rollback(to=e<sub>N-1</sub>) = repointer — événement gouverné</small></div>
+        <div class="layer"><b>⑦ finir</b><small>deprecate → archive → drop (<code>PlanRequired</code> en prod) · retention/GC</small></div>
+      </div>
+      <div class="cap">Ce cycle EST le contrat — identique pour les 9 kinds ; seuls les contenus de ② (écritures) et ③ (gardes) varient, détaillés dans le bloc « handles typés » ci-dessous.</div>
+    </div>
+
+    <h4 class="mini">L’inventaire — tous les objets Python du SDK</h4>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Objet</th><th>Rôle</th></tr></thead>
+        <tbody>
+          <tr><td class="feat"><code>Lake</code> (<code>lake</code>)</td><td>racine de session : identité OIDC, environnement courant, résolution des handles, <code>sql()</code> multi-datasets, clients spécialisés — parle à Lakekeeper (PEP 1), aux services (PEP 2), au Catalog et à Flows</td></tr>
+          <tr><td class="feat">Handles typés (un par kind)</td><td><code>TableHandle</code> · <code>ViewHandle</code> · <code>FilesetHandle</code> · <code>ModelHandle</code> · <code>EmbeddingsHandle</code> · <code>FeaturesetHandle</code> · <code>StreamHandle</code> — héritent tous de <code>DatasetHandle</code> ; <code>ExportHandle</code> à part (relation de sortie, pas un dataset)</td></tr>
+          <tr><td class="feat"><code>StagedEdition</code></td><td>context manager d’écriture, typé par kind (<code>StagedTable</code>, <code>StagedFileset</code>, <code>StagedModel</code>…) : porte les écritures et les audits ; publie à la sortie du <code>with</code></td></tr>
+          <tr><td class="feat"><code>PinnedDataset</code></td><td>lecture figée sur une édition — ce que <code>ctx.inputs</code> délivre dans un <code>@step</code></td></tr>
+          <tr><td class="feat">Valeurs immuables</td><td><code>Ref</code> · <code>Edition</code> · <code>Provenance</code> · <code>AuditReport</code> · <code>FileEntry</code> · <code>ModelVersion</code> · <code>OffsetRange</code> · <code>SchemaPlan</code> · <code>Grant</code> · <code>LineageGraph</code> · <code>RunInfo</code> — données pures, sérialisables, sans I/O</td></tr>
+          <tr><td class="feat"><code>StepContext</code> (<code>ctx</code>)</td><td>runtime d’un <code>@step</code>/<code>@source</code> : inputs épinglés, sortie staged <b>ouverte par le runner</b>, connecteurs, curseurs, métriques &amp; facettes OpenLineage</td></tr>
+          <tr><td class="feat"><code>SourceHandle</code></td><td>cycle de vie d’une source EL (§9) : test · discover · run · backfill · état des curseurs · pause · eject vers le code</td></tr>
+          <tr><td class="feat"><code>EnvironmentsClient</code></td><td>branches zéro-copie : create · use · diff · promote (gated) · drop</td></tr>
+          <tr><td class="feat"><code>FlowHandle</code> / <code>RunHandle</code></td><td>plan · run · logs · provenance — déclenchement et observation ; l’authoring reste le repo Git</td></tr>
+          <tr><td class="feat"><code>CatalogClient</code></td><td>search (facettes kind/label) · lineage · impact · labels · domaines</td></tr>
+          <tr><td class="feat"><code>SecretRef</code></td><td>référence nominative (<code>externalsecrets://…</code>), résolue côté worker — aucune valeur de secret n’existe côté client</td></tr>
+          <tr><td class="feat">Erreurs</td><td><code>AccessDenied</code> · <code>AuditVeto</code> · <code>EditionConflict</code> (publish concurrent) · <code>CommitConflict</code> (retry-refresh auto) · <code>SchemaDrift</code> · <code>PlanRequired</code> · <code>NotFound</code> — chaque échec dit quelle règle a bloqué</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+
+    <p class="code-label">Le contrat de base — identique pour les 9 kinds (DatasetHandle)</p>
+    <pre><span class="c"># ── La racine : lake — session gouvernée ─────────────────────────────────────</span>
+lake = Lake.connect()                          <span class="c"># identité OIDC ; jamais de clé S3 dans le code</span>
+lake.whoami(); lake.ns(<span class="s">"crm"</span>).create(owner=<span class="s">"crm-data"</span>)
+ds = lake.dataset(<span class="s">"crm.orders"</span>)                <span class="c"># handle TYPÉ — le Catalog connaît le kind</span>
+t  = lake.table(<span class="s">"crm.orders"</span>)                  <span class="c"># constructeurs stricts : table/fileset/model/embeddings/featureset/stream</span>
+lake.sql(<span class="s">"SELECT … FROM crm.orders JOIN mart.clients …"</span>)   <span class="c"># multi-datasets, gouverné</span>
+
+<span class="c"># ── Exister : déclarer, décrire ──────────────────────────────────────────────</span>
+t.declare(schema=…, audits=[…], owners=[<span class="s">"crm-data"</span>])   <span class="c"># idempotent ; en prod : via plan/apply</span>
+t.exists(); t.info(); t.spec(); t.docs()
+t.labels.add(<span class="s">"PII"</span>, column=<span class="s">"email"</span>); t.owners.set(<span class="s">"crm-data"</span>)
+
+<span class="c"># ── Écrire : stage() — LA primitive WAP, pour tous les kinds ─────────────────</span>
+<span class="k">with</span> t.stage() <span class="k">as</span> st:              <span class="c"># ouvre l’édition staged (branche / manifeste / version pending)</span>
+    st.append(df)                  <span class="c"># écritures typées par kind (bloc suivant)</span>
+<span class="c"># sortie du with : run_audits → publish atomique (contrôle d’ascendance) — ou AuditVeto ⇒ rien n’existe</span>
+<span class="c"># publish concurrent : EditionConflict · commit Iceberg concurrent : retry-refresh auto (CommitConflict)</span>
+
+<span class="c"># ── Versions : éditions, time travel, retour arrière ─────────────────────────</span>
+t.editions(limit=20); e41 = t.edition(41); t.at(<span class="s">"2026-06-01"</span>)
+t.diff(t.edition(40), e41)                     <span class="c"># lignes / fichiers / schéma — selon le kind</span>
+t.rollback(to=t.edition(40))                   <span class="c"># = repointer ; événement gouverné, jamais de réécriture</span>
+pin = t.pin(e41)                               <span class="c"># lecture figée — ce que ctx.inputs délivre</span>
+
+<span class="c"># ── Accès, lignage, historique ───────────────────────────────────────────────</span>
+t.grants.list(); t.grants.add(<span class="s">"team:bi"</span>, <span class="s">"reader"</span>, ttl=<span class="s">"90d"</span>); t.grants.check(user, <span class="s">"writer"</span>)
+t.lineage(depth=3); t.impact(); t.consumers()  <span class="c"># Catalog : amont, aval, analyse d’impact</span>
+t.history()                                    <span class="c"># audit trail : qui a publié/promu/purgé, quand, pourquoi</span>
+
+<span class="c"># ── Fin de vie : gouvernée, par étapes ───────────────────────────────────────</span>
+t.deprecate(reason=<span class="s">"remplacé par mart.orders_v2"</span>, sunset=<span class="s">"2026-12-31"</span>)
+t.archive(); t.restore()                       <span class="c"># hors du catalogue actif, données conservées</span>
+t.retention(editions=30, days=90)              <span class="c"># GC des éditions au-delà — gouverné</span>
+t.drop()                                       <span class="c"># prod ⇒ PlanRequired (plan/apply + revue) ; direct en env dev</span></pre>
+
+    <p class="code-label">Les handles typés — ce que chaque kind ajoute (écritures staged · lectures · méthodes propres)</p>
+    <pre><span class="c"># ── TABLE / VIEW / INCREMENTAL ───────────────────────────────────────────────</span>
+<span class="k">with</span> t.stage() <span class="k">as</span> st:
+    st.append(df); st.overwrite(df, where=…); st.upsert(df, keys=[<span class="s">"id"</span>])
+    st.sql(<span class="s">"INSERT INTO {this} SELECT …"</span>, engine=<span class="s">"spark"</span>)   <span class="c"># {this} = la branche staged (spark.wap.branch)</span>
+t.read(columns=[…], where=…)                   <span class="c"># Arrow · .to_pandas() · .to_duckdb("orders") · .spark_df()</span>
+mig = t.evolve().add_column(<span class="s">"vat"</span>, <span class="s">"decimal(9,2)"</span>).rename(<span class="s">"amount"</span>, <span class="s">"amount_ht"</span>)
+mig.plan()                                     <span class="c"># → SchemaPlan (expand→migrate→contract, règles R1–R14) ; apply via flows</span>
+t.compact(); t.expire_snapshots(keep=30)       <span class="c"># maintenance (flows de maintenance en prod)</span>
+v = lake.view(<span class="s">"finance.ca_mensuel"</span>); v.declare(query=<span class="s">"SELECT …"</span>); v.definition()   <span class="c"># éditions = versions de la requête</span>
+
+<span class="c"># ── FILESET — exécuteur : service Files (PEP 2) ──────────────────────────────</span>
+fs = lake.fileset(<span class="s">"corpus.contracts_raw"</span>)
+<span class="k">with</span> fs.stage() <span class="k">as</span> st:
+    st.add(<span class="s">"contrat.pdf"</span>, data, origin=<span class="s">"sftp://…"</span>, meta={<span class="s">"lang"</span>: <span class="s">"fr"</span>})
+    st.add_dir(<span class="s">"batch_07/"</span>); st.remove(hash); st.tag(hash, statut=<span class="s">"signé"</span>)   <span class="c"># dédup par content_hash, auto</span>
+<span class="k">for</span> f <span class="k">in</span> fs.files(glob=<span class="s">"*.pdf"</span>, lang=<span class="s">"fr"</span>):    <span class="c"># FileEntry : name · content_hash · size · mime · origin · meta</span>
+    f.open(); f.url(ttl=<span class="s">"15m"</span>); f.download(dest)   <span class="c"># presign service Files, APRÈS décision OpenFGA (INT-15)</span>
+fs.adopt_prefix(<span class="s">"s3://legacy/2020/"</span>, mode=<span class="s">"reference"</span>)   <span class="c"># one-shot (§10)</span>
+fs.lineage(file=hash)                          <span class="c"># lignage par content_hash — la question RGPD-document</span>
+fs.purge_file(hash, reason=<span class="s">"RGPD art. 17"</span>)     <span class="c"># tombstone (édition) + purge service + rapport d’impact aval</span>
+
+<span class="c"># ── MODEL — le registry, c’est le Catalog ─────────────────────────────────────</span>
+m = lake.model(<span class="s">"churn_scorer"</span>)
+<span class="k">with</span> m.stage() <span class="k">as</span> st:                           <span class="c"># depuis un @step train, en général</span>
+    st.log_params(lr=0.1); st.log_metrics(auc=0.87, on=<span class="s">"eval.churn_holdout#e12"</span>)
+    st.save(model, format=<span class="s">"onnx"</span>, signature=infer_signature(X, y))
+<span class="c"># publish gardé par les métriques : audits=["metric(auc) >= 0.82"] — sinon la version N’EXISTE PAS</span>
+m.versions(); m.version(12); m.compare(11, 12) <span class="c"># diff params / métriques / signature / données d’entraînement</span>
+m.promote(12, alias=<span class="s">"prod"</span>); m.rollback(alias=<span class="s">"prod"</span>)   <span class="c"># alias gouvernés — événements + grants</span>
+clf = m.load(<span class="s">"prod"</span>)                           <span class="c"># désérialisation dans le sandbox worker ; m.artifact(12).url(ttl)</span>
+lake.models.import_mlflow(<span class="s">"models:/churn/12"</span>, audits=[…]); lake.models.import_hub(<span class="s">"hf://bge-m3"</span>, revision=<span class="s">"1.2"</span>)
+
+<span class="c"># ── EMBEDDINGS — vérité Iceberg + serving par le service PROXY multi-stores ──</span>
+e = lake.embeddings(<span class="s">"contract_embeddings"</span>)
+e.declare(model=<span class="s">"bge-m3@1.2"</span>, dim=1024, metric=<span class="s">"cosine"</span>, source=<span class="s">"corpus.contracts_raw"</span>,
+          serving={<span class="s">"backend"</span>: <span class="s">"qdrant"</span>, <span class="s">"alias"</span>: <span class="s">"prod"</span>})   <span class="c"># le backend est un PLACEMENT, pas une API</span>
+<span class="k">with</span> e.stage() <span class="k">as</span> st: st.append(vectors_df)    <span class="c"># édition gouvernée (audits dim · drift) — la vérité</span>
+e.drift(e.edition(4), e.edition(5))            <span class="c"># distance distributionnelle entre éditions</span>
+e.index(e.edition(5))                          <span class="c"># le service matérialise l'édition → une collection dédiée</span>
+e.promote(e.edition(5), alias=<span class="s">"prod"</span>)          <span class="c"># bascule atomique d'alias (blue/green) ; rollback = repointer</span>
+e.serving()                                    <span class="c"># éditions indexées · backend · état des alias · santé</span>
+hits = e.query(text=<span class="s">"clause de résiliation"</span>, k=10, alias=<span class="s">"prod"</span>)
+<span class="c"># ↑ TOUTE requête passe par le service : décision OpenFGA (can_read) + credentials du store CÔTÉ SERVICE</span>
+e.endpoint()                                   <span class="c"># l'URL gouvernée (APISIX) pour les apps RAG — jamais qdrant:6333</span>
+e.capabilities()                               <span class="c"># filtres/hybride selon le backend — dénominateur commun affiché</span>
+
+<span class="c"># ── FEATURESET — point-in-time par construction ──────────────────────────────</span>
+f = lake.featureset(<span class="s">"churn_features"</span>)
+f.declare(entity=<span class="s">"customer_id"</span>, ts=<span class="s">"event_ts"</span>, features=[…], ttl=<span class="s">"90d"</span>)
+<span class="k">with</span> f.stage() <span class="k">as</span> st: st.append(features_df)   <span class="c"># audit point-in-time intégré : pas de fuite du futur</span>
+train = f.historical(entity_df, at=<span class="s">"label_ts"</span>) <span class="c"># jointure point-in-time (ASOF) — LA méthode qui compte</span>
+f.latest(keys=[…])                             <span class="c"># dernière valeur connue par entité</span>
+
+<span class="c"># ── STREAM — ancrage = table d’atterrissage ; éditions = plages d’offsets ─────</span>
+s = lake.stream(<span class="s">"orders_events"</span>)
+s.declare(topic=<span class="s">"kafka://orders"</span>, window=<span class="s">"5m"</span>, mode=<span class="s">"append"</span>)
+s.offsets(s.edition(<span class="s">"latest"</span>))                 <span class="c"># [from, to] exacts — rejouabilité</span>
+s.replay(s.edition(88))                        <span class="c"># ré-atterrit la plage → nouvelle édition marquée replay-of</span>
+s.lag(); s.pause(); s.resume(); s.table().read(…)   <span class="c"># la landing table est une TABLE normale</span>
+
+<span class="c"># ── EXPORT — uniquement les cibles NON-proxyfiables (partenaire, BI, CRM, legacy) ──</span>
+x = lake.exports.attach(dataset=<span class="s">"churn_scores"</span>, target=<span class="s">"crm://salesforce"</span>, follow=<span class="s">"prod"</span>)
+x.status()                                     <span class="c"># cible == édition ? lag ? dernier sync ? (ou pin=…)</span>
+x.sync(); x.pause(); x.resume(); x.reconcile(); x.history()
+x.detach(drain=<span class="k">True</span>)
+<span class="c"># le vectoriel n'est PAS un export : les apps interrogent le proxy Embeddings (e.endpoint())</span></pre>
+
+    <h4 class="mini">La matrice cycle de vie × kind — la preuve de complétude</h4>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table style="font-size:11.5px;">
+        <thead><tr><th>Phase</th><th>TABLE / VIEW</th><th>FILESET</th><th>MODEL</th><th>EMBEDDINGS</th><th>FEATURESET</th><th>STREAM</th><th>EXPORT</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">Déclarer</td><td class="num">declare(schema, audits) · view : query</td><td class="num">declare(audits mime/scan)</td><td class="num">declare(signature, eval set)</td><td class="num">declare(model, dim, serving backend/alias)</td><td class="num">declare(entity, ts, ttl)</td><td class="num">declare(topic, window)</td><td class="num">attach(dataset, target, follow|pin) — non-proxyfiable</td></tr>
+          <tr><td class="feat">Écrire (stage)</td><td class="num">append · overwrite · upsert · sql({this})</td><td class="num">add · add_dir · remove · tag</td><td class="num">log_params · log_metrics · save</td><td class="num">append (vecteurs)</td><td class="num">append (features)</td><td class="num">runtime seul (offsets)</td><td class="num">— (pas d’écriture : sync)</td></tr>
+          <tr><td class="feat">Garde (publish)</td><td class="num">audits SQL (WAP)</td><td class="num">unique(hash) · mime · scan</td><td class="num">metric(x) ≥ seuil</td><td class="num">dim · drift</td><td class="num">point-in-time · fraîcheur</td><td class="num">audits d’atterrissage</td><td class="num">reconcile (diff cible/édition)</td></tr>
+          <tr><td class="feat">Lire</td><td class="num">read · sql · spark_df</td><td class="num">files() · open · url(ttl)</td><td class="num">load(alias) · artifact.url</td><td class="num">query(alias) via le proxy · read (table)</td><td class="num">historical(at) · latest</td><td class="num">table().read</td><td class="num">la cible se lit chez elle</td></tr>
+          <tr><td class="feat">Versions</td><td class="num">editions · at · diff · rollback · pin</td><td class="num">idem + par fichier</td><td class="num">versions · alias · promote · rollback</td><td class="num">+ drift · alias de serving (promote/rollback)</td><td class="num">idem tables</td><td class="num">éditions = offsets · replay</td><td class="num">status · history (suit la source)</td></tr>
+          <tr><td class="feat">Évoluer</td><td class="num">evolve() → SchemaPlan (R1–R14)</td><td class="num">schéma des meta</td><td class="num">nouvelle signature ⇒ version majeure</td><td class="num">modèle/dim ⇒ recalcul</td><td class="num">add feature (expand)</td><td class="num">schéma d’atterrissage</td><td class="num">retarget</td></tr>
+          <tr><td class="feat">Accès</td><td class="num">grants — PEP 1</td><td class="num">PEP 2 (service Files)</td><td class="num">PEP 2 (poids) + PEP 1 (métriques)</td><td class="num">PEP 1 + PEP 2 (query)</td><td class="num">PEP 1</td><td class="num">PEP 1 + ACL topic (ST-1)</td><td class="num">grant d’usage sur la cible</td></tr>
+          <tr><td class="feat">Lignage</td><td class="num">lineage · impact (Catalog)</td><td class="num">+ par content_hash</td><td class="num">+ par version (données@snapshot)</td><td class="num">corpus→chunks→vecteurs</td><td class="num">features→runs d’entraînement</td><td class="num">topic→landing</td><td class="num">édition→cible</td></tr>
+          <tr><td class="feat">Maintenance</td><td class="num">compact · expire_snapshots</td><td class="num">GC refcount (service, FS-2)</td><td class="num">artefacts froids → archive</td><td class="num">réindexation · changement de backend sans changer l’app</td><td class="num">ttl des features</td><td class="num">rétention landing</td><td class="num">drain</td></tr>
+          <tr><td class="feat">Fin de vie</td><td class="num">deprecate → archive → drop (PlanRequired)</td><td class="num">+ purge_file (RGPD)</td><td class="num">delete version non-aliasée</td><td class="num">unindex + drop des collections (service) + drop table</td><td class="num">idem tables</td><td class="num">idem + libérer le topic</td><td class="num">detach(drain)</td></tr>
+        </tbody>
+      </table>
+      <div class="cap" style="margin-top:6px;">OP/TEST n’ont pas de handle : un OP produit des TABLE ; un TEST est une assertion — ses résultats vivent dans <code>AuditReport</code> et l’historique qualité.</div>
+    </div></div>
+
+    <p class="code-label">Autour des datasets — sources EL, environnements, flows/runs, runtime ctx</p>
+    <pre><span class="c"># ── Sources EL : la source est un objet avec son propre cycle de vie (§9) ────</span>
+src = lake.sources.get(<span class="s">"crm"</span>)
+src.test(); src.discover()                     <span class="c"># connexion ; streams + schémas</span>
+src.run(streams=[<span class="s">"orders"</span>]); src.backfill(<span class="s">"crm.orders"</span>, from_=<span class="s">"2025-01-01"</span>, to=<span class="s">"2025-06-30"</span>)
+src.state(); src.reset_cursor(<span class="s">"crm.orders"</span>, to=…)   <span class="c"># curseurs par (stream, env)</span>
+src.pause(); src.resume()
+src.eject()                                    <span class="c"># no-code → code : écrit le déclaratif Python dans le repo</span>
+
+<span class="c"># ── Environnements = branches zéro-copie ─────────────────────────────────────</span>
+lake.envs.create(<span class="s">"dev-jh"</span>, from_=<span class="s">"prod"</span>); lake.envs.list()
+<span class="k">with</span> lake.use(<span class="s">"dev-jh"</span>):                       <span class="c"># tous les handles résolvent dans l’env</span>
+    …
+lake.envs.diff(<span class="s">"dev-jh"</span>, <span class="s">"prod"</span>)               <span class="c"># quoi promouvoir (datasets, schémas, éditions)</span>
+lake.envs.promote(<span class="s">"dev-jh"</span>, to=<span class="s">"prod"</span>)         <span class="c"># gated : plan/apply + fast-forward des branches</span>
+lake.envs.drop(<span class="s">"dev-jh"</span>)
+
+<span class="c"># ── Flows &amp; runs : déclencher et observer (l’authoring reste le repo Git) ────</span>
+fl = lake.flows.get(<span class="s">"contract-360"</span>)
+plan = fl.plan(); plan.changes; plan.breaking  <span class="c"># fingerprints ; rien ne s’exécute</span>
+run = fl.run(select=<span class="s">"score+"</span>, env=<span class="s">"dev-jh"</span>)
+run.status(); run.wait(); run.logs(node=<span class="s">"score"</span>); run.cancel()
+run.provenance(); run.lineage()                <span class="c"># lu/écrit, édition par édition — la preuve du run</span>
+
+<span class="c"># ── Dans un @step : ctx — le runtime tient le WAP, la provenance est gratuite ─</span>
+<span class="n">@step</span>(inputs=[<span class="s">"crm.orders"</span>], outputs=[<span class="s">"mart.orders_scored"</span>],
+      audits=[<span class="s">"not_null(order_id)"</span>, <span class="s">"row_count_delta() &lt; 0.2"</span>])
+<span class="k">def</span> <span class="f">score</span>(ctx):
+    orders = ctx.inputs[<span class="s">"crm.orders"</span>].read()  <span class="c"># PinnedDataset : édition épinglée → provenance auto</span>
+    ctx.write(scored)                          <span class="c"># écrit dans l’édition staged OUVERTE PAR LE RUNNER</span>
+    ctx.metrics.log(rows=len(scored))          <span class="c"># facettes OpenLineage du run</span>
+<span class="c"># sorties typées : ctx.write (table) · ctx.emit_file (fileset) · ctx.save_model (model) — même staged edition dessous</span>
+<span class="c"># jamais de publish manuel dans un step : la frontière WAP appartient au runtime</span></pre>
+
+    <div class="note warn"><b>L’uniformité honnête — ce que le contrat ne promet PAS :</b> ① <b>EXPORT</b> n’a ni <code>stage()</code> ni éditions propres — c’est une relation de sortie ; son « rollback » = resynchroniser une édition antérieure de la source ; ② <b>STREAM</b> : l’atterrissage est écrit par le runtime seul (pas de <code>stage()</code> manuel en prod) — le SDK expose offsets/replay/pause ; ③ <b>VIEW</b> ne matérialise rien : ses éditions versionnent la requête ; ④ <code>model.load()</code> exécute du code — désérialisation dans le sandbox worker (décision D3), formats sûrs (ONNX) préférés aux pickles ; ⑤ contraction de schéma et purges restent des opérations de plan (R-SDK-5) — le SDK les refuse en direct sur prod ; ⑥ le <b>proxy Embeddings</b> ajoute un saut réseau à chaque requête vectorielle — assumé contre la prolifération de credentials ; pooling et colocalisation à instrumenter (EM-2). <b>Tickets :</b> SDK-1 (contrat de base <code>DatasetHandle</code> + <code>StagedEdition</code> Iceberg), SDK-2 (handles service-mediated Files/Embeddings — avec FS-1, EM-1), SDK-3 (registry MODEL : versions/alias/promote — avec ML-1), SDK-4 (<code>purge_file</code> RGPD bout-en-bout : tombstone + purge service + rapport aval — avec FS-2), SDK-5 (<code>historical()</code> point-in-time ASOF — avec FT-1), SDK-6 (câblage <code>PlanRequired</code> sur plan/apply), EM-3 (adoption d’une collection legacy dans le proxy : <code>serving.adopt</code>).</div>
+  </section>
+
+  <div class="pdiv"><span class="tagp">Partie III</span><span class="t">La donnée entre & sort</span><span class="ln"></span></div>
+
+  <section id="el">
+    <h2><span class="num">9</span> EL — les sources de données comme nœuds de flow <span class="tg emp">code &amp; no-code</span></h2>
+    <p class="section-sub">Le « E+L » de l'ELT : récurrent, incrémental, rejouable — déclaré en code (source()/@source) ou généré par l'assistant no-code (écrans S8/S9), un seul objet compilé.</p>
+
+    <div class="diagram">
+      <div class="layer l-acc"><b>source("crm") — connecteur + secret (référence, résolue par le worker)</b><small>discover() → streams découverts : public.customers · public.orders · public.dim_pays · public.audit_log (non coché)</small></div>
+      <div class="arrow lbl">▼ un stream sélectionné = un dataset d'atterrissage · un run de sync = une édition (origin.cursor estampillé)</div>
+      <div class="layer-row">
+        <div class="layer"><b>🏞️ crm.customers</b><small>merge (clés customer_id) · curseur updated_at</small></div>
+        <div class="layer"><b>🏞️ crm.orders</b><small>append · curseur created_at · audits WAP</small></div>
+        <div class="layer"><b>🏞️ crm.dim_pays</b><small>full_refresh (overwrite)</small></div>
+      </div>
+      <div class="cap">L'état (curseurs) vit dans le Postgres de Flows par (source, stream, env) · backfill = rejouer une plage de curseur → éditions dédiées · le même objet est édité en code (repo) ou en no-code (S8/S9) — un seul manifeste compilé.</div>
+    </div>
+    <div class="card">
+      <p>Le vrai sujet n'est pas « importer un existant » : c'est l'<b>Extract-Load récurrent</b> — brancher des systèmes sources (bases, API, SFTP, topics) et les faire atterrir en datasets gouvernés de façon <b>répétée, incrémentale et rejouable</b>. Hemera n'a <b>pas de service d'ingestion séparé</b> : une source est un <b>nœud SOURCE d'un flow</b> — même manifeste, même plan/apply, mêmes workers (tag <code>el</code>), même garde WAP, même lignage. L'anatomie : une <b>source</b> = un connecteur + un secret (référence, résolue par le worker) + des <b>streams</b> découverts (<code>discover()</code> : tables, endpoints, dossiers) ; <b>chaque stream sélectionné produit un dataset d'atterrissage</b>, et chaque run de sync produit une <b>édition</b> estampillée <code>origin.system/uri/cursor/fetched_at</code>.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Mode de sync (par stream)</th><th>Opération Iceberg à l'atterrissage</th><th>État persistant</th><th>Rejouabilité</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">full_refresh</td><td><code>overwrite</code> (branche WAP → publish)</td><td class="num">aucun</td><td class="num">re-run = nouvelle édition complète</td></tr>
+          <tr><td class="feat">append (incrémental)</td><td><code>append</code></td><td class="num">curseur (colonne/date) par (source, stream, env) — Postgres de Flows</td><td class="num">backfill par plage de curseur → éditions séparées</td></tr>
+          <tr><td class="feat">merge (incrémental + clés)</td><td><code>upsert</code> (clés déclarées)</td><td class="num">curseur idem</td><td class="num">idempotent : rejouer une plage ne duplique pas</td></tr>
+          <tr><td class="feat">cdc (log-based)</td><td><code>MERGE</code> inserts/updates/<b>deletes</b></td><td class="num">position de log (LSN/offsets)</td><td class="num">édition = plage de LSN — replay exact</td></tr>
+        </tbody>
+      </table></div>
+      <p style="margin-top:8px;">Quatre étages de connecteurs, un seul contrat : <b>① catalogue natif</b> (PG, MySQL, MSSQL, Oracle, BigQuery, Snowflake, S3/SFTP, Google Sheets, REST paginé, Jira, HubSpot…) — chaque connecteur publie une <b>spec</b> (config en JSON Schema + <code>discover()</code>), c'est elle qui génère les formulaires du no-code ; <b>② dlt embarqué</b> (Apache 2.0, verified sources) — dlt fait le E, le lake fait le L (WAP), wrappé en <code>@source</code> ; <b>③ OLake wrappé</b> (Apache 2.0, Go) pour la <b>haute volumétrie DB : full chunké + CDC log-based</b> — piloté par le même manifeste, étudié et validé au banc dans le <a href="06-annexe-el-cdc-olake.html">document ⑥</a> ; <b>④ Python libre</b> (<code>@source</code>) pour tout le reste. Dans les trois cas le runtime fait le Load : <b>vous ne touchez jamais l'écriture Iceberg</b>, vous yieldez des enregistrements.</p>
+    </div>
+    <p class="code-label">Le code — déclarer des sources EL dans un flow (déclaratif multi-streams · extraction custom · CDC · dérive de schéma · backfill)</p>
+    <pre><span class="c"># ── Source déclarative multi-streams — EXACTEMENT ce que l'assistant no-code génère ──</span>
+crm = <span class="f">source</span>(<span class="s">"crm"</span>, connector=<span class="s">"postgresql"</span>, secret=<span class="s">"CRM_DB"</span>, refresh=<span class="s">"@hourly"</span>)
+crm.<span class="f">stream</span>(<span class="s">"public.customers"</span>, output=<span class="s">"crm.customers"</span>, mode=<span class="s">"merge"</span>, keys=[<span class="s">"customer_id"</span>], cursor=<span class="s">"updated_at"</span>)
+crm.<span class="f">stream</span>(<span class="s">"public.orders"</span>,    output=<span class="s">"crm.orders"</span>,    mode=<span class="s">"append"</span>, cursor=<span class="s">"created_at"</span>,
+           audits=[<span class="s">"not_null(order_id)"</span>, <span class="s">"unique(order_id)"</span>])          <span class="c"># garde WAP de l'atterrissage</span>
+crm.<span class="f">stream</span>(<span class="s">"public.dim_pays"</span>,  output=<span class="s">"crm.dim_pays"</span>,  mode=<span class="s">"full_refresh"</span>)   <span class="c"># petite table de réf</span>
+crm.<span class="f">on_schema_drift</span>(additive=<span class="s">"apply"</span>, breaking=<span class="s">"quarantine"</span>)   <span class="c"># colonne nouvelle → évolution additive auto (règles R) ; type changé → run bloqué + alerte</span>
+<span class="c"># crm.discover() → streams + schémas : c'est ce que l'étape 3 de l'assistant S9 affiche</span>
+
+<span class="c"># ── Extraction custom — @source : vous faites le E, le runtime fait le L (WAP) ──</span>
+<span class="n">@source</span>(output=<span class="s">"ops.tickets"</span>, refresh=<span class="s">"@daily"</span>, mode=<span class="s">"merge"</span>, keys=[<span class="s">"id"</span>])
+<span class="k">def</span> <span class="f">tickets</span>(ctx):
+    cur = ctx.<span class="f">cursor</span>(<span class="s">"updated_at"</span>)                        <span class="c"># persistant par (source, stream, env)</span>
+    <span class="k">for</span> page <span class="k">in</span> ctx.<span class="f">http</span>(secret=<span class="s">"HELPDESK"</span>).<span class="f">paginate</span>(<span class="s">"/api/tickets"</span>, since=cur):
+        <span class="k">yield</span> page.records                               <span class="c"># micro-batches Arrow · provenance auto (system+cursor)</span>
+
+<span class="c"># ── FILESET ← SFTP : même primitive, sortie fichiers ──────────────────────────</span>
+<span class="n">@source</span>(output=<span class="f">Fileset</span>(<span class="s">"corpus.contracts_raw"</span>), refresh=<span class="s">"sensor"</span>,
+        audits=[<span class="s">"mime_in(application/pdf)"</span>, <span class="s">"unique(content_hash)"</span>, <span class="s">"scan_hook(clamav)"</span>])
+<span class="k">def</span> <span class="f">contracts_sftp</span>(ctx):
+    <span class="k">for</span> remote <span class="k">in</span> ctx.<span class="f">connector</span>(<span class="s">"sftp"</span>, secret=<span class="s">"LEGAL_SFTP"</span>).<span class="f">new_files</span>(<span class="s">"/outbox/*.pdf"</span>):
+        <span class="k">yield</span> ctx.<span class="f">emit_file</span>(remote.name, remote.<span class="f">read</span>(), origin=remote.uri)   <span class="c"># provenance par fichier</span>
+
+<span class="c"># ── CDC & STREAM : positions de log comme curseur, deletes propagés ───────────</span>
+cdc = <span class="f">source</span>(<span class="s">"erp_cdc"</span>, connector=<span class="s">"debezium"</span>, secret=<span class="s">"ERP_DB"</span>)
+cdc.<span class="f">stream</span>(<span class="s">"erp.public.commandes"</span>, output=<span class="s">"erp.commandes"</span>, mode=<span class="s">"cdc"</span>)   <span class="c"># édition = plage de LSN</span>
+
+<span class="n">@source</span>(output=<span class="s">"cleyrop.orders_landed"</span>, stream=<span class="s">"kafka://orders_events"</span>, window=<span class="s">"5m"</span>, mode=<span class="s">"append"</span>)
+<span class="k">def</span> <span class="f">orders_stream</span>(ctx):
+    <span class="k">return</span> ctx.stream.<span class="f">poll</span>().<span class="f">to_arrow</span>()                    <span class="c"># édition estampillée [offset_from, offset_to]</span>
+
+<span class="c"># ── CLI : les sources sont des nœuds comme les autres ─────────────────────────</span>
+<span class="c">#   flows plan &amp;&amp; flows apply            # la source entre dans le DAG</span>
+<span class="c">#   flows run --select source:crm        # sync manuelle (tous streams)</span>
+<span class="c">#   flows backfill crm.orders --from 2025-01-01 --to 2025-06-30   # plage de curseur → éditions dédiées</span>
+<span class="c">#   flows sources ls · flows sources test crm   # test de connexion (exécuté par un worker el, jamais en local)</span></pre>
+    <div class="card">
+      <p><b>Le no-code n'est pas un autre produit : c'est un générateur de flow.</b> L'assistant S9 (connecteur → connexion testée → streams &amp; modes → qualité &amp; publication) compile <b>exactement le manifeste ci-dessus</b> : les formulaires de l'étape 2 sont générés depuis la spec JSON Schema du connecteur, l'étape 3 est un <code>discover()</code> rendu en tableau (cases à cocher par stream, mode de sync et curseur par ligne), l'étape 4 pose les audits WAP. Conséquences vérifiables : ① la source no-code <b>apparaît comme nœud SOURCE</b> dans le canvas S11 et le lignage S17 ; ② ses runs sont des runs ordinaires (S15/S16, worker tag <code>el</code>) ; ③ elle est <b>éjectable vers le code</b> — <code>flows pull</code> écrit l'équivalent Python (le déclaratif <code>source()/stream()</code> ci-dessus) dans le repo, et la source passe en « gérée par le code » ; ④ inversement une source code-first est <b>visible en lecture dans S8</b> (badge « code ») avec les mêmes boutons run/backfill. Un seul objet, deux éditeurs.</p>
+    </div>
+
+    <div class="note tip"><b>Approfondissement — CDC des bases &amp; streams (document ⑥) :</b> l'étude du moteur OLake (code cité + banc S7 exécuté : backfill CTID chunké, CDC pgoutput en <b>runs bornés</b>, recovery ancré destination) et le design EL v2 qui en découle — éditions = plages LSN/offsets, <b>exactly-once par l'édition</b> (la source n'est acquittée qu'après publication de l'édition qui la couvre), Kafka publish-then-commit, dérive DDL sous policy, tickets EL-1…EL-8.</div>
+  </section>
+
+  <section id="import">
+    <h2><span class="num">10</span> Faire entrer un existant — le one-shot : adoption, modèles, bootstrap</h2>
+    <p class="section-sub">Distinct de l'EL récurrent : le geste unique — adopter une table Iceberg déjà là, importer un modèle, amorcer un store vectoriel — avec une provenance d'origine honnête.</p>
+    <div class="card">
+      <p>À côté de l'EL récurrent (§9), il reste le geste <b>one-shot</b> : adopter une table Iceberg déjà là, importer un modèle depuis MLflow, amorcer un store vectoriel. Trois principes valent pour tous les kinds : <b>(1)</b> tout import atterrit comme une <b>édition</b> portant sa <b>provenance d'origine</b> (<code>origin.system/uri/cursor/fetched_at</code>) — le lignage ne commence pas « à la première transformation », il commence <b>au système source</b> ; <b>(2)</b> deux modes partout : <b>copie gouvernée</b> (défaut — les octets entrent dans le lakehouse/service) vs <b>adoption sans copie</b> (référencer l'existant — plus rapide, mais dépendance au système source, marquée) ; <b>(3)</b> la provenance <b>externe partielle est un statut honnête</b> : un modèle HuggingFace importé n'a pas de lignage d'entraînement interne — la fiche l'affiche (<span class="tg wr">provenance externe</span>) au lieu de le simuler.</p>
+      <div class="tablewrap"><table>
+        <thead><tr><th>Kind</th><th>Sources d'import</th><th>Provenance/lignage estampillés à l'atterrissage</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">TABLE</td><td>JDBC (PG/Oracle/MSSQL/BigQuery/Snowflake) · CDC (Debezium) · fichiers CSV/Parquet · API paginée · <b>table Iceberg existante</b> (adoption <code>register_table</code> / <code>add_files</code> + name-mapping — annexe schéma §10) · dlt code-first</td><td class="num">origin.system+query/cursor · plage CDC (lsn/offsets) · pour l'adoption : uri du metadata.json d'origine</td></tr>
+          <tr><td class="feat">FILESET</td><td>SFTP · S3/MinIO sync · <b>upload</b> (UI S27 / API files) · SharePoint/Drive · <b>bucket existant adopté</b> (manifeste sans copie : hash calculés, blobs laissés en place)</td><td class="num">origin.uri par fichier + content_hash + fetched_at · mode copy|adopt par fichier</td></tr>
+          <tr><td class="feat">STREAM</td><td>topic Kafka existant · Debezium (CDC→topic) · webhooks/MQTT (→ topic tampon)</td><td class="num">topic + <b>plage d'offsets par édition d'atterrissage</b> (rejouabilité exacte)</td></tr>
+          <tr><td class="feat">FEATURESET</td><td>tables internes (le cas normal) · <b>feature store existant</b> (Feast : import des définitions + matérialisation)</td><td class="num">tables sources@snapshot · pour Feast : feature_view d'origine + version du repo Feast</td></tr>
+          <tr><td class="feat">MODEL</td><td><b>registry MLflow</b> (version importée : poids + params + métriques) · HuggingFace hub · upload d'artefact (ONNX/pickle signé)</td><td class="num">origin.registry+run_id (MLflow) ou hub+révision (HF) · <span class="tg wr">provenance externe</span> si données d'entraînement inconnues · hash+signature des poids</td></tr>
+          <tr><td class="feat">EMBEDDINGS</td><td><b>recommandé : recalculer</b> depuis le corpus (la vérité se fabrique) · bootstrap : dump d'un store existant (pgvector/Qdrant) importé comme édition 0 <span class="tg wr">provenance externe</span></td><td class="num">recalcul : corpus@édition + modèle (code) · bootstrap : store+collection d'origine, drift vs recalcul mesuré avant bascule</td></tr>
+          <tr><td class="feat">EXPORT</td><td>pas d'« import » (relation de sortie) — on <b>déclare</b> des cibles existantes non-proxyfiables et on les aligne : première sync = réconciliation (diff cible vs édition) ; cibles vectorielles : pas d'EXPORT — une collection legacy s'<b>adopte dans le proxy</b> (<code>serving.adopt</code>), le temps de basculer sur le recalcul</td><td class="num">cible+état initial constaté · édition d'alignement</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+    <p class="code-label">Le code — les gestes one-shot par kind (API lake · le récurrent, lui, passe par les sources EL du §9)</p>
+    <pre><span class="c"># ── TABLE ← adoption d'une table Iceberg EXISTANTE (sans copie) ───────────────</span>
+lake.catalog.<span class="f">register_table</span>(<span class="s">"legacy.ventes"</span>, metadata_uri=<span class="s">"s3://old-lake/ventes/metadata/v42.json"</span>)
+lake.<span class="f">adopt</span>(<span class="s">"legacy.ventes"</span>, owner=<span class="s">"finance-data"</span>)      <span class="c"># → Catalog : édition 0 = snapshot courant, origin.uri estampillé</span>
+
+<span class="c"># ── FILESET ← bucket existant adopté (le SFTP récurrent = source EL, §9) ──</span>
+lake.<span class="f">fileset</span>(<span class="s">"corpus.archives"</span>).<span class="f">adopt_prefix</span>(<span class="s">"s3://legacy-docs/2020/"</span>, mode=<span class="s">"reference"</span>)  <span class="c"># hash calculés, blobs en place</span>
+
+<span class="c"># ── FEATURESET ← Feast existant (définitions importées, matérialisation ici) ──</span>
+lake.<span class="f">featureset</span>(<span class="s">"churn_features"</span>).<span class="f">import_feast</span>(repo=<span class="s">"git@…:feast-repo"</span>, feature_view=<span class="s">"churn_fv"</span>)
+<span class="c"># → génère le @step de matérialisation + provenance : feature_view + commit du repo Feast</span>
+
+<span class="c"># ── MODEL ← MLflow / HuggingFace (provenance externe, honnête) ────────────────</span>
+lake.models.<span class="f">import_mlflow</span>(uri=<span class="s">"models:/churn/12"</span>, name=<span class="s">"churn_scorer"</span>,
+                          audits=[<span class="s">"metric(auc) >= 0.82"</span>])          <span class="c"># métriques MLflow ré-évaluées AVANT publication</span>
+lake.models.<span class="f">import_hub</span>(<span class="s">"hf://bge-m3"</span>, revision=<span class="s">"1.2"</span>, name=<span class="s">"bge-m3"</span>) <span class="c"># poids hashés+signés · fiche : « provenance externe »</span>
+
+<span class="c"># ── EMBEDDINGS ← bootstrap d'un store existant, puis bascule vers le recalcul ──</span>
+lake.<span class="f">embeddings</span>(<span class="s">"contract_embeddings"</span>).<span class="f">bootstrap_from</span>(<span class="s">"pgvector://legacy/contracts"</span>)   <span class="c"># édition 0, externe</span>
+<span class="c"># … le @step embed (flow de référence) produit l'édition 1 ; drift(éd.0, éd.1) mesuré avant de servir</span>
+
+<span class="c"># ── EXPORT ← déclarer une cible existante NON-proxyfiable et l'aligner ────────</span>
+lake.<span class="f">exports</span>.<span class="f">attach</span>(dataset=<span class="s">"churn_scores"</span>, target=<span class="s">"crm://salesforce"</span>)
+<span class="c"># vectoriel : adopter la collection legacy DANS le proxy, puis basculer sur le recalcul gouverné</span>
+lake.<span class="f">embeddings</span>(<span class="s">"contract_embeddings"</span>).serving.<span class="f">adopt</span>(<span class="s">"qdrant://legacy/contracts"</span>, alias=<span class="s">"prod"</span>)
+<span class="c"># première sync = réconciliation (diff constaté journalisé) puis « cible = édition » comme fait affiché</span></pre>
+    <div class="note warn"><b>Les pièges d'import, par expérience :</b> ① l'<b>adoption sans copie</b> (tables : <code>register_table</code>/<code>add_files</code> avec name-mapping obligatoire — annexe schéma §10 ; filesets : blobs en place) crée une dépendance au système source : la fiche l'affiche et la purge d'origine casse l'édition — réserver aux gros volumes migrés une fois ; ② un <b>modèle importé</b> voit ses métriques <b>ré-évaluées ici</b> (sur nos eval sets) avant publication — on n'hérite jamais d'un « auc = 0,9 » sur parole ; ③ le <b>bootstrap d'embeddings</b> est une béquille de transition : la cible finale est toujours le recalcul gouverné (modèle en code + corpus en édition), sinon le lignage RAG reste aveugle ; ④ chaque connecteur d'import est un <b>@source ordinaire</b> — mêmes audits WAP, même file de workers (tag <code>el</code>), mêmes runs S15/S16 : l'import n'est pas un chemin spécial, c'est un flow.</div>
+
+  </section>
+
+
+  <div class="pdiv"><span class="tagp">Partie IV</span><span class="t">Vos projets tels quels — dbt, SQLMesh, MLflow</span><span class="ln"></span></div>
+
+  <section id="wrap-sqlmesh">
+    <h2><span class="num">11</span> Wrap SQLMesh — le projet intact, les garanties à la frontière</h2>
+    <p class="section-sub">Le client garde son plan/apply, ses environnements virtuels, ses macros — Flows encapsule la région.</p>
+    <div class="diagram">
+      <div class="layer-row">
+        <div class="layer l-teal"><b>Entrées (tables Iceberg gouvernées)</b><small>épinglées par snapshot au démarrage de la région</small></div>
+        <div class="layer l-grn" style="flex:1.6;"><b>Région SQLMesh — nœud composite du DAG Flows</b><small>projet intact : <code>config.yaml</code>, son <b>state DB dédié</b> (schéma Postgres par flow), ses envs virtuels, <code>sqlmesh run</code> piloté par un worker (tag <code>sql</code>) — gateway pointé sur <b>nos</b> moteurs (Spark Connect / DuckDB), identité OIDC du run</small></div>
+        <div class="layer l-teal"><b>Sorties déclarées</b><small>auditées + publiées par Flows (frontière WAP)</small></div>
+      </div>
+      <div class="cap"><b>La frontière WAP :</b> la session Spark de la région est configurée avec <code>spark.wap.branch = wap_&lt;run&gt;</code> — <b>toutes</b> les écritures Iceberg de la région partent sur la branche de staging sans que SQLMesh le sache ; à la fin de la région, Flows audite chaque sortie déclarée puis fast-forward (publish à contrôle d'ascendance, revue d'intégration §4). Les tables <i>internes</i> de SQLMesh (intermédiaires hash-nommées) restent dans un namespace dédié <code>_sqlmesh_&lt;flow&gt;</code>, hors catalogue métier. <span class="tg wr">à valider : INT-11 — spark.wap.branch couvre bien les écritures SQLMesh via session partagée</span></div>
+    </div>
+    <div class="note"><b>Honnêteté du mode :</b> à l'intérieur de la région, ce sont les garanties <i>de SQLMesh</i> (ses audits, son plan) ; celles d'Hemera (WAP, provenance, lignage colonne unifié) s'appliquent aux <b>sorties déclarées</b>. Le lignage <i>interne</i> de la région est importé en best-effort depuis le DAG SQLMesh (il l'expose), marqué « région » dans le Catalog.</div>
+  </section>
+
+  <section id="wrap-dbt">
+    <h2><span class="num">12</span> Wrap dbt — deux implémentations, au choix par flow <span class="tg emp">S3 · S4 validées</span></h2>
+    <p class="section-sub">Le même projet dbt de test a été exécuté ici par les deux voies — chacune a son public.</p>
+    <div class="grid2">
+      <div class="benefit tone-good"><div class="ic">🎯</div><b>6a · dbt-core natif — fidélité maximale <span class="tg ok">S3 validée</span></b><p>Un vrai <code>dbt build</code> a tourné ici (dbt-core 1.11 + dbt-duckdb) : seed + view + incremental merge + tests, données écrites, et surtout les <b>artefacts</b> : <code>manifest.json</code> porte le DAG complet (nodes, depends_on, materializations, tests, colonnes) et <code>run_results.json</code> les statuts par nœud — <b>l'ingestion Catalog/lignage est directe</b>. Pour qui : le client dont le projet dbt tourne déjà (packages, macros custom, dbt_utils…) — <i>son</i> dbt, à l'identique.</p></div>
+      <div class="benefit tone-info"><div class="ic">🔄</div><b>6b · Adaptateur dbt de SQLMesh <span class="tg ok">S4 validée</span></b><p>Le même projet chargé par SQLMesh sans réécriture : <code>materialized='incremental'+unique_key</code> traduit en <code>INCREMENTAL_BY_UNIQUE_KEY</code>, Jinja rendu en SQL pur, <b>tests dbt convertis en audits</b> automatiquement. Pour qui : l'équipe dbt qui <i>veut</i> gagner les environnements virtuels et le plan de SQLMesh. <b>Nuance vérifiée (S4e)</b> : la sémantique est <i>réinterprétée</i>, pas répliquée — le bloc <code>is_incremental()</code> est rendu selon la stratégie SQLMesh, pas celle de dbt. Fidélité élevée, pas bit-à-bit.</p></div>
+    </div>
+    <h4 class="mini">Le point dur du 6a : la cible d'exécution</h4>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Adapter dbt</th><th>État</th><th>Verdict Hemera</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">dbt-duckdb</td><td class="yes">✅ exécuté ici (S3)</td><td class="yes">la voie <b>dev/CI</b> du wrap dbt — et suffisant pour les petits projets</td></tr>
+          <tr><td class="feat">dbt-spark</td><td class="yes">✅ <b>méthode <code>session</code> VALIDÉE sur Spark Connect ici</b> (S6) : <code>dbt build</code> complet (modèle + tests PASS) avec <code>SPARK_REMOTE</code> — la session pyspark était un client Connect</td><td class="yes">la voie <b>à l'échelle</b> du wrap dbt : le worker exécute dbt-spark en client du serveur Connect mutualisé — pas de Thrift Server à opérer (repli si besoin). Détails &amp; réserves §7</td></tr>
+          <tr><td class="feat">dbt-trino</td><td class="mid">mûr, mais hérite de <b>D2</b> (identité à travers Trino)</td><td class="mid">viable pour équipes analytics une fois D2 tranchée</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <div class="note tip"><b>Frontière WAP du wrap dbt — même mécanique que §11 :</b> cible Spark ⇒ <code>spark.wap.branch</code> sur la session ; cible DuckDB ⇒ le projet écrit dans un schéma de staging et Flows re-matérialise les sorties déclarées via <code>lake</code> (copie gouvernée — le coût d'une écriture non-Iceberg-native). Les <b>tests dbt</b> (post-hoc par nature) sont exécutés par dbt <i>dans</i> la région, puis leurs résultats (<code>run_results.json</code>) deviennent des faits qualité du Catalog ; les sorties déclarées passent <b>en plus</b> la garde WAP de la frontière (les audits déclarés côté Flows).</div>
+  </section>
+
+  <section id="inflow">
+    <h2><span class="num">13</span> dbt <i>dans</i> le flow · Spark Connect · Fusion <span class="tg emp">S5 · S6 exécutées</span></h2>
+    <p class="section-sub">La précision qui compte : S3 était un « dbt build » nu. S5 est le harnais complet — dbt exécuté comme région gouvernée d'un flow. Et S6 règle la question de la cible à l'échelle.</p>
+
+    <h4 class="mini">S5 — le harnais WK-8 démontré de bout en bout (l'implémentation de référence)</h4>
+    <div class="diagram">
+      <div class="layer-row">
+        <div class="layer l-teal"><b>① Entrée gouvernée</b><small><code>cleyrop.raw_orders</code> — table <b>Iceberg</b> (sortie de connecteur), <b>épinglée par snapshot</b> au démarrage de la région : <code>scan(snapshot_id=…)</code></small></div>
+        <div class="layer l-grn" style="flex:1.5;"><b>② La région dbt (worker)</b><small>entrées matérialisées dans le staging duckdb comme <b>sources dbt</b> (<code>source('cleyrop','raw_orders')</code>) · dbt invoqué par l'<b>API programmatique</b> <code>dbtRunner().invoke(["build"])</code> — pas de CLI, statuts structurés · <code>manifest.json</code> + <code>run_results.json</code> collectés</small></div>
+        <div class="layer l-teal"><b>③ Frontière WAP</b><small>sortie déclarée <code>fct_sales</code> relue du staging → <code>write(branch=wap, snapshot_properties=provenance)</code> → <b>audit frontière</b> → publish</small></div>
+      </div>
+      <div class="cap"><b>Résultat vérifié :</b> la table Iceberg publiée porte dans son snapshot <code>cleyrop.node_id = region:retail_dbt</code>, <code>cleyrop.engine = dbt-core-1.11/duckdb</code>, <code>cleyrop.inputs = raw_orders@&lt;snapshot épinglé&gt;</code> <b>et le résumé des tests dbt</b> (<code>cleyrop.region.tests = {"stg_orders": "success", "not_null…": "pass", …}</code>). Les 5 nœuds du manifeste dbt sont ingérés comme lignage interne de la région. Autrement dit : <b>un client Iceberg quelconque peut prouver qu'une table donnée sort d'une région dbt précise, avec quelles entrées, et quels tests verts</b> — les garanties Hemera (épinglage, WAP, provenance, qualité) enveloppent dbt sans le modifier.</div>
+    </div>
+
+    <h4 class="mini">S6 — dbt-spark × Spark Connect : validé, avec la nuance exacte</h4>
+    <div class="card">
+      <p><b>Le test :</b> un projet dbt (modèle table + 2 tests) exécuté par <code>dbt-spark</code> en méthode <b><code>session</code></b>, avec <code>SPARK_REMOTE</code> pointant sur une session Spark <b>Connect</b> (le même mécanisme que nos workers). <b>Résultat : <code>dbt build</code> complet, 3/3 PASS.</b> La preuve que la session était bien Connect est dans l'unique accroc rencontré : dbt-spark tente de poser <code>spark.sql.catalogImplementation=hive</code>, une <b>config statique</b> que Connect refuse (warning <code>CANNOT_MODIFY_STATIC_CONFIG</code> émis par <code>pyspark/sql/connect/conf.py</code>) — et il continue proprement. Sur le serveur mutualisé Hemera c'est un <i>non-problème par construction</i> : le catalogue (Iceberg REST → Lakekeeper) est une config <b>serveur</b>, exactement là où on la veut.</p>
+    </div>
+    <div class="note warn"><b>Réserves S6 (tickets INT) :</b> le transport est validé, il reste à valider sur le vrai serveur : ① les <b>matérialisations Iceberg</b> de dbt-spark (<code>file_format: iceberg</code>, stratégie <code>merge</code> incrémentale) contre le catalogue Lakekeeper — c'est INT-13 ; ② l'interaction avec <code>spark.wap.branch</code> posé sur la session de la région (INT-11 — si un CTAS dbt crée la table, la branche de staging doit exister ou la création passe par la frontière) ; ③ l'isolation des sessions Connect entre régions concurrentes (déjà INT-2). En repli documenté : Thrift Server adossé au même serveur, ou frontière duckdb→lake (S5) qui fonctionne dès aujourd'hui.</div>
+
+    <h4 class="mini">dbt Fusion &amp; dbt Core v2 — l'état réel (avril 2026) et la position Hemera</h4>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Fait</th><th>État</th><th>Implication Hemera</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">Moteur Fusion (Rust, analyse SQL statique)</td><td class="mid">GA <b>uniquement</b> pour la plateforme dbt sur Snowflake ; <b>preview</b> ailleurs</td><td>pas une dépendance possible aujourd'hui pour un lakehouse souverain</td></tr>
+          <tr><td class="feat">Adapters Spark &amp; DuckDB</td><td class="mid">disponibles <b>en test local</b>, plateforme « plus tard »</td><td>à suivre — c'est notre couple de moteurs exact</td></tr>
+          <tr><td class="feat">Licence</td><td class="yes">Fusion motorise <b>dbt Core v2</b>, publié <b>Apache 2.0</b> dans dbt-core ; les features premium restent propriétaires (clé de licence)</td><td class="yes">la crainte de lock-in licence est levée pour le socle : le 6a pourra migrer vers Core v2</td></tr>
+          <tr><td class="feat"><b>Iceberg</b></td><td class="no"><b>matérialisations Iceberg non supportées</b> — un <code>dbt build</code> qui en contient <b>échoue</b> ; ré-implémentation du catalogue Iceberg en cours chez dbt Labs</td><td class="no"><b>bloquant</b> : Fusion est inutilisable sur notre lakehouse tant que ce n'est pas levé</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <div class="note tip"><b>Position :</b> le wrap dbt (6a) reste sur <b>dbt-core 1.x</b> (prouvé S3/S5/S6) ; la migration vers <b>dbt Core v2</b> (moteur Fusion, Apache 2.0) se fera quand ses matérialisations Iceberg existeront et que les adapters Spark/DuckDB sortiront de preview — le harnais S5 est agnostique du moteur dbt (il invoque, épingle, enveloppe : les artefacts <code>manifest/run_results</code> sont stables). Gains attendus à terme : parsing ~10× plus rapide et <b>lignage colonne natif</b> dans les artefacts — qui enrichirait la région au niveau du natif. Réévaluation trimestrielle (INT-12).</div>
+  </section>
+
+  <section id="mlflow">
+    <h2><span class="num">14</span> Et MLflow ? — la même grille de lecture que dbt/SQLMesh</h2>
+    <p class="section-sub">Le registry de modèles suit le même raisonnement que le T SQL : natif par défaut (le Catalog est le registry), wrap pour les équipes MLflow existantes.</p>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Relation</th><th>Ce que fait Hemera</th><th>Pour qui</th></tr></thead>
+        <tbody>
+          <tr><td class="feat"><b>Natif</b> (défaut)</td><td>le <b>Catalog est le registry</b> : une version de modèle = une édition (provenance : code + données@snapshot + métriques + audits) — cohérent avec « source de vérité de tous les objets » (§21 archi) ; tracking = facettes OpenLineage du run TRAIN</td><td>nouveaux projets ML sur Hemera</td></tr>
+          <tr><td class="feat"><b>Wrap MLflow</b></td><td>le nœud TRAIN pointe <code>MLFLOW_TRACKING_URI</code> vers un MLflow adossé (ou client) ; ses runs/registry sont <b>ingérés</b> dans le Catalog (même mécanique que manifest.json dbt, S5) ; la frontière WAP publie l'artefact</td><td>équipes MLflow existantes, outillage écosystème (UI MLflow, autolog)</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+  </section>
+
+
+  <div class="pdiv"><span class="tagp">Partie V</span><span class="t">Garanties & décisions</span><span class="ln"></span></div>
+
+  <section id="garanties">
+    <h2><span class="num">15</span> Qui garantit quoi, où — la matrice honnête</h2>
+    <p class="section-sub">Ce que le client gagne et ce qu'il délègue, par mode — à afficher telle quelle dans la doc produit.</p>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>Garantie</th><th>Natif</th><th>Wrap SQLMesh</th><th>Wrap dbt (6a / 6b)</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">Audits <b>bloquants pré-publication</b> (WAP)</td><td class="yes">✅ tous les outputs</td><td class="yes">✅ aux sorties déclarées (+ audits SQLMesh internes)</td><td class="yes">✅ aux sorties déclarées (+ tests dbt post-hoc ingérés)</td></tr>
+          <tr><td class="feat">Environnements = branches Iceberg · promotion blue/green</td><td class="yes">✅</td><td class="mid">frontière (ses envs virtuels à l'intérieur)</td><td class="mid">frontière</td></tr>
+          <tr><td class="feat">Provenance snapshot ↔ run · reproductibilité</td><td class="yes">✅ par nœud</td><td class="yes">✅ par sortie de région (entrées épinglées)</td><td class="yes">✅ par sortie de région</td></tr>
+          <tr><td class="feat">Lignage colonne unifié</td><td class="yes">✅ AST</td><td class="mid">importé du DAG SQLMesh (best-effort)</td><td class="mid">6a : manifest.json (niveau modèle) · 6b : AST partiel</td></tr>
+          <tr><td class="feat">Plan unifié (fingerprints, impact)</td><td class="yes">✅</td><td class="mid">région = 1 nœud (son plan interne à lui)</td><td class="mid">région = 1 nœud</td></tr>
+          <tr><td class="feat">Macros / packages de l'écosystème</td><td class="no">liste fermée (la ligne du §5)</td><td class="yes">✅ macros SQLMesh</td><td class="yes">6a : ✅ tout dbt · 6b : partiel</td></tr>
+          <tr><td class="feat">Migration progressive vers le natif</td><td>—</td><td class="yes">modèle par modèle (même forme MODEL)</td><td class="yes">modèle par modèle via le shim (S2) ou 6b comme étape</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <div class="note"><b>Le chemin de convergence (produit) :</b> wrap n'est pas un ghetto — c'est une <b>rampe</b>. Un projet dbt arrive en 6a (zéro friction), ses modèles simples migrent au fil de l'eau vers le natif (le shim S2 rend la migration souvent <i>triviale</i> : le fichier est déjà presque conforme), et les garanties passent de « frontière » à « par nœud » modèle par modèle. Le Catalog trace la couverture (« 14/23 modèles en natif ») — un KPI produit, pas une contrainte.</div>
+  </section>
+
+  <section id="decision">
+    <h2><span class="num">16</span> D1 tranchée, sous-décisions &amp; tickets</h2>
+    <p class="section-sub">La décision de la revue d'intégration est résolue par l'expérience — avec deux sous-décisions et les tickets qui en découlent.</p>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>#</th><th>Décision</th><th>Résolution</th><th>Base</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">D1</td><td>Profondeur d'intégration SQLMesh</td><td class="yes"><b>TRANCHÉE : compilateur seul</b> — <code>load_sql_based_model</code> + <code>render_query(start, end)</code>, audits lus par notre garde ; état/envs/matérialisation restent à Flows/lake</td><td class="yes">S1 exécutée : tout fonctionne sans Context ni state</td></tr>
+          <tr><td class="feat">D1.1</td><td>Le parseur natif dépend-il de SQLMesh ?</td><td class="mid"><b>Oui, épinglé</b> (dépendance de compile uniquement, version pinnée — 0.235 testée) ; le repli SQLGlot-pur reste prouvé (<code>cleyrop-dm</code>) si la lib dérive — l'IR isole le risque</td><td>S1 + prototype</td></tr>
+          <tr><td class="feat">D1.2</td><td>Implémentation par défaut du wrap dbt</td><td class="mid"><b>6a dbt-core natif</b> par défaut (fidélité : le projet du client marche tel quel) ; <b>6b adaptateur SQLMesh</b> proposé explicitement (gains : plan/envs) avec la nuance S4e documentée</td><td>S3 + S4 exécutées</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <h4 class="mini">Tickets ajustés / ajoutés</h4>
+    <div class="tablewrap"><div class="card" style="padding:6px 6px;">
+      <table>
+        <thead><tr><th>#</th><th>Ticket</th><th>Contenu</th><th>Taille</th></tr></thead>
+        <tbody>
+          <tr><td class="feat">SD-4′</td><td>Compilateur natif (remplace « générateur de Context »)</td><td>parse MODEL via sqlmesh-lib (S1) + <b>shim dbt</b> (S2, liste fermée de 6 symboles, erreurs pédagogiques) → IR ; erreurs « ceci nécessite le wrap » testées</td><td>M</td></tr>
+          <tr><td class="feat">WK-4′</td><td>Adapter wrap SQLMesh</td><td>région : state schema dédié, gateway vers nos moteurs, <code>spark.wap.branch</code>, sorties déclarées → frontière WAP, import du DAG interne</td><td>L</td></tr>
+          <tr><td class="feat">WK-8 <span class="tg emp">nouveau</span></td><td>Adapter wrap dbt (6a)</td><td><b>implémentation de référence prouvée S5</b> : entrées Iceberg épinglées → sources dbt du staging · <code>dbtRunner().invoke()</code> · frontière WAP + provenance de région (tests dbt inclus) · ingestion <code>manifest/run_results</code> → Catalog · cible à l'échelle : <b>dbt-spark session × Spark Connect (S6)</b></td><td>L</td></tr>
+          <tr><td class="feat">INT-9</td><td>POC SQLMesh compilateur seul</td><td class="yes"><b>FAIT ici</b> (S1) — référence d'implémentation</td><td>—</td></tr>
+          <tr><td class="feat">INT-11 <span class="tg emp">nouveau</span></td><td><code>spark.wap.branch</code> × région</td><td>vérifier que toutes les écritures d'une région SQLMesh/dbt via la session gateway partent bien sur la branche de staging (y c. CTAS/replace — cas dbt qui crée la table)</td><td>gate E3</td></tr>
+          <tr><td class="feat">INT-12 <span class="tg wr">précisé</span></td><td>Veille dbt Core v2 / Fusion</td><td>déclencheurs de bascule du 6a : <b>matérialisations Iceberg supportées</b> + adapters Spark/DuckDB hors preview (état avril 2026 : Iceberg = échec au build) — trimestriel</td><td>veille</td></tr>
+          <tr><td class="feat">INT-13 <span class="tg emp">nouveau</span></td><td>dbt-spark × Iceberg × Lakekeeper</td><td>sur le vrai serveur Connect : <code>file_format: iceberg</code>, incrémental <code>merge</code>, création de table par CTAS dbt sous <code>spark.wap.branch</code> — transport déjà validé (S6)</td><td>gate E3</td></tr>
+        </tbody>
+      </table>
+    </div></div>
+    <div class="note tip"><b>En une phrase :</b> une seule syntaxe native — la forme SQLMesh, qui accepte les réflexes dbt — compilée vers un IR unique que Flows exécute sous toutes les garanties ; et pour les projets existants, deux modes wrap encapsulés dont la frontière porte le WAP et la provenance. Le client choisit son niveau d'intégration, jamais son niveau de gouvernance.</div>
+    <h4 class="mini">Les points durs des kinds étendus — dits honnêtement</h4>
+    <div class="note warn"><b>Les points durs, dits honnêtement (révisés avec les services) :</b> ① <b>GC des blobs</b> — transféré au <b>service files</b>, qui purge par refcount depuis les snapshots vivants de l'index (fournis par le Catalog) : plus de croisement fragile dans un flow de maintenance, mais un contrat Catalog↔files à tester (FS-2) ; ② <b>signature par fichier</b> — résolu par conception : le service files presigne, après la <b>même décision OpenFGA sur la table d'index</b> — INT-15 devient un test du service, plus une inconnue Lakekeeper ; ③ <b>volumétrie du lignage fichier</b> — lignage par <code>content_hash</code> en arêtes agrégées (fichier→fichier), pas ligne-à-ligne ; ④ <b>EXPORT/STREAM sans WAP</b> — assumé et affiché : flux et caches ne sont pas des états versionnés, leur vérité reste l'édition source ; ⑤ workers <b>gpu</b> = un tag de plus dans la file, mais l'image et l'autoscale gpu sont un chantier ops réel ; ⑥ <b>authz Kafka</b> — pour le kind STREAM, aligner les ACL topics sur OpenFGA (bridge à instruire) sinon l'authz du flux reste plus faible que celle des datasets.</div>
+  </section>
+
+  <footer>
+    <p><b>Hemera — document ② : le modèle de développement</b> (objets · syntaxe · EL · interop). Tranche D1 (revue d'intégration §6) · complète l'architecture v2 (§13–14) et l'annexe schéma.<br>
+    Méthode : expériences S1–S6 exécutées dans cet environnement — sqlmesh <b>0.235.4</b> (lib, sans state) · dbt-core <b>1.11.12</b> + dbt-duckdb (projet réel) · adaptateur dbt de SQLMesh (même projet, kinds traduits, tests→audits, nuance is_incremental) · shim Jinja-lite (jinja2 + SQLGlot 30) · <b>S5 : harnais région complet</b> (entrées Iceberg épinglées → <code>dbtRunner</code> → frontière WAP → provenance avec tests dbt dans le snapshot) · <b>S6 : dbt-spark méthode session sur Spark Connect 4.1.2</b> (build 3/3 PASS, warning statique bénin). Fusion : état vérifié avril 2026 (GA Snowflake seulement, Iceberg non supporté, Core v2 Apache 2.0).</p>
+  </footer>
+
+</div>
+
+</body></html>
