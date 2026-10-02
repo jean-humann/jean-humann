@@ -1,0 +1,80 @@
+{
+  "scope": "Unmodified cleyrop-dm prototype, local SQLite Iceberg catalog, synthetic data only",
+  "time_utc": "2026-10-02T13:37:08.245328+00:00",
+  "reference_commit": "1ca3659bc2a5c68cb4c38a7651bbd2a49808dad2",
+  "catalog_source_sha256": "8258d6c061fb4f543eb9f8b6fed75ea79fe292d29d48bb3f3b53ae305b844a8b",
+  "python": "3.13.14",
+  "versions": {
+    "pyiceberg": "0.12.0",
+    "pyarrow": "25.0.1",
+    "duckdb": "1.5.6",
+    "sqlglot": "30.21.0"
+  },
+  "probes_reproduced": 4,
+  "product_guarantees_passed": 0,
+  "interpretation": "Successful execution means the four counterexamples reproduced. It is not a passing product test.",
+  "results": [
+    {
+      "probe": "C1_initial_veto_visibility",
+      "assertion": "counterexample_reproduced",
+      "product_guarantee": "FAIL",
+      "evidence": {
+        "rows_read_on_main_before_veto": [
+          {
+            "value": -1
+          }
+        ],
+        "table_listed_before_veto": true,
+        "veto_raised": true,
+        "table_exists_after_veto": false
+      }
+    },
+    {
+      "probe": "C2_divergent_promotion",
+      "assertion": "counterexample_reproduced",
+      "product_guarantee": "FAIL",
+      "evidence": {
+        "initial_snapshot": 1331744972453230496,
+        "dev_snapshot": 4874389781639721950,
+        "advanced_prod_snapshot": 247422308575264378,
+        "target_is_ancestor_of_dev": false,
+        "promotion_rejected": false,
+        "prod_before": [
+          {
+            "value": 2
+          }
+        ],
+        "prod_after": [
+          {
+            "value": 1
+          }
+        ]
+      }
+    },
+    {
+      "probe": "C3_audit_fingerprint_and_cache",
+      "assertion": "counterexample_reproduced",
+      "product_guarantee": "FAIL",
+      "evidence": {
+        "audit_changed_from": "row_count_at_least(1)",
+        "audit_changed_to": "row_count_at_least(2)",
+        "fingerprint_unchanged": true,
+        "ordinary_plan_has_changes": false,
+        "forced_execution_vetoed": true,
+        "fresh_state_requests_rebuild": true,
+        "published_origin_keys": []
+      }
+    },
+    {
+      "probe": "C4_plan_import_effect",
+      "assertion": "counterexample_reproduced",
+      "product_guarantee": "FAIL",
+      "evidence": {
+        "marker_exists_before_runner": false,
+        "marker_exists_after_runner_initialization": true,
+        "plan_completed_without_apply": true,
+        "model_function_executed": false
+      }
+    }
+  ]
+}

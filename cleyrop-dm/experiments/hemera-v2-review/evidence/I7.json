@@ -1,0 +1,22 @@
+{
+  "campaign": "I7",
+  "executed": true,
+  "scope": "New schema-qualified AST column lineage",
+  "timestamp_utc": "2026-10-02T13:25:06.085302+00:00",
+  "details": {
+    "qualified_sql": "WITH \"orders\" AS (SELECT \"raw_orders\".\"amount\" AS \"amount\", \"raw_orders\".\"currency\" AS \"currency\" FROM \"raw_orders\" AS \"raw_orders\") SELECT \"o\".\"amount\" * \"f\".\"rate\" AS \"amount_eur\" FROM \"orders\" AS \"o\" JOIN \"fx\" AS \"f\" ON \"o\".\"currency\" = \"f\".\"currency\"",
+    "leaves": [
+      {
+        "name": "\"f\".\"rate\"",
+        "expression": "\"fx\" AS \"f\""
+      },
+      {
+        "name": "\"raw_orders\".\"amount\"",
+        "expression": "\"raw_orders\" AS \"raw_orders\""
+      }
+    ],
+    "version": "30.12.0"
+  },
+  "status": "passed",
+  "seconds": 0.002
+}

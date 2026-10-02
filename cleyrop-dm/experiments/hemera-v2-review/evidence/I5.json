@@ -1,0 +1,17 @@
+{
+  "campaign": "I5",
+  "executed": true,
+  "scope": "New live ref retention metadata",
+  "timestamp_utc": "2026-10-02T13:21:39.018743+00:00",
+  "details": {
+    "table": "review.i5_33ffbb41",
+    "ref": {
+      "snapshot-id": 8985068398072723908,
+      "type": "branch",
+      "max-ref-age-ms": 60000
+    },
+    "not_tested": "Expiration scheduling or physical deletion of old files"
+  },
+  "status": "passed",
+  "seconds": 0.616
+}

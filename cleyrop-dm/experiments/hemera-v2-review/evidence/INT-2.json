@@ -1,0 +1,6 @@
+{
+  "campaign": "INT-2",
+  "executed": false,
+  "status": "not_executed",
+  "reason": "JWT interceptor, token refresh and authenticated tenant isolation not deployed. Static bearer and synthetic-session artifacts were probed separately."
+}

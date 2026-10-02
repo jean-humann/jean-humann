@@ -1,0 +1,15 @@
+{
+  "campaign": "SPARK-ARTIFACTS",
+  "executed": true,
+  "scope": "Live addArtifacts and two synthetic session separation",
+  "timestamp_utc": "2026-10-02T13:25:04.313025+00:00",
+  "details": {
+    "session_a": 11,
+    "session_b_before_upload": "PythonException: \n  An exception was thrown from the Python worker. Please see the stack trace below.\nTraceback (most recent call last):\n  File \"<bench-path>\", line 40, in load_value\n  File \"/usr/lib/python3.10/importlib/__init__.py\", line 126, in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n  File \"<frozen importlib._bootstrap>\", line 1050, in _gcd_import\n  File \"<frozen importlib._bootstrap>\", line 1027, in _find_and_load\n  File \"<frozen importlib._bootstrap>\", line 1004, in _find_and_load_unlocked\nModuleNotFoundError: No module named 'hemera_artifact_a6faba25'\n",
+    "session_b_after_upload": 22,
+    "session_a_after_b_upload": 11,
+    "scope": "Two synthetic sessions in one local server. user_id values are client supplied; this is not authenticated tenant isolation."
+  },
+  "status": "passed",
+  "seconds": 1.13
+}

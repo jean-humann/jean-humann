@@ -1,0 +1,10 @@
+{
+  "timestamp_utc": "2026-10-02T13:33:04.077656+00:00",
+  "bench_project": "hemera-v2-review",
+  "remaining_owned_containers": 0,
+  "remaining_owned_volumes": 0,
+  "remaining_owned_networks": 0,
+  "two_preexisting_user_containers_preserved": true,
+  "unrelated_containers_not_modified": true,
+  "images_not_deleted": "Images are shared cache; no global prune executed."
+}

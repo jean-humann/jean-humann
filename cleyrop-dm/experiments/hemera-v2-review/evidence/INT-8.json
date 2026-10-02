@@ -1,0 +1,6 @@
+{
+  "campaign": "INT-8",
+  "executed": false,
+  "status": "not_executed",
+  "reason": "Only PyIceberg and Spark expand-column/read-cache behavior probed. No Trino or complete migration matrix."
+}

@@ -1,0 +1,10 @@
+{
+  "campaign": "INT-10",
+  "executed": true,
+  "scope": "Pure Python client vs full PySpark Connect functional subset",
+  "timestamp_utc": "2026-10-02T13:27:49.451628+00:00",
+  "status": "failed",
+  "exception": "AssertionError",
+  "message": "{'spark-client-venv': {'version': '4.1.2', 'sql': [{'id': 2, 'v': 3}], 'udf': [9, 10, 11], 'unsupported_rdd': 'PySparkAttributeError', 'arrow': [{'id': 0}, {'id': 1}, {'id': 2}]}, 'full-client-venv': {'version': '4.1.2', 'sql': [{'id': 2, 'v': 3}], 'udf': [9, 10, 11], 'unsupported_rdd': 'PySparkNotImplementedError', 'arrow': [{'id': 0}, {'id': 1}, {'id': 2}]}}",
+  "seconds": 6.511
+}

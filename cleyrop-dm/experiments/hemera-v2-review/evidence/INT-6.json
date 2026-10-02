@@ -1,0 +1,6 @@
+{
+  "campaign": "INT-6",
+  "executed": false,
+  "status": "not_executed",
+  "reason": "No requested_subject token exchange or long-job re-exchange. Keycloak only issues synthetic service credentials in this bench."
+}

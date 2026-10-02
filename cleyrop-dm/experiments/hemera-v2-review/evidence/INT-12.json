@@ -1,0 +1,6 @@
+{
+  "campaign": "INT-12",
+  "executed": false,
+  "status": "not_executed",
+  "reason": "Doc02 INT-12 defines monitoring of dbt Core/Fusion and adapter readiness. No runtime acceptance test executed."
+}

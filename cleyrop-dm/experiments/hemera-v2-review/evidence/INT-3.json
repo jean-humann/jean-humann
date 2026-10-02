@@ -1,0 +1,44 @@
+{
+  "campaign": "INT-3",
+  "executed": true,
+  "scope": "New local serialization wrapper, Lakekeeper commits, PostgreSQL locking",
+  "timestamp_utc": "2026-10-02T13:21:41.924469+00:00",
+  "details": {
+    "table": "review.int3_33ffbb41",
+    "orchestrator": "Synthetic review wrapper using PostgreSQL advisory transaction lock; not production Flows",
+    "events": [
+      {
+        "worker": 1,
+        "started": 677667.534101667,
+        "finished": 677668.965046996,
+        "base": 6242549403343288759,
+        "published": 5456420239552909948
+      },
+      {
+        "worker": 2,
+        "started": 677668.965274164,
+        "finished": 677670.767988469,
+        "base": 5456420239552909948,
+        "published": 2983936539707460065
+      }
+    ],
+    "final_rows": [
+      {
+        "id": 0,
+        "value": "0"
+      },
+      {
+        "id": 1,
+        "value": "1"
+      },
+      {
+        "id": 2,
+        "value": "2"
+      }
+    ],
+    "ancestry_and_catalog_CAS": true,
+    "limitations": "One local process, two threads and two database sessions; no distributed failover stress"
+  },
+  "status": "passed",
+  "seconds": 4.798
+}

@@ -1,0 +1,6 @@
+{
+  "campaign": "INT-4",
+  "executed": false,
+  "status": "not_executed",
+  "reason": "No Kafka/NATS sink, fault injection, durable delivery or duplicate/loss reconciliation test."
+}

@@ -1,0 +1,6 @@
+{
+  "campaign": "INT-11",
+  "executed": false,
+  "status": "not_executed",
+  "reason": "Doc02 INT-11 defines SQLMesh/dbt region writes under WAP, including CTAS/replace. Not executed."
+}

@@ -1,0 +1,37 @@
+{
+  "campaign": "I1",
+  "executed": true,
+  "scope": "PyIceberg 0.12 retry, disabled-retry conflict and explicit recovery",
+  "timestamp_utc": "2026-10-02T13:22:25.432562+00:00",
+  "details": {
+    "table": "review.i1_74c19755",
+    "default_retries_stale_commit_error": null,
+    "after_stale_append": [
+      {
+        "id": 1,
+        "value": "1"
+      },
+      {
+        "id": 2,
+        "value": "2"
+      }
+    ],
+    "final_rows": [
+      {
+        "id": 1,
+        "value": "1"
+      },
+      {
+        "id": 2,
+        "value": "2"
+      }
+    ],
+    "historical_claim_no_automatic_retry": false,
+    "explicit_retry_disabled_table": "review.i1_no_retry_74c19755",
+    "conflict_with_retry_0": "CatalogCommitConflicts: CatalogCommitConflicts => Requirement failed: Branch or tag `main` already exists",
+    "recovery": "refresh then reapply",
+    "storage": "S3V4RestSigner; client holds no storage secret"
+  },
+  "status": "passed",
+  "seconds": 4.782
+}

@@ -1,5 +1,13 @@
 # Managing Cleyrop datasets on Iceberg — design
 
+> État vérifié le 2 octobre 2026 : la démo et les 10 tests existants passent,
+> mais quatre contre-épreuves reproduisent des écarts de WAP, de promotion,
+> de fingerprint et d’isolation du plan. Ce document expose l’intention du
+> prototype, pas une qualification de production. Voir les
+> [preuves et limites](../docs/hemera-v2/10-preuves-et-campagnes.html#prototype)
+> et la [cible Rust sans JVM](../docs/hemera-v2/08-plateforme-rust-sans-jvm.html).
+
+
 > How to manage Cleyrop datasets (Apache Iceberg tables) *properly* with Python
 > and SQL transformations, taking the good ideas from **dbt-core** and
 > **SQLMesh** and making them native to the Iceberg table format.

@@ -1,0 +1,213 @@
+{
+  "kind": "new_synthetic_local_campaigns_2026-10-02",
+  "historical_campaigns_replayed_verbatim": false,
+  "final_platform_jvm_policy": "zero JVM; Spark and Keycloak are temporary parity dependencies only",
+  "production_atomicity_fencing_failover_proven": false,
+  "cases": [
+    {
+      "campaign": "I1",
+      "executed": true,
+      "status": "passed",
+      "scope": "PyIceberg 0.12 retry, disabled-retry conflict and explicit recovery"
+    },
+    {
+      "campaign": "I2",
+      "executed": true,
+      "status": "passed",
+      "scope": "New live CAS race, divergence guard, unsafe repoint counterexample"
+    },
+    {
+      "campaign": "I3",
+      "executed": true,
+      "status": "passed",
+      "scope": "New live branch isolation"
+    },
+    {
+      "campaign": "I4",
+      "executed": true,
+      "status": "passed",
+      "scope": "Branch upsert, prepublication isolation and origin summary"
+    },
+    {
+      "campaign": "I5",
+      "executed": true,
+      "status": "passed",
+      "scope": "New live ref retention metadata"
+    },
+    {
+      "campaign": "I6",
+      "executed": true,
+      "status": "failed",
+      "scope": "New SQLGlot30.12 transpilation and live Spark versus DuckDB golden subset"
+    },
+    {
+      "campaign": "I7",
+      "executed": true,
+      "status": "passed",
+      "scope": "New schema-qualified AST column lineage"
+    },
+    {
+      "campaign": "I8",
+      "executed": true,
+      "status": "passed",
+      "scope": "New Spark versus DuckDB boundary semantics samples"
+    },
+    {
+      "campaign": "I9",
+      "executed": true,
+      "status": "passed",
+      "scope": "New cloudpickle3.1.2 cross-process closure"
+    },
+    {
+      "campaign": "I10",
+      "executed": true,
+      "status": "passed",
+      "scope": "New Spark Connect4.1.2 SQL Arrow closure and unsupported API checks"
+    },
+    {
+      "campaign": "I11",
+      "executed": true,
+      "status": "passed",
+      "scope": "New pure Python client, SPARK_REMOTE, RDD, real static bearer rejection"
+    },
+    {
+      "campaign": "I12",
+      "executed": true,
+      "status": "passed",
+      "scope": "New real PostgreSQL SKIP LOCKED / dependencies / lease / stale completion test"
+    },
+    {
+      "campaign": "INT-1",
+      "executed": true,
+      "status": "failed",
+      "scope": "Strict Arrow schema/value comparison, explicit UTC client/server and DuckDB, three boundary queries"
+    },
+    {
+      "campaign": "INT-2",
+      "executed": false,
+      "status": "not_executed",
+      "reason": "JWT interceptor, token refresh and authenticated tenant isolation not deployed. Static bearer and synthetic-session artifacts were probed separately."
+    },
+    {
+      "campaign": "INT-3",
+      "executed": true,
+      "status": "passed",
+      "scope": "New local serialization wrapper, Lakekeeper commits, PostgreSQL locking"
+    },
+    {
+      "campaign": "INT-4",
+      "executed": false,
+      "status": "not_executed",
+      "reason": "No Kafka/NATS sink, fault injection, durable delivery or duplicate/loss reconciliation test."
+    },
+    {
+      "campaign": "INT-5",
+      "executed": true,
+      "status": "failed",
+      "scope": "Native Lakekeeper 0.12.0 OpenFGA model accepts no conditional grants. Standalone TTL was tested in another store only."
+    },
+    {
+      "campaign": "INT-6",
+      "executed": false,
+      "status": "not_executed",
+      "reason": "No requested_subject token exchange or long-job re-exchange. Keycloak only issues synthetic service credentials in this bench."
+    },
+    {
+      "campaign": "INT-7",
+      "executed": false,
+      "status": "not_executed",
+      "reason": "No Kubernetes cluster or operator was accessed. Local Spark restart is not this gate."
+    },
+    {
+      "campaign": "INT-8",
+      "executed": false,
+      "status": "not_executed",
+      "reason": "Only PyIceberg and Spark expand-column/read-cache behavior probed. No Trino or complete migration matrix."
+    },
+    {
+      "campaign": "INT-9",
+      "executed": false,
+      "status": "not_executed",
+      "reason": "SQLMesh compiler-only acceptance not rerun in this bench."
+    },
+    {
+      "campaign": "INT-10",
+      "executed": true,
+      "status": "failed",
+      "scope": "Pure Python client vs full PySpark Connect functional subset"
+    },
+    {
+      "campaign": "INT-11",
+      "executed": false,
+      "status": "not_executed",
+      "reason": "Doc02 INT-11 defines SQLMesh/dbt region writes under WAP, including CTAS/replace. Not executed."
+    },
+    {
+      "campaign": "INT-12",
+      "executed": false,
+      "status": "not_executed",
+      "reason": "Doc02 INT-12 defines monitoring of dbt Core/Fusion and adapter readiness. No runtime acceptance test executed."
+    },
+    {
+      "campaign": "INT-13",
+      "executed": false,
+      "status": "not_executed",
+      "reason": "Doc02 INT-13 defines dbt-spark Iceberg materializations through Lakekeeper. Not executed; target adapters must be without JVM."
+    },
+    {
+      "campaign": "INT-14",
+      "executed": false,
+      "status": "not_executed",
+      "reason": "No Trino OPA bridge, OAuth2 end-user identity, row/column permissions test."
+    },
+    {
+      "campaign": "AUTH",
+      "executed": true,
+      "status": "passed",
+      "scope": "OIDC, native OpenFGA grants and revocation, Lakekeeper REST"
+    },
+    {
+      "campaign": "WAP-VETO",
+      "executed": true,
+      "status": "passed",
+      "scope": "New live blocking audit before publication"
+    },
+    {
+      "campaign": "OPENFGA-TTL",
+      "executed": true,
+      "status": "passed",
+      "scope": "Real standalone OpenFGA condition, not INT-5 acceptance"
+    },
+    {
+      "campaign": "SPARK-ARTIFACTS",
+      "executed": true,
+      "status": "passed",
+      "scope": "Live addArtifacts and two synthetic session separation"
+    },
+    {
+      "campaign": "MULTI-ENGINE",
+      "executed": true,
+      "status": "passed",
+      "scope": "New same-table PyIceberg and Spark through authenticated Lakekeeper"
+    },
+    {
+      "campaign": "SCHEMA-TRANSITION",
+      "executed": true,
+      "status": "passed",
+      "scope": "PyIceberg expand-only change with Spark cached reader and REFRESH TABLE"
+    },
+    {
+      "campaign": "STAGING-ISOLATION",
+      "executed": true,
+      "status": "failed",
+      "scope": "P0 unpublished rows must be invisible to ordinary dataset readers"
+    }
+  ],
+  "interpretations": {
+    "I6": "Original six-query execution compared timestamp serialization without full UTC normalization; not evidence of a date_trunc engine defect. Strict INT-1 normalizes UTC and date_trunc passes.",
+    "I8": "Probe passed by detecting behavior. Data parity FAILED for substr at zero: ab versus a.",
+    "INT-3": "Two threads, PostgreSQL advisory transaction lock, ancestry check and catalog CAS. No zombie writer or failover fencing claim.",
+    "INT-10": "SQL, UDF and Arrow outputs match. Exact error API parity fails: pure-client RDD uses PySparkAttributeError, full client PySparkNotImplementedError. No worker image acceptance.",
+    "INT-5": "Native model rejects undefined condition. Standalone OpenFGA conditional check is not Lakekeeper TTL integration."
+  }
+}

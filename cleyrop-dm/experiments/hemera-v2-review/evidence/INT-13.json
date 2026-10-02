@@ -1,0 +1,6 @@
+{
+  "campaign": "INT-13",
+  "executed": false,
+  "status": "not_executed",
+  "reason": "Doc02 INT-13 defines dbt-spark Iceberg materializations through Lakekeeper. Not executed; target adapters must be without JVM."
+}

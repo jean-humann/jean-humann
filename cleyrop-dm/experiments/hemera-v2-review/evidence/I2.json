@@ -1,0 +1,45 @@
+{
+  "campaign": "I2",
+  "executed": true,
+  "scope": "New live CAS race, divergence guard, unsafe repoint counterexample",
+  "timestamp_utc": "2026-10-02T13:21:30.648913+00:00",
+  "details": {
+    "table": "review.i2_33ffbb41",
+    "concurrent_cas_results": [
+      {
+        "branch": "wap_a",
+        "outcome": "published"
+      },
+      {
+        "branch": "wap_b",
+        "outcome": "conflict",
+        "error": "CatalogCommitConflicts: CatalogCommitConflicts, context: { expected: 1972132737337680515, found: 8011418033791156305 } => Requirement failed: Branch or tag `main`'s snapshot has changed"
+      }
+    ],
+    "published_rows": [
+      {
+        "id": 0,
+        "value": "0"
+      },
+      {
+        "id": 1,
+        "value": "1"
+      }
+    ],
+    "ancestry_guard": "stale WAP ancestry; rerun from current published snapshot",
+    "unsafe_fresh_handle_repoint_rows": [
+      {
+        "id": 0,
+        "value": "0"
+      },
+      {
+        "id": 2,
+        "value": "2"
+      }
+    ],
+    "observed_lost_update": true,
+    "warning": "The unsafe operation is intentional only on this throw-away synthetic table."
+  },
+  "status": "passed",
+  "seconds": 3.261
+}

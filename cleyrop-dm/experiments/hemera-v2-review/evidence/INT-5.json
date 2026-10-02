@@ -1,0 +1,14 @@
+{
+  "campaign": "INT-5",
+  "executed": true,
+  "status": "failed",
+  "scope": "Native Lakekeeper 0.12.0 OpenFGA model accepts no conditional grants. Standalone TTL was tested in another store only.",
+  "native_condition_write_http": 400,
+  "native_condition_write_error": {
+    "code": "validation_error",
+    "message": "Invalid tuple 'lakekeeper_table:c57db51a-be63-11f1-a035-0f17af939846/01a0fcc7-c0dc-7023-be19-393df5328a9f#select@user:oidc~synthetic-ungranted (condition unexpired)'. Reason: undefined condition"
+  },
+  "native_model_conditions": [],
+  "purge_reconciler": "not executed: no reconciler implementation in this bench",
+  "timestamp_utc": "2026-10-02T13:25:01.843164+00:00"
+}

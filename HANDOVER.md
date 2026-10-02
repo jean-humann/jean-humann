@@ -1,108 +1,171 @@
-# HANDOVER — Hemera v2 / cleyrop-dm
+# HANDOVER : Hemera v2 / cleyrop-dm
 
-Document de passation pour l'agent (ou la personne) qui reprend ce travail.
-Dernière mise à jour : 2026-10-02.
+Dernière mise à jour : 2 octobre 2026. Dépôt `jean-humann/jean-humann`.
 
-## 1. Le contexte en trois phrases
+## 1. Contexte et cible retenue
 
-Ce dépôt porte le travail de design **Hemera v2**, la refonte de la plateforme
-data souveraine de Cleyrop : un lakehouse Iceberg gouverné (Lakekeeper +
-OpenFGA), un service **Flows** qui orchestre des datasets déclarés par
-manifeste, et un modèle où **l'édition publiée** (snapshot Iceberg estampillé)
-est l'unique source de vérité — y compris pour les curseurs d'ingestion
-(exactly-once par construction). Le design est consigné dans **7 documents HTML**
-(`docs/hemera-v2/`) et un **prototype exécutable** (`cleyrop-dm/`) valide les
-mécanismes cœur (branches = environnements, WAP, fingerprints, time travel).
+Hemera v2 est la refonte de la plateforme data souveraine Cleyrop. Iceberg,
+Lakekeeper et OpenFGA restent les fondations. Flows orchestre des datasets
+déclarés par manifeste. L’édition publiée, snapshot Iceberg estampillé, est
+l’autorité des données et des curseurs d’ingestion.
 
-## 2. État des lieux — ce qui est FAIT
+La demande confirmée impose **zéro JVM dans la cible finale**, y compris Spark,
+Trino, Keycloak, Kafka/Strimzi, writer OLake, plugins, notebooks et outils de
+maintenance. Les services produit ont un core Rust, avec contrôle et données
+séparés. Python/SQL utilisateurs, interfaces TypeScript et exécutants Go/C++
+restent possibles derrière ces contrats. Supprimer les JVM et transférer les
+cores Python existants sont deux critères distincts.
 
-| Livrable | Où | État |
-|---|---|---|
-| Série de design (7 docs HTML, FR, autoportants, liens croisés locaux) | `docs/hemera-v2/` | ✅ complet, poussé |
-| Prototype framework (`cleyrop_dm`) : DAG SQL/Python, moteurs DuckDB/PyIceberg, WAP, branches, fingerprints, CLI | `cleyrop-dm/` | ✅ démo + 10 tests verts |
-| Étude OLake (code lu commit `8dcefff` + banc réel PG16 : backfill CTID, CDC pgoutput borné, 4 events c/c/u/d vérifiés) | doc ⑥, faits E1–E13 + banc S7 | ✅ |
-| Design EL v2 (3 classes de flux, quadruplet plage/dédup/ack/watermark, Industrie 4.0) | doc ⑥ §4–5, planche 🗺️ §4 | ✅ |
-| Versions publiées en ligne (mêmes contenus que `docs/hemera-v2/`) | liens dans `docs/hemera-v2/README.md` | ✅ |
+Icegres fournit des composants Rust de query/write à adapter. Eidos fournit le
+compilateur sémantique et les plans d’action. Aucun des deux ne constitue encore
+une implémentation conforme de la frontière d’édition Hemera. La présente
+livraison est une étude, une décision et des preuves reproductibles, pas une
+migration des services de production.
 
-**Vérifier que tout marche** (5 min) :
+## 2. État vérifié
+
+Les lectures HANDOVER, index documentaire puis DESIGN ont précédé tout
+changement. Sur le prototype initial `1ca3659`, un venv isolé a exécuté :
 
 ```bash
 cd cleyrop-dm
 python -m pip install -e . pyarrow pytest
-python demo.py            # cycle complet : prod → dev zéro-copie → promotion → veto d'audit → time travel
-python -m pytest -q       # 10 tests ; utiliser `python -m pytest`, pas `pytest` (PATH ≠ interpréteur pip)
+python demo.py
+python -m pytest -q
 ```
 
-## 3. Les invariants du design — à ne PAS casser
+La démo complète passe et **10 tests passent**. Utiliser `python -m pytest`,
+pas le binaire `pytest` du PATH. Le préflight emploie Python 3.13.14, PyIceberg
+0.12.0, DuckDB 1.5.6, Arrow 25.0.1, SQLGlot 30.21.0 et pytest 9.1.1.
 
-1. **La destination est la vérité.** Curseurs, state, provenance vivent dans les
-   snapshot properties de la dernière **édition publiée** (`origin.cursor`),
-   jamais dans un state file ou le Postgres de Flows (simple cache).
-2. **Publish-then-ack.** Une source (slot WAL, consumer group, file) n'est
-   acquittée qu'APRÈS la publication de l'édition qui la couvre. Les deux seuls
-   crashs possibles convergent (WAP ⇒ rien n'existe avant publish ; recovery
-   borné + dédup après).
-3. **WAP partout.** Écriture sur branche staging → audits → fast-forward.
-   Un veto ⇒ rien n'existe.
-4. **Pas de gouvernance sans journal rejouable.** Flux de classe B (MQTT,
-   webhooks…) passent par un étage durable d'abord (voir grille doc ⑥ §5).
-5. **Les outils tiers sont wrappés, jamais le centre.** OLake/dbt/SQLMesh/dlt
-   travaillent à l'intérieur de la frontière : entrées gouvernées, écritures sur
-   staging, publication par le flow. Changer d'étage moteur = un placement,
-   pas une API différente.
-6. **Runs bornés, workers fongibles.** Pas de démon par source ; le pool
-   `el`/`el-cdc` prend n'importe quel job car l'état est dans l'édition.
+| Livrable | État et limite |
+|---|---|
+| Documents 01 à 07 | Copies historiques conservées, non modifiées. Leurs généralisations sont corrigées par les addenda. |
+| [08, cible Rust sans JVM](docs/hemera-v2/08-plateforme-rust-sans-jvm.html) | Étude du laboratoire de référence, du monorepo, d’Icegres et d’Eidos ; 20 missions distinctes exécutées par vagues de trois. |
+| [09, décision EL-4](docs/hemera-v2/09-decision-el4-wap.html) | Extracteur OLake Go encapsulé, writer/publisher Rust. Choix architectural tranché ; implémentation à réaliser. |
+| [10, preuves et campagnes](docs/hemera-v2/10-preuves-et-campagnes.html) | Banc réel local : 33 sondes/gates, 18 passent, 5 échouent, 10 non exécutés. Ce décompte n’est pas une acceptation produit. |
+| [Banc reproductible](cleyrop-dm/experiments/hemera-v2-review/README.md) | Lakekeeper/OpenFGA/OIDC/S3/Spark Connect réels, données synthétiques, preuves assainies et versions épinglées. Nettoyage terminé. L’enchaînement final assemblé n’a pas été rejoué intégralement. |
+| [Contre-épreuves du prototype](cleyrop-dm/experiments/prototype-counteraudit/README.md) | Quatre écarts reproduits : visibilité avant premier audit, promotion divergente, audits/fingerprints/cache, import Python durant plan. Aucune garantie produit validée par ces sondes. |
 
-## 4. Carte des documents (ordre de lecture)
+Les constats qui changent la suite du travail :
 
-`docs/hemera-v2/README.md` donne le détail. En bref : ① architecture →
-② modèle de développement (9 kinds, SDK `lake`, PEP) → ③ frontend (30 écrans)
-→ ④ annexe Iceberg (F1–F16, R1–R14) → ⑤ revue d'intégration (coutures A–G,
-campagnes I1–I12, décisions D1–D3) → ⑥ annexe EL/CDC (E1–E13, banc S7, grille
-des flux, Industrie 4.0) → 🗺️ planche visuelle (graphes d'intégration et
-classes A/B/C).
+- Un lecteur `select` sur une table du banc récupère les données staging par
+  GET signé avant publication, puis après suppression de la branche. Main
+  reste intact. WAP protège la publication, pas automatiquement les octets.
+- Le modèle natif Lakekeeper 0.12.0/OpenFGA testé refuse les conditions TTL.
+  Un test OpenFGA isolé ne prouve pas l’intégration Lakekeeper.
+- La parité Spark/DuckDB échoue sur des valeurs ou types. Le cas date_trunc
+  initialement différent est réconcilié après normalisation UTC/Arrow.
+- PyIceberg 0.12.0 réessaie certains appends concurrents. La généralisation
+  historique « aucun retry » ne s’applique pas à cette version.
+- Un lease ou un verrou local ne prouve pas le fencing au commit de destination
+  pendant un failover. Les campagnes réelles ne ferment pas ce gate.
 
-## 5. Backlog — par où continuer
+Les JVM Spark/Keycloak du banc sont transitoires. Aucun cluster client n’a été
+modifié. Les arbres locaux Icegres/Eidos avec modifications utilisateur ont été
+préservés ; aucun de leurs fichiers n’a été committé ici.
 
-Priorité suggérée :
+## 3. Les six invariants
 
-1. **EL-4 (doc ⑥)** — trancher la frontière WAP du writer OLake : écriture sur
-   branche via Lakekeeper REST dans le sidecar Java, repli « régime STREAM »
-   sinon. C'est la seule décision structurante encore ouverte du design EL.
-2. **Campagnes I1–I12 (doc ⑤)** — dérouler la checklist E-INT sur un
-   environnement réel (Lakekeeper + OpenFGA + Spark Connect) ; statuts au
-   02/07/2026 dans le doc.
-3. **Tickets EL-1…EL-13 (doc ⑥ §7)** — implémentation EL v2 : chunks de
-   backfill en jobs (EL-2/3), curseur relu de l'édition (EL-2), fenêtre de
-   dédup i/c (EL-5), lag de slot en S8 (EL-6), connecteurs IoT (EL-9…12),
-   réceptacle webhooks (EL-13).
-4. **Prototype** — rapprocher `cleyrop_dm` du design : kinds manquants
-   (STREAM, FILESET, EMBEDDINGS), manifeste `source()`, éditions estampillées
-   `origin.*`.
+1. **Destination autoritaire.** Curseurs, état de reprise et provenance vivent
+   dans le `summary` du snapshot de la dernière édition publiée, `origin.*`.
+   Ils sont attachés au candidat dès sa création. Une propriété globale de
+   table, un state file ou PostgreSQL Flows ne remplace pas cette autorité.
+2. **Publish-then-ack.** La source n’est acquittée qu’après la publication qui
+   couvre sa plage. Une réponse de commit perdue se résout par recherche du
+   receipt idempotent. Un receipt de réception HTTP durable ne prétend pas
+   être une publication métier.
+3. **WAP partout.** Stage privé par tentative, audits du snapshot exact, puis
+   publication conditionnelle avec ascendance, UUID et têtes attendues. Un
+   veto ne crée aucune édition publiée. Il peut laisser des objets privés à
+   nettoyer ; leur confidentialité est un contrat distinct à tester.
+4. **Journal rejouable.** Les flux éphémères entrent d’abord dans une capture
+   durable. La rétention, la synchronisation disque et les domaines de panne
+   font partie de la garantie. Un broker nommé ne la prouve pas.
+5. **Tiers encapsulés.** OLake, dbt, SQLMesh et dlt sont des exécutants bornés.
+   Ils ne publient pas directement, ne gouvernent pas les droits et ne décident
+   pas du curseur. Le changement de moteur est un placement qualifié.
+6. **Runs bornés, workers fongibles.** Pas de daemon de traitement par source.
+   La capture protocolaire peut utiliser une passerelle mutualisée permanente.
+   Une tentative périmée doit être empêchée de publier au point de commit.
 
-## 6. Conventions de travail
+Ces invariants remplacent les exceptions historiques STREAM avec audits après
+publication et le bouton de publication forcée après veto. Une édition raw peut
+passer ses audits d’intégrité puis autoriser l’ack ; les éditions métier aval
+passent leurs propres audits avant publication.
 
-- **Branche de développement : `claude/cleyrop-dataset-management-6lftkw`** —
-  tout commit/push va là ; ne pas créer de PR sans demande explicite.
-- Documents de design : **français**, HTML autoportant (zéro CDN), palette
-  Catppuccin via variables CSS `:root` + variante sombre
-  (`prefers-color-scheme`), diagrammes SVG inline thémés (`style="...var(--x)"`).
-  En cas d'édition : valider l'équilibrage des balises et l'absence de liens
-  `claude.ai/code/artifact/...` résiduels dans les copies locales (les liens
-  croisés doivent rester relatifs).
-- Les versions publiées sur claude.ai et les copies `docs/hemera-v2/` doivent
-  rester synchrones : après édition d'un document publié, re-télécharger le
-  HTML et refaire la réécriture des liens (voir `docs/hemera-v2/README.md`).
-- Code : suivre le style existant de `cleyrop_dm` ; tests via
-  `python -m pytest -q`.
+FILESET, MODEL, VIEW et EMBEDDINGS ont aussi une édition Iceberg autoritaire de
+données ou de manifeste. Leurs index/aliases sont dérivés. Une release de
+plusieurs sorties est elle-même une édition Iceberg qui référence ses membres,
+avec lecteurs épinglés ; des promotions successives ne prouvent pas l’atomicité.
 
-## 7. Prompt de reprise (à donner au prochain agent)
+Les éditions reconstruisent les projections de données, mais pas les identités,
+clés, drafts non publiés, commandes et reçus d’effets externes. Ceux-ci exigent
+leur journal et leurs sauvegardes. Un rollback ne rétracte pas un ack source.
+Restaurer derrière les acks impose de prouver la couverture du journal ou de
+bloquer puis reconstituer la source sous une nouvelle époque.
 
-> Tu reprends le projet Hemera v2 dans le dépôt `jean-humann/jean-humann`,
-> branche `claude/cleyrop-dataset-management-6lftkw`. Lis d'abord `HANDOVER.md`
-> à la racine, puis `docs/hemera-v2/README.md` (ordre de lecture de la série)
-> et `cleyrop-dm/DESIGN.md`. Vérifie l'environnement : `cd cleyrop-dm &&
-> python -m pip install -e . pyarrow pytest && python demo.py && python -m
-> pytest -q` (10 tests verts attendus). Respecte les six invariants du §3 du
-> HANDOVER. Continue par le backlog §5 dans l'ordre, en committant sur la même
-> branche, sans créer de PR sauf demande.
+## 4. Lecture et conventions documentaires
+
+Lire [l’index](docs/hemera-v2/README.md) pour les dix documents. Les sept HTML
+initiaux restent les copies historiques de leurs publications. Les addenda
+08, 09 et 10 sont locaux ; aucune publication claude.ai nouvelle n’est annoncée.
+Les six invariants et les addenda priment en cas de contradiction.
+
+Le [DESIGN du prototype](cleyrop-dm/DESIGN.md) explique l’intention et renvoie
+maintenant aux contre-épreuves. Ne pas convertir les tests locaux verts en
+preuve de concurrence, de sécurité ou d’acquittement exactement une fois.
+
+Les documents sont en français, autonomes, sans CDN, avec variables CSS
+clair/sombre et SVG inline thémés. Valider balises, liens relatifs et ancres.
+Si un original claude.ai est édité, télécharger sa version finale et réécrire
+ses liens vers les copies locales selon la procédure de l’index. Les originaux
+n’ont pas été modifiés par cette reprise.
+
+## 5. Backlog, dans l’ordre
+
+1. **EL-4 : implémenter la décision du document 09.** Ne pas prolonger le
+   sidecar Java dans la cible. Adapter extraction Go, writer Rust et publisher
+   avec `PreparedWrite`, audits immuables, snapshot summary, receipt exact,
+   CAS/ascendance et fencing. Le repli est un journal privé puis une édition
+   brute sous WAP. Qualifier première création, TRUNCATE, transactions
+   complètes, CTID/bootstrap, checkpoint vide et slot partagé.
+2. **Fermer les gates I1–I12/E-INT encore ouverts.** Commencer par confidentialité
+   staging, publication zombie/failover, crash publish/ack, TTL et droits
+   complets, golden SQL. Le document 10 donne les statuts réels et les
+   limites. Étendre au moteur Rust cible ; Spark reste une référence temporaire.
+   Exécuter aussi les huit campagnes DR proposées dans le document 08.
+3. **Implémenter EL-1…EL-13.** Premier lot EL-1/2/3/6 ; EL-8 avant toute dérive
+   automatique. EL-5 et EL-9…13 réutilisent les contrats. EL-7 compare seulement
+   des chemins qui satisfont les mêmes garanties. Voir la table détaillée du 08.
+4. **Aligner le prototype puis le core partagé.** Corriger les quatre
+   contre-épreuves ; stage unique, pins d’entrée, état relu de l’édition,
+   fingerprints incluant le contrat, compilation isolée. Ajouter `source()` et
+   STREAM/FILESET/EMBEDDINGS/MODEL/FEATURESET. Garder le prototype Python comme
+   référence, sans le présenter comme le service Rust livré.
+5. **Migrer les services et retirer les JVM par cohorte.** Façades compatibles,
+   un propriétaire de schedule/publication/ack, parité de workloads et droits,
+   restauration réelle, installation déconnectée, images/builds/maintenance
+   sans JVM. Aucun moteur distribué ou IdP candidat n’est encore qualifié ici.
+
+## 6. Travail Git
+
+**Tout commit et push sur `claude/cleyrop-dataset-management-6lftkw`.**
+Ne créer aucune pull request sans demande explicite. Messages descriptifs.
+Préserver le travail utilisateur et ne pas modifier les dépôts sources locaux.
+Ne pas publier leur code privé, credentials ou configurations clientes.
+
+Pour le prototype, conserver le style existant et utiliser `python -m pytest
+-q`. Les scripts d’expérience restent séparés de la suite produit ; les
+contre-exemples ne doivent pas être comptés comme des tests produit verts.
+
+## 7. Prompt de reprise
+
+> Reprends Hemera v2 sur la branche imposée. Lis HANDOVER.md, puis
+> docs/hemera-v2/README.md, puis cleyrop-dm/DESIGN.md dans cet ordre. Installe
+> l’environnement, exécute la démo et les dix tests avant modification.
+> Lis ensuite les addenda 08 à 10. Respecte les six invariants, la cible finale
+> zéro JVM et le core Rust des services. Continue le backlog §5 dans l’ordre,
+> en distinguant décision, implémentation et preuve. Committe et pousse sur la
+> même branche, sans PR. Les gates de confidentialité, fencing et reprise
+> restent ouverts malgré la démo verte.

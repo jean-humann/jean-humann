@@ -1,0 +1,10 @@
+{
+  "campaign": "I6",
+  "executed": true,
+  "scope": "New SQLGlot30.12 transpilation and live Spark versus DuckDB golden subset",
+  "timestamp_utc": "2026-10-02T13:25:05.443686+00:00",
+  "status": "failed",
+  "exception": "AssertionError",
+  "message": "[{'name': 'date_trunc', 'spark_sql': \"SELECT DATE_TRUNC('MONTH', CAST('2026-02-03 04:05:06' AS TIMESTAMP)) AS v\", 'duckdb_sql': \"SELECT DATE_TRUNC('MONTH', CAST('2026-02-03 04:05:06' AS TIMESTAMPTZ)) AS v\", 'spark': [['2026-02-01 01:00:00']], 'duckdb': [['2026-02-01 00:00:00+01:00']], 'equal': False}, {'name': 'explode', 'spark_sql': 'SELECT EXPLODE(ARRAY(1, 2, 3)) AS v', 'duckdb_sql': 'SELECT UNNEST([1, 2, 3]) AS v', 'spark': [[1], [2], [3]], 'duckdb': [[1], [2], [3]], 'equal': True}, {'name': 'collect_list', 'spark_sql': 'SELECT COLLECT_LIST(v) AS v FROM VALUES (1), (2), (NULL) AS t(v)', 'duckdb_sql': 'SELECT ARRAY_AGG(v) FILTER(WHERE v IS NOT NULL) AS v FROM (VALUES (1), (2), (NULL)) AS t(v)', 'spark': [[[1, 2]]], 'duckdb': [[[1, 2]]], 'equal': True}, {'name': 'unix_timestamp', 'spark_sql': \"SELECT UNIX_TIMESTAMP('2026-01-02 03:04:05') AS v\", 'duckdb_sql': \"SELECT EPOCH(STRPTIME('2026-01-02 03:04:05', '%Y-%m-%d %H:%M:%S')) AS v\", 'spark': [[1767323045]], 'duckdb': [[1767323045.0]], 'equal': True}, {'name': 'try_divide', 'spark_sql': 'SELECT TRY_DIVIDE(4, 0) AS v, TRY_DIVIDE(5, 2) AS w', 'duckdb_sql': 'SELECT CASE WHEN 0 <> 0 THEN 4 / 0 ELSE NULL END AS v, CASE WHEN 2 <> 0 THEN 5 / 2 ELSE NULL END AS w', 'spark': [[None, 2.5]], 'duckdb': [[None, 2.5]], 'equal': True}, {'name': 'qualify', 'spark_sql': 'SELECT v, rn FROM (SELECT v, ROW_NUMBER() OVER (ORDER BY v DESC) AS rn FROM VALUES (1), (2), (3) AS t(v)) AS _t WHERE rn = 1', 'duckdb_sql': 'SELECT v, ROW_NUMBER() OVER (ORDER BY v DESC) AS rn FROM (VALUES (1), (2), (3)) AS t(v) QUALIFY rn = 1', 'spark': [[3, 1]], 'duckdb': [[3, 1]], 'equal': True}]",
+  "seconds": 0.641
+}

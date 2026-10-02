@@ -1,0 +1,43 @@
+{
+  "date": "2026-10-02",
+  "baseline_commit": "1ca3659bc2a5c68cb4c38a7651bbd2a49808dad2",
+  "prototype_source_changed": false,
+  "preflight": {
+    "demo": "passed",
+    "pytest_passed": 10,
+    "seconds": 0.75
+  },
+  "final_check": {
+    "demo": "passed",
+    "pytest_passed": 10,
+    "seconds": 1.5
+  },
+  "new_live_bench": {
+    "probes_and_gates": 33,
+    "passed": 18,
+    "failed": 5,
+    "not_executed": 10,
+    "global_product_acceptance": false,
+    "cleanup_complete": true,
+    "final_assembled_runner_replayed": false
+  },
+  "prototype_counteraudit": {
+    "reproduced": 4,
+    "product_guarantees_passed": 0
+  },
+  "documentation": {
+    "html_documents_checked": 3,
+    "local_links_and_anchors_checked": 79,
+    "tags_balanced": true,
+    "no_external_assets": true,
+    "historical_html_01_to_07_unchanged": true,
+    "browser_visual_check": "not completed: collaborative preview returned a blank page; local HTTP returned 200"
+  },
+  "artifact_checks": {
+    "python_ast_files": 13,
+    "json_files": 39,
+    "shell_syntax": "passed",
+    "known_private_key_or_jwt_patterns": "none found",
+    "foreign_network_cleanup_refusal": "passed with a Docker test double, no infrastructure mutation"
+  }
+}

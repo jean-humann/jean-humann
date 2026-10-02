@@ -1,0 +1,6 @@
+{
+  "campaign": "INT-7",
+  "executed": false,
+  "status": "not_executed",
+  "reason": "No Kubernetes cluster or operator was accessed. Local Spark restart is not this gate."
+}

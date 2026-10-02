@@ -1,0 +1,12 @@
+/venv/
+/linux-venv/
+/spark-client-venv/
+/full-client-venv/
+/jars/
+/realm.json
+/seaweed-iam.json
+/init.sql
+/runtime.json
+/evidence/*.log
+/evidence/lakekeeper-openfga-model.json
+__pycache__/

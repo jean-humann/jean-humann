@@ -1,0 +1,6 @@
+{
+  "campaign": "INT-9",
+  "executed": false,
+  "status": "not_executed",
+  "reason": "SQLMesh compiler-only acceptance not rerun in this bench."
+}

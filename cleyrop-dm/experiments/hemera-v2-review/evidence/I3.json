@@ -1,0 +1,28 @@
+{
+  "campaign": "I3",
+  "executed": true,
+  "scope": "New live branch isolation",
+  "timestamp_utc": "2026-10-02T13:21:33.910093+00:00",
+  "details": {
+    "table": "review.i3_33ffbb41",
+    "main": [
+      {
+        "id": 0,
+        "value": "0"
+      },
+      {
+        "id": 1,
+        "value": "1"
+      }
+    ],
+    "env_dev": [
+      {
+        "id": 0,
+        "value": "0"
+      }
+    ],
+    "dev_snapshot_id": 1993221440415114229
+  },
+  "status": "passed",
+  "seconds": 2.4
+}

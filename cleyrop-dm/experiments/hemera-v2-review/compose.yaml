@@ -1,0 +1,139 @@
+name: hemera-v2-review
+x-limits: &limits
+  cpus: '1.0'
+  mem_limit: 1g
+  labels:
+    hemera-v2-review: 'true'
+x-lk-env: &lk-env
+  LAKEKEEPER__PG_ENCRYPTION_KEY: hemera-v2-review-local-only
+  LAKEKEEPER__PG_DATABASE_URL_READ: postgresql://postgres:hemera-v2-review-local-only@db:5432/lakekeeper
+  LAKEKEEPER__PG_DATABASE_URL_WRITE: postgresql://postgres:hemera-v2-review-local-only@db:5432/lakekeeper
+  LAKEKEEPER__AUTHZ_BACKEND: openfga
+  LAKEKEEPER__OPENFGA__ENDPOINT: http://openfga:8081
+  LAKEKEEPER__OPENFGA__CLIENT_ID: openfga
+  LAKEKEEPER__OPENFGA__CLIENT_SECRET: hemera-v2-review-local-only
+  LAKEKEEPER__OPENFGA__TOKEN_ENDPOINT: http://keycloak:8080/realms/hemera-v2-review/protocol/openid-connect/token
+  LAKEKEEPER__OPENID_PROVIDER_URI: http://keycloak:8080/realms/hemera-v2-review
+  LAKEKEEPER__OPENID_AUDIENCE: lakekeeper
+  RUST_LOG: info
+x-fga-env: &fga-env
+  OPENFGA_DATASTORE_ENGINE: postgres
+  OPENFGA_DATASTORE_URI: postgres://postgres:hemera-v2-review-local-only@db:5432/openfga?sslmode=disable
+  OPENFGA_DATASTORE_MAX_OPEN_CONNS: '20'
+  OPENFGA_DATASTORE_MAX_IDLE_CONNS: '10'
+services:
+  db:
+    <<: *limits
+    image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+    container_name: hemera-v2-review-db
+    environment:
+      POSTGRES_PASSWORD: hemera-v2-review-local-only
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - db:/var/lib/postgresql/data
+    ports: ['127.0.0.1:15432:5432']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 2s
+      timeout: 5s
+      retries: 30
+  keycloak:
+    <<: *limits
+    image: quay.io/keycloak/keycloak:26.7.4@sha256:82a77884f3af238beab1e7afd63b5f530e1b5c0590bd7aa60b40a40463e29b2c
+    container_name: hemera-v2-review-keycloak
+    mem_limit: 2g
+    environment:
+      KC_HOSTNAME: http://keycloak:8080
+      KC_HTTP_ENABLED: 'true'
+      JAVA_OPTS_KC_HEAP: -Xms256m -Xmx1024m
+    command: ['start-dev', '--import-realm']
+    volumes: ['./realm.json:/opt/keycloak/data/import/realm.json:ro']
+    ports: ['127.0.0.1:18080:8080']
+  openfga-migrate:
+    <<: *limits
+    image: openfga/openfga:v1.8.16@sha256:1e84deddc7c84de8344f3eb0d443c5439666198b68ac37c24fd76fd2e8c1f629
+    container_name: hemera-v2-review-openfga-migrate
+    command: migrate
+    environment: *fga-env
+    depends_on:
+      db: {condition: service_healthy}
+  openfga:
+    <<: *limits
+    image: openfga/openfga:v1.8.16@sha256:1e84deddc7c84de8344f3eb0d443c5439666198b68ac37c24fd76fd2e8c1f629
+    container_name: hemera-v2-review-openfga
+    command: run
+    environment:
+      <<: *fga-env
+      OPENFGA_PLAYGROUND_ENABLED: 'false'
+      OPENFGA_AUTHN_METHOD: oidc
+      OPENFGA_AUTHN_OIDC_ISSUER: http://keycloak:8080/realms/hemera-v2-review
+      OPENFGA_AUTHN_OIDC_AUDIENCE: openfga
+      OPENFGA_HTTP_TLS_ENABLED: 'false'
+      OPENFGA_LOG_FORMAT: json
+    depends_on:
+      openfga-migrate: {condition: service_completed_successfully}
+    ports: ['127.0.0.1:18081:8080']
+    healthcheck:
+      test: ['CMD', '/usr/local/bin/grpc_health_probe', '-addr=localhost:8081']
+      interval: 3s
+      timeout: 5s
+      retries: 30
+  storage:
+    <<: *limits
+    image: chrislusf/seaweedfs:4.36@sha256:800b2115c63236e8bd0e5d572dc25dd493dc2feed08b54a2a269dc0101c9d94a
+    container_name: hemera-v2-review-storage
+    command: ['mini', '-dir=/data', '-bucket=hemera-v2-review', '-s3.config=/etc/seaweedfs/iam.json', '-s3.iam.config=/etc/seaweedfs/iam.json']
+    volumes: ['./seaweed-iam.json:/etc/seaweedfs/iam.json:ro', 'storage:/data']
+    ports: ['127.0.0.1:18333:8333']
+  migrate:
+    <<: *limits
+    image: quay.io/lakekeeper/catalog:v0.12.0@sha256:986747c6ee580fae67aff21fc12bafe52c048c924016cf27698bcb350726617d
+    container_name: hemera-v2-review-migrate
+    command: ['migrate']
+    environment: *lk-env
+    depends_on:
+      db: {condition: service_healthy}
+      openfga: {condition: service_healthy}
+  lakekeeper:
+    <<: *limits
+    image: quay.io/lakekeeper/catalog:v0.12.0@sha256:986747c6ee580fae67aff21fc12bafe52c048c924016cf27698bcb350726617d
+    container_name: hemera-v2-review-lakekeeper
+    command: ['serve']
+    environment: *lk-env
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    ports: ['127.0.0.1:18181:8181']
+  spark:
+    <<: *limits
+    image: apache/spark:4.1.2-scala2.13-java21-python3-ubuntu@sha256:e334db9626cb9c5a3e72928c2c2f0efc668769a0b605f116afe6ea7adb38f546
+    container_name: hemera-v2-review-spark
+    profiles: ['spark']
+    cpus: '2.0'
+    mem_limit: 5g
+    environment:
+      SPARK_NO_DAEMONIZE: 'true'
+      SPARK_CONNECT_AUTHENTICATE_TOKEN: hemera-v2-review-local-only
+      PYSPARK_PYTHON: python3
+    user: '0:0'
+    command: ['/bin/bash', '/lab/scripts/start-spark.sh']
+    volumes: ['.:/lab']
+    ports: ['127.0.0.1:15003:15002']
+  client:
+    <<: *limits
+    image: python:3.12.13-slim@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36
+    container_name: hemera-v2-review-client
+    profiles: ['client']
+    mem_limit: 2g
+    environment:
+      HEMERA_INTERNAL: '1'
+      AWS_EC2_METADATA_DISABLED: 'true'
+    volumes: ['.:/lab']
+    working_dir: /lab
+volumes:
+  db:
+    labels: {hemera-v2-review: 'true'}
+  storage:
+    labels: {hemera-v2-review: 'true'}
+networks:
+  default:
+    labels: {hemera-v2-review: 'true'}

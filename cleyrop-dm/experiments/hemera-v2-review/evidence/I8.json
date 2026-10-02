@@ -1,0 +1,63 @@
+{
+  "campaign": "I8",
+  "executed": true,
+  "scope": "New Spark versus DuckDB boundary semantics samples",
+  "timestamp_utc": "2026-10-02T13:25:06.087801+00:00",
+  "details": {
+    "cases": [
+      {
+        "spark_sql": "SELECT substr('abc',0,2) AS v",
+        "duckdb_sql": "SELECT SUBSTRING('abc', 0, 2) AS v",
+        "spark": [
+          [
+            "ab"
+          ]
+        ],
+        "duckdb": [
+          [
+            "a"
+          ]
+        ],
+        "equal": false
+      },
+      {
+        "spark_sql": "SELECT 5/2 AS v, CAST(5 AS BIGINT) DIV CAST(2 AS BIGINT) AS w",
+        "duckdb_sql": "SELECT 5 / 2 AS v, TRY_CAST(5 AS BIGINT) // TRY_CAST(2 AS BIGINT) AS w",
+        "spark": [
+          [
+            2.5,
+            2
+          ]
+        ],
+        "duckdb": [
+          [
+            2.5,
+            2
+          ]
+        ],
+        "equal": true
+      },
+      {
+        "spark_sql": "SELECT CAST(NULL AS INT) IN (1,NULL) AS v, coalesce(NULL,3) AS w",
+        "duckdb_sql": "SELECT TRY_CAST(NULL AS INT) IN (1, NULL) AS v, COALESCE(NULL, 3) AS w",
+        "spark": [
+          [
+            null,
+            3
+          ]
+        ],
+        "duckdb": [
+          [
+            null,
+            3
+          ]
+        ],
+        "equal": true
+      }
+    ],
+    "all_equal_on_these_cases": false,
+    "scope": "Boundary samples, no universal SQL equivalence claim."
+  },
+  "status": "passed",
+  "seconds": 0.146
+}

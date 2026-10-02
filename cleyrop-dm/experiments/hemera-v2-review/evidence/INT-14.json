@@ -1,0 +1,6 @@
+{
+  "campaign": "INT-14",
+  "executed": false,
+  "status": "not_executed",
+  "reason": "No Trino OPA bridge, OAuth2 end-user identity, row/column permissions test."
+}

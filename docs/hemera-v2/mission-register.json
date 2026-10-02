@@ -1,0 +1,168 @@
+{
+  "date": "2026-10-02",
+  "agents": 20,
+  "max_parallel_subagents": 3,
+  "all_completed": true,
+  "missions": [
+    {
+      "id": 1,
+      "mission": "EL-4 OLake/WAP",
+      "agent": "a01_olake_wap",
+      "status": "completed",
+      "evidence_kind": "Code et sources primaires",
+      "finding": "Absence de branche dans le contrat writer, état global de table et ack interne. Décision Go + writer/publisher Rust."
+    },
+    {
+      "id": 2,
+      "mission": "Inventaire JVM",
+      "agent": "a02_java_inventory",
+      "status": "completed",
+      "evidence_kind": "Code",
+      "finding": "Six services Kotlin et dépendances tierces, notebooks, migrateur et builds ; Spark Connect déjà intégré, Lighter désactivé."
+    },
+    {
+      "id": 3,
+      "mission": "Icegres",
+      "agent": "a03_icegres_core",
+      "status": "completed",
+      "evidence_kind": "Code et dépendances",
+      "finding": "Core de commit réutilisable ; receipt perdu en Flight, pins/authz incomplets, tail incompatible et capacités à qualifier par opération."
+    },
+    {
+      "id": 4,
+      "mission": "Eidos",
+      "agent": "a04_eidos_semantics",
+      "status": "completed",
+      "evidence_kind": "Code",
+      "finding": "Compilateur et objets à conserver ; registre actif, choix du snapshot, actions et projections à aligner sur les éditions."
+    },
+    {
+      "id": 5,
+      "mission": "Identité et politique",
+      "agent": "a05_identity_policy",
+      "status": "completed",
+      "evidence_kind": "Code et sources primaires",
+      "finding": "IAM Rust, candidat IdP sans JVM, distinction table/édition, révocation et accès médiés aux octets."
+    },
+    {
+      "id": 6,
+      "mission": "Flows",
+      "agent": "a06_flows_control",
+      "status": "completed",
+      "evidence_kind": "Code",
+      "finding": "Manifestes déjà présents ; fencing au commit, annulation avant publication et journal durable de contrôle nécessaires."
+    },
+    {
+      "id": 7,
+      "mission": "Éditions et manifestes",
+      "agent": "a07_editions_manifests",
+      "status": "completed",
+      "evidence_kind": "Code et spécifications",
+      "finding": "Contrats Rust, source(), origin.* dès création, neuf kinds et release Iceberg multi-sorties."
+    },
+    {
+      "id": 8,
+      "mission": "EL/CDC",
+      "agent": "a08_el_cdc",
+      "status": "completed",
+      "evidence_kind": "Code et protocole PostgreSQL",
+      "finding": "CTID/bootstrap, transactions complètes, TRUNCATE, ordre intra-transaction et tickets EL actualisés."
+    },
+    {
+      "id": 9,
+      "mission": "Flux et brokers",
+      "agent": "a09_streams",
+      "status": "completed",
+      "evidence_kind": "Sources primaires",
+      "finding": "JetStream/Redpanda candidats, durabilité disque, rétention, epochs et limites des reprises industrielles."
+    },
+    {
+      "id": 10,
+      "mission": "Files",
+      "agent": "a10_files",
+      "status": "completed",
+      "evidence_kind": "Code",
+      "finding": "Autorité PG et clés UUID actuelles ; index FILESET Iceberg, reprise des uploads et GC reconstructible."
+    },
+    {
+      "id": 11,
+      "mission": "ML et embeddings",
+      "agent": "a11_ml_embeddings",
+      "status": "completed",
+      "evidence_kind": "Code et sources primaires",
+      "finding": "Contrôle/données déjà séparés au proxy IA ; vecteurs par édition, compteurs confidentiels, modèles et features gouvernés."
+    },
+    {
+      "id": 12,
+      "mission": "Calcul sans JVM",
+      "agent": "a12_compute",
+      "status": "completed",
+      "evidence_kind": "Sources primaires et code",
+      "finding": "Ballista candidat distribué, Sail variante distincte, DuckDB exécutant borné ; aucune parité générale acquise."
+    },
+    {
+      "id": 13,
+      "mission": "SDK et tiers",
+      "agent": "a13_sdk_tools",
+      "status": "completed",
+      "evidence_kind": "Code et sources primaires",
+      "finding": "Compilation isolée, CTAS/hooks qualifiés, états tiers dérivés et compatibilité explicite des adaptateurs."
+    },
+    {
+      "id": 14,
+      "mission": "Frontend/API",
+      "agent": "a14_frontend_api",
+      "status": "completed",
+      "evidence_kind": "Code et design",
+      "finding": "30 écrans conservés ; receipts, ACK_PENDING, pins, reprise SSE et suppression du bypass de veto."
+    },
+    {
+      "id": 15,
+      "mission": "Exploitation",
+      "agent": "a15_sovereign_ops",
+      "status": "completed",
+      "evidence_kind": "Code",
+      "finding": "Conserver digests/SBOM/signatures, étendre migrations SQL Rust, qualifier airgap et architectures natives."
+    },
+    {
+      "id": 16,
+      "mission": "Résilience",
+      "agent": "a16_resilience",
+      "status": "completed",
+      "evidence_kind": "Code et analyse",
+      "finding": "Rollback distinct des acks ; huit campagnes DR proposées, couverture WAL et autorisations restaurées à vérifier."
+    },
+    {
+      "id": 17,
+      "mission": "Campagnes réelles",
+      "agent": "a17_live_campaigns",
+      "status": "completed",
+      "evidence_kind": "Exécution Docker locale",
+      "finding": "33 sondes/gates, dont lecture staging reproduite, TTL intégré refusé et parité SQL incomplète ; banc nettoyé."
+    },
+    {
+      "id": 18,
+      "mission": "Écarts prototype",
+      "agent": "a18_prototype",
+      "status": "completed",
+      "evidence_kind": "Code",
+      "finding": "Neuf écarts d’implémentation et quatre lots de rapprochement, sans prétendre les corriger dans cette étude."
+    },
+    {
+      "id": 19,
+      "mission": "Contre-audit",
+      "agent": "a19_counteraudit",
+      "status": "completed",
+      "evidence_kind": "Exécution locale",
+      "finding": "Quatre contre-exemples du prototype reproduits sur données temporaires."
+    },
+    {
+      "id": 20,
+      "mission": "Revue transverse",
+      "agent": "a20_crossreview",
+      "status": "completed",
+      "evidence_kind": "Revue et contrôles locaux",
+      "finding": "Contrats et preuves relus ; gardes Compose/nettoyage corrigées, syntaxe et absence de secrets vérifiées."
+    }
+  ]
+}

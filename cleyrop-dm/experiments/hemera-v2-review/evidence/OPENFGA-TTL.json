@@ -1,0 +1,29 @@
+{
+  "campaign": "OPENFGA-TTL",
+  "executed": true,
+  "scope": "Real standalone OpenFGA condition, not INT-5 acceptance",
+  "timestamp_utc": "2026-10-02T13:21:46.722487+00:00",
+  "details": {
+    "isolated_store": "01M3YCEB79HKBJTPM0BKRNZX8V",
+    "checks": [
+      {
+        "current_time": "2026-10-02T11:59:59Z",
+        "allowed": true,
+        "resolution": ""
+      },
+      {
+        "current_time": "2026-10-02T12:00:00Z",
+        "allowed": false,
+        "resolution": ""
+      },
+      {
+        "current_time": "2026-10-02T12:00:01Z",
+        "allowed": false,
+        "resolution": ""
+      }
+    ],
+    "scope": "Real OpenFGA CEL condition with explicit supplied timestamps. Not Lakekeeper TTL integration or wall-clock expiry. Native Lakekeeper model has no conditions; no reconciler purge was tested."
+  },
+  "status": "passed",
+  "seconds": 0.022
+}

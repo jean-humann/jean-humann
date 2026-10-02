@@ -1,0 +1,51 @@
+[
+  {
+    "tag": "quay.io/lakekeeper/catalog:v0.12.0",
+    "digest": "sha256:986747c6ee580fae67aff21fc12bafe52c048c924016cf27698bcb350726617d",
+    "image_id": "sha256:eb13bfab06520716e8f2f91f2d98f8a1f5493b0f36b498c9f5954e6859e7f2f5",
+    "architecture": "arm64",
+    "created": "2026-04-03T08:54:00.587322368Z"
+  },
+  {
+    "tag": "openfga/openfga:v1.8.16",
+    "digest": "sha256:1e84deddc7c84de8344f3eb0d443c5439666198b68ac37c24fd76fd2e8c1f629",
+    "image_id": "sha256:6bfaecb9116ef632ab0254dbc6310865f983e3c547842e6db246f8b3e8ab2240",
+    "architecture": "arm64",
+    "created": "2025-06-17T10:49:16.189367022Z"
+  },
+  {
+    "tag": "apache/spark:4.1.2-scala2.13-java21-python3-ubuntu",
+    "digest": "sha256:e334db9626cb9c5a3e72928c2c2f0efc668769a0b605f116afe6ea7adb38f546",
+    "image_id": "sha256:1b8a099a60ea10575597fae8a4c1cbe275bf86c52f6d3a69da1d915bebf8718f",
+    "architecture": "arm64",
+    "created": "2026-05-21T22:06:34.353251Z"
+  },
+  {
+    "tag": "chrislusf/seaweedfs:4.36",
+    "digest": "sha256:800b2115c63236e8bd0e5d572dc25dd493dc2feed08b54a2a269dc0101c9d94a",
+    "image_id": "sha256:aa6fa9c5a284c19dcf9f44d86d9dde58b2f367dcedc2475336b091ed98ea2dbc",
+    "architecture": "arm64",
+    "created": "2026-06-25T05:36:25.01027495Z"
+  },
+  {
+    "tag": "python:3.12.13-slim",
+    "digest": "sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36",
+    "image_id": "sha256:0445c02b019cf3f9d61bac90acaac8e2d37ae6991b3384bd9d75fec93bcdfe98",
+    "architecture": "arm64",
+    "created": "2026-08-05T01:19:20.281993732Z"
+  },
+  {
+    "tag": "postgres:16-alpine",
+    "digest": "sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea",
+    "image_id": "sha256:ef738a34a8651d11b2bace81c55c7e2187f786b484add6c83070884340074368",
+    "architecture": "arm64",
+    "created": "2026-09-17T21:33:33.594772508Z"
+  },
+  {
+    "tag": "quay.io/keycloak/keycloak:26.7.4",
+    "digest": "sha256:82a77884f3af238beab1e7afd63b5f530e1b5c0590bd7aa60b40a40463e29b2c",
+    "image_id": "sha256:dc0f6a6c61f4170f154b6dd89dfc160c839fd24989d2c798af2a7072498bfbac",
+    "architecture": "arm64",
+    "created": "2026-09-16T14:47:03.136454382Z"
+  }
+]

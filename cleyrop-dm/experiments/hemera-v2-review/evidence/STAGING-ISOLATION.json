@@ -1,0 +1,40 @@
+{
+  "campaign": "STAGING-ISOLATION",
+  "executed": true,
+  "status": "failed",
+  "timestamp_utc": "2026-10-02T13:29:07.363315+00:00",
+  "scope": "P0 unpublished rows must be invisible to ordinary dataset readers",
+  "details": {
+    "table": "review.staging_privacy_ac7fcbc7",
+    "reader_grant": "select on this table only",
+    "published_main": [
+      {
+        "id": 0,
+        "value": "0"
+      }
+    ],
+    "unpublished_staging": [
+      {
+        "id": -99,
+        "value": "AUDIT_VETO_PAYLOAD"
+      },
+      {
+        "id": 0,
+        "value": "0"
+      }
+    ],
+    "read_snapshot_id_after_veto": [
+      {
+        "id": -99,
+        "value": "AUDIT_VETO_PAYLOAD"
+      },
+      {
+        "id": 0,
+        "value": "0"
+      }
+    ],
+    "staging_snapshot_id": 4205293617191636388,
+    "ordinary_reader_saw_unpublished_payload": true,
+    "scope": "Real OIDC reader, native OpenFGA select, Lakekeeper metadata and S3 remote signing; no storage credentials in client. Main remains unchanged but staging is readable within the same table."
+  }
+}

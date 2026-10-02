@@ -1,0 +1,20 @@
+{
+  "campaign": "WAP-VETO",
+  "executed": true,
+  "scope": "New live blocking audit before publication",
+  "timestamp_utc": "2026-10-02T13:21:39.635168+00:00",
+  "details": {
+    "table": "review.veto_33ffbb41",
+    "blocking_audit_passed": false,
+    "published_snapshot_unchanged": 3009190493782388539,
+    "published_rows": [
+      {
+        "id": 0,
+        "value": "0"
+      }
+    ],
+    "staging_ref_removed": true
+  },
+  "status": "passed",
+  "seconds": 2.289
+}

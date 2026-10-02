@@ -1,0 +1,60 @@
+{
+  "campaign": "INT-1",
+  "executed": true,
+  "status": "failed",
+  "timestamp_utc": "2026-10-02T13:27:51.077085+00:00",
+  "scope": "Strict Arrow schema/value comparison, explicit UTC client/server and DuckDB, three boundary queries",
+  "details": [
+    {
+      "spark_sql": "SELECT DATE_TRUNC('MONTH', CAST('2026-02-03 04:05:06' AS TIMESTAMP)) AS v",
+      "duckdb_sql": "SELECT DATE_TRUNC('MONTH', CAST('2026-02-03 04:05:06' AS TIMESTAMPTZ)) AS v",
+      "spark_schema": "v: timestamp[us, tz=UTC]",
+      "duckdb_schema": "v: timestamp[us, tz=UTC]",
+      "spark_rows": [
+        {
+          "v": "2026-02-01 00:00:00+00:00"
+        }
+      ],
+      "duckdb_rows": [
+        {
+          "v": "2026-02-01 00:00:00+00:00"
+        }
+      ],
+      "arrow_equal": true
+    },
+    {
+      "spark_sql": "SELECT UNIX_TIMESTAMP('2026-01-02 03:04:05') AS v",
+      "duckdb_sql": "SELECT EPOCH(STRPTIME('2026-01-02 03:04:05', '%Y-%m-%d %H:%M:%S')) AS v",
+      "spark_schema": "v: int64 not null",
+      "duckdb_schema": "v: double",
+      "spark_rows": [
+        {
+          "v": 1767323045
+        }
+      ],
+      "duckdb_rows": [
+        {
+          "v": 1767323045.0
+        }
+      ],
+      "arrow_equal": false
+    },
+    {
+      "spark_sql": "SELECT SUBSTRING('abc', 0, 2) AS v",
+      "duckdb_sql": "SELECT SUBSTRING('abc', 0, 2) AS v",
+      "spark_schema": "v: string not null",
+      "duckdb_schema": "v: string",
+      "spark_rows": [
+        {
+          "v": "ab"
+        }
+      ],
+      "duckdb_rows": [
+        {
+          "v": "a"
+        }
+      ],
+      "arrow_equal": false
+    }
+  ]
+}

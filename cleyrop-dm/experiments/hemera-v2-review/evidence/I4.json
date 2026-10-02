@@ -1,0 +1,47 @@
+{
+  "campaign": "I4",
+  "executed": true,
+  "scope": "Branch upsert, prepublication isolation and origin summary",
+  "timestamp_utc": "2026-10-02T13:22:30.215097+00:00",
+  "details": {
+    "table": "review.i4_74c19755",
+    "upsert_result": "UpsertResult(rows_updated=1, rows_inserted=0)",
+    "published_snapshot": 2901205730870774911,
+    "summary": {
+      "operation": "append",
+      "origin.cursor": "synthetic-lsn:42",
+      "origin.run_id": "74c19755",
+      "added-records": "1",
+      "added-files-size": "940",
+      "added-data-files": "1",
+      "origin.state": "{\"offset\":42}",
+      "total-files-size": "940",
+      "total-delete-files": "0",
+      "total-data-files": "1",
+      "total-records": "1",
+      "total-position-deletes": "0",
+      "total-equality-deletes": "0",
+      "origin.provenance": "hemera-v2-review/synthetic-source"
+    },
+    "before": [
+      {
+        "id": 0,
+        "value": "0"
+      }
+    ],
+    "after": [
+      {
+        "id": 0,
+        "value": "updated"
+      }
+    ],
+    "state_recovered_from_published_snapshot": {
+      "origin.cursor": "synthetic-lsn:42",
+      "origin.state": "{\"offset\":42}",
+      "origin.provenance": "hemera-v2-review/synthetic-source",
+      "origin.run_id": "74c19755"
+    }
+  },
+  "status": "passed",
+  "seconds": 2.7
+}

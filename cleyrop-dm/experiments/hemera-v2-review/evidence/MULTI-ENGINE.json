@@ -1,0 +1,32 @@
+{
+  "campaign": "MULTI-ENGINE",
+  "executed": true,
+  "scope": "New same-table PyIceberg and Spark through authenticated Lakekeeper",
+  "timestamp_utc": "2026-10-02T13:25:06.263261+00:00",
+  "details": {
+    "table": "review.review.i3_33ffbb41",
+    "spark_rows": [
+      {
+        "id": 0,
+        "value": "0"
+      },
+      {
+        "id": 1,
+        "value": "1"
+      }
+    ],
+    "pyiceberg_rows": [
+      {
+        "id": 0,
+        "value": "0"
+      },
+      {
+        "id": 1,
+        "value": "1"
+      }
+    ],
+    "scope": "Same Iceberg v2 table read through Lakekeeper and remote signing; no schema transition yet."
+  },
+  "status": "passed",
+  "seconds": 1.819
+}

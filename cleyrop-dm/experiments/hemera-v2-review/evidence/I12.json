@@ -1,0 +1,98 @@
+{
+  "campaign": "I12",
+  "executed": true,
+  "scope": "New real PostgreSQL SKIP LOCKED / dependencies / lease / stale completion test",
+  "timestamp_utc": "2026-10-02T13:24:16.480932+00:00",
+  "details": {
+    "schema": "review_1139a536",
+    "events": [
+      {
+        "kind": "lease_then_abandon",
+        "worker": "dead-worker",
+        "id": 1,
+        "attempt": 1
+      },
+      {
+        "kind": "lease",
+        "worker": "w1",
+        "id": 2,
+        "attempt": 1,
+        "started_at": "2026-10-02 13:24:16.529564+00:00"
+      },
+      {
+        "kind": "lease",
+        "worker": "w3",
+        "id": 3,
+        "attempt": 1,
+        "started_at": "2026-10-02 13:24:16.530103+00:00"
+      },
+      {
+        "kind": "lease",
+        "worker": "w3",
+        "id": 1,
+        "attempt": 2,
+        "started_at": "2026-10-02 13:24:17.719347+00:00"
+      },
+      {
+        "kind": "lease",
+        "worker": "w3",
+        "id": 4,
+        "attempt": 1,
+        "started_at": "2026-10-02 13:24:17.821782+00:00"
+      },
+      {
+        "kind": "lease",
+        "worker": "w1",
+        "id": 5,
+        "attempt": 1,
+        "started_at": "2026-10-02 13:24:17.918613+00:00"
+      }
+    ],
+    "jobs": [
+      {
+        "id": 1,
+        "name": "source_b",
+        "state": "SUCCEEDED",
+        "attempt": 2,
+        "started_at": "2026-10-02 13:24:17.719347+00:00",
+        "finished_at": "2026-10-02 13:24:17.814751+00:00"
+      },
+      {
+        "id": 2,
+        "name": "source_a",
+        "state": "SUCCEEDED",
+        "attempt": 1,
+        "started_at": "2026-10-02 13:24:16.529564+00:00",
+        "finished_at": "2026-10-02 13:24:16.622912+00:00"
+      },
+      {
+        "id": 3,
+        "name": "independent",
+        "state": "SUCCEEDED",
+        "attempt": 1,
+        "started_at": "2026-10-02 13:24:16.530103+00:00",
+        "finished_at": "2026-10-02 13:24:16.626302+00:00"
+      },
+      {
+        "id": 4,
+        "name": "transform",
+        "state": "SUCCEEDED",
+        "attempt": 1,
+        "started_at": "2026-10-02 13:24:17.821782+00:00",
+        "finished_at": "2026-10-02 13:24:17.914043+00:00"
+      },
+      {
+        "id": 5,
+        "name": "output",
+        "state": "SUCCEEDED",
+        "attempt": 1,
+        "started_at": "2026-10-02 13:24:17.918613+00:00",
+        "finished_at": "2026-10-02 13:24:18.009493+00:00"
+      }
+    ],
+    "stale_worker_completion_rows": 0,
+    "scope": "Synthetic queue SQL with real PG16.15, three worker threads, committed lease abandonment, lease recovery and fencing of completion. No claim of exactly-once side effects."
+  },
+  "status": "passed",
+  "seconds": 1.59
+}

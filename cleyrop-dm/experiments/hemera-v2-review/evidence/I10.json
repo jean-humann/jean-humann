@@ -1,0 +1,34 @@
+{
+  "campaign": "I10",
+  "executed": true,
+  "scope": "New Spark Connect4.1.2 SQL Arrow closure and unsupported API checks",
+  "timestamp_utc": "2026-10-02T13:25:01.158843+00:00",
+  "details": {
+    "server_version": "4.1.2",
+    "client_type": "<class 'pyspark.sql.connect.session.SparkSession'>",
+    "arrow": [
+      {
+        "k": 1,
+        "total": 5
+      },
+      {
+        "k": 2,
+        "total": 7
+      }
+    ],
+    "closure_results": [
+      7,
+      8,
+      9
+    ],
+    "sparkContext": {
+      "type": "PySparkAttributeError",
+      "message": "[JVM_ATTRIBUTE_NOT_SUPPORTED] Attribute `sparkContext` is not supported in Spark Connect as it depends on the JVM. If you need to use this attribute, do not use Spark Connect when creating your session. Visit https://spark.apache.org/docs/latest/sql-getting-started.html#starting-point-sparksession for creating regular Spark Session in detail."
+    },
+    "python_client": "3.10.19 (main, Feb 12 2026, 00:36:33) [Clang 21.1.4 ]",
+    "server_python": "3.10.12",
+    "transport_auth": "Synthetic static bearer token; not JWT per user"
+  },
+  "status": "passed",
+  "seconds": 2.28
+}
