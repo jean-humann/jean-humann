@@ -1,0 +1,1819 @@
+{
+  "mission": "02-dev-process",
+  "scope": "Audit statique détaillé de services/data-dev et services/process-data au commit ba0f34e732e582fc362933b8e55544af04208cb8. Les cibles et scénarios sont des propositions pour Hemera v2, zéro JVM final.",
+  "validation": {
+    "observed": "Lecture des contrôleurs, handlers métier, agrégats, adaptateurs Gitea, S3 et app-management, échanges Protobuf/Kafka, stockage JPA, migrations et charts. Les références indiquent le début du comportement décrit.",
+    "tested": "Aucun build, test, service, conteneur ou parcours réseau exécuté. La présence de tests dans les sources ne vaut pas résultat de qualification.",
+    "target": "Contrats proposés, soumis aux campagnes de compatibilité et de panne. Les workers ne reçoivent pas de droit REST générique table.modify. Writer et Publisher restent des services de confiance distincts.",
+    "indeterminate": "Versions réellement déployées, options de chart activées, données historiques et comportement en cluster non observés. Aucun secret, contenu utilisateur ou paramètre client reproduit."
+  },
+  "services": [
+    {
+      "id": "data-dev",
+      "title": "Développement et versionnement des flows",
+      "purpose": "Service des développeurs et administrateurs de projet. Il conserve les graphes, branches et versions de définition, produit les scripts exécutables, prépare les accès aux datasets et relie projets, Git, notebooks, modules et notifications. Il conserve aussi des fonctions de projets désormais en transition vers IAM.",
+      "stack": "Kotlin 2.4.10, Spring Boot 4.1.1 et JVM 21 observés dans Gradle. Domaines CQRS, JPA/PostgreSQL, Flyway, Kafka/Protobuf, JGraphT, génération Python/SQL/PySpark, S3 et REST Gitea/IAM/Jupyter.",
+      "source_dir": "services/data-dev",
+      "read_scope": [
+        "Contrôleurs project, definition, branch, version, internalmodule, dataset, favorite et schedule.",
+        "Handlers des créations et mises à jour de projets, offboarding, graphes, sauvegarde, publication, preview, branches, MR et résolution.",
+        "ScriptGeneratorServiceImpl, calcul des schémas, conversion Protobuf des versions et adaptateur DataflowForLibServiceImpl.",
+        "Agrégats Version, DataflowDefinition, DataflowBranch, variables, modules et miroirs datasets.",
+        "Adaptateur Gitea, intégration notebooks, visibilité IAM, chiffrement SSH, outbox, DLT, run modes et manifestes Gradle/Helm."
+      ],
+      "capabilities": [
+        {
+          "id": "DD-01",
+          "title": "Projets, espaces personnels et compatibilité avec IAM",
+          "observed": "Les routes historiques listent les projets avec recherche, tri, pagination, filtre onlyMine et inclusion des espaces personnels. La visibilité du demandeur passe par une décision IAM avant restitution. Les réponses exposent la correspondance avec les identifiants IAM et des en-têtes de dépréciation. La création valide manager et slug, crée les applications initiales et émet les événements projet. Un mode de passage par IAM écrit d'abord le projet central puis le miroir local. PATCH /projects/{id} répond 410. La suppression est rejouable si un tombstone prouve une suppression antérieure. Un espace SINGLE exige une règle particulière d'administration pour sa suppression et sa création est conditionnée au profil utilisateur.",
+          "actors": "Développeur, responsable de projet, administrateur d’organisation et IAM.",
+          "api": "GET/POST /projects ; GET/DELETE/PATCH /projects/{id} ; GET /projects/exists ; POST /projects/list ; GET /projects/personal-space ; GET /users/{id}/projects ; GET /kpi/projects.",
+          "state": "Project et ProjectMember en PostgreSQL, visibilité PUBLIC ou SINGLE, nom historique et identifiant IAM canonique. Initialisation des applications et enregistrement de compte de service peuvent prolonger le cycle après création.",
+          "dependencies": "IAM par le pont d’écriture et décisions de visibilité ; événements vers consommateurs de projets ; applications Gitea/Jupyter ; enregistrement IAM du compte de service.",
+          "target": "IAM Rust possède les projets, adhésions, identifiants et espaces personnels. Flows ne garde que la référence canonique nécessaire aux graphes. Applications prend en charge les effets de provisionnement, avec reçus persistants.",
+          "migration": "Importer les correspondances legacy/IAM, inventorier les appelants des routes dépréciées, puis fournir une façade temporaire. Déplacer les effets applicatifs dans une procédure de provisionnement reprise sur incident avant de supprimer les tables miroir devenues inutiles.",
+          "acceptance": "Créer un projet avec membres, interrompre le provisionnement Gitea puis reprendre. IAM garde un seul projet, les applications finissent par converger et la façade restitue le même identifiant. Un utilisateur sans droit de lecture ne modifie ni les lignes ni le total visible d’une page.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/project/controller/ProjectController.kt",
+              "line": 60,
+              "why": "Routes, canonicalisation, dépréciation et arrêt du PATCH."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/project/command/handler/CreateProjectWithMembersCommandHandler.kt",
+              "line": 48,
+              "why": "Pont IAM avant création locale et membres."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/project/command/handler/DeleteProjectCommandHandler.kt",
+              "line": 33,
+              "why": "Idempotence de suppression et invariant SINGLE."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/project/service/ProjectVisibilityService.kt",
+              "line": 16,
+              "why": "Filtrage par décision centrale."
+            }
+          ]
+        },
+        {
+          "id": "DD-02",
+          "title": "Miroirs d’identité, membres et départ d’un utilisateur",
+          "observed": "Les événements utilisateurs, groupes, abonnements et membres alimentent des miroirs locaux et les effets applicatifs. Lors d’une désactivation, les flows du membre et les projets dont il était manager peuvent être réaffectés. Lors d’une suppression, l’espace personnel peut être supprimé, les adhésions ordinaires retirées et les propriétaires remplacés. L’absence de remplaçant ne crée pas de nouveau propriétaire implicite. Le nettoyage Git vérifie l’identité du compte par email avant verrouillage. Une erreur Git laisse le miroir révoqué mais le compte distant inchangé et incrémente un compteur. Les rôles historiques servent encore à certaines règles métier de provisioning et d’éligibilité, même si la décision d’accès des routes est centrale.",
+          "actors": "IAM, administrateurs et consommateurs des événements de lifecycle.",
+          "api": "OnUserDeactivatedCommandHandler ; OnUserDeletedCommandHandler ; ReapUserFootprintCommandHandler ; événements de membres et d’identité. GET /projects/{id}/members ; GET /users/{id}/check-owner.",
+          "state": "User, groupes, abonnements et ProjectMember en miroir ; propriétaires de projets/flows ; états des applications ; compte Git distant verrouillable.",
+          "dependencies": "Flux IAM ou legacy, événements de transfert de propriétaire, Gitea et applications du projet.",
+          "target": "IAM Rust émet des événements versionnés et ordonnés par identité. Flows et Applications appliquent des changements idempotents. L’offboarding devient une opération suivie jusqu’aux reçus des effets distants.",
+          "migration": "Reprendre chaque règle de transfert, conserver les références historiques d’auteur et ne pas assimiler désactivation à effacement. Introduire une file de réconciliation du verrouillage Git, car le chemin lu signale l’échec sans réparateur automatique.",
+          "acceptance": "Désactiver le propriétaire pendant une indisponibilité Gitea. Les nouveaux accès et runs sont refusés, l’historique reste attribué, le transfert décidé par IAM est appliqué une seule fois et un effet de verrouillage non terminé reste visible jusqu’à son acquittement.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/project/command/handler/OnUserDeactivatedCommandHandler.kt",
+              "line": 35,
+              "why": "Ordre de réaffectation des flows puis managers."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/project/command/handler/OnUserDeletedCommandHandler.kt",
+              "line": 34,
+              "why": "Espace personnel, adhésions et transfert."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/project/command/handler/ReapUserFootprintCommandHandler.kt",
+              "line": 76,
+              "why": "Vérification du compte Git et échec observé sans réconciliation."
+            }
+          ]
+        },
+        {
+          "id": "DD-03",
+          "title": "Dépôts Gitea, comptes Git et clés SSH",
+          "observed": "L’initialisation d’une application Gitea crée un état WAITING et émet une commande asynchrone. L’adaptateur sait assurer l’organisation, créer/supprimer un dépôt, migrer un dépôt, gérer les collaborateurs, créer/retrouver des comptes et verrouiller leur connexion. La résolution d’un login existant tient compte du login conservé et de l’email. Le retrait d’un collaborateur peut refaire la résolution si le serveur ne connaît plus le login stocké. Les viewers et business analysts sont exclus de certains effets de collaboration. Les clés SSH locales portent un convertisseur de chiffrement et une procédure de rechiffrement existe. Ces dépôts de projet ne sont pas les branches de graphes métier, conservées en base.",
+          "actors": "Membres techniques du projet et opérateurs de migration Git.",
+          "api": "InitGitCommandHandler ; CreateGitRepositoryCommandHandler ; EditGitMemberCommandHandler ; GitCrudService ; GiteaCrudServiceImpl. Pas de préfixe public Git inventé.",
+          "state": "Application GITEA avec statut de provisioning, login Git dans le miroir utilisateur, dépôt/collaborateurs distants et SSHKey chiffrée en PostgreSQL.",
+          "dependencies": "REST Gitea, événements d’applications, utilisateurs/membres et chiffrement partagé avec l’infrastructure existante.",
+          "target": "Applications Rust encapsule Gitea, tiers Go compatible avec la cible zéro JVM. IAM possède l’identité. Flows référence un commit de code ou un artefact immuable quand un run dépend d’un dépôt.",
+          "migration": "Séparer l’adaptateur Git du compilateur de graphes. Migrer les clés par une procédure contrôlée sans valeurs dans les exports. Conserver les identifiants de comptes et reçus de provisionnement pour éviter les créations concurrentes.",
+          "acceptance": "Rejouer deux fois la création d’application puis renommer un compte distant. Un seul dépôt et un seul compte sont liés au projet ; la suppression d’adhésion retire le bon collaborateur. Une identité Git non prouvée produit un échec explicite et aucun verrouillage d’un tiers.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/project/command/handler/InitGitCommandHandler.kt",
+              "line": 31,
+              "why": "Application WAITING et événement de création."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/project/command/handler/EditGitMemberCommandHandler.kt",
+              "line": 32,
+              "why": "Éligibilité, provisioning et retrait avec nouvelle résolution."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/project/service/gitea/GiteaCrudServiceImpl.kt",
+              "line": 45,
+              "why": "Adaptateur REST organisation, dépôts et comptes."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/project/repository/user/SSHKeyDAO.kt",
+              "line": 19,
+              "why": "Convertisseur de chiffrement de la clé."
+            }
+          ]
+        },
+        {
+          "id": "DD-04",
+          "title": "Provisionnement des notebooks et contexte de projet",
+          "observed": "NotebookUseCase initialise une application JUPYTER, soit immédiatement soit par événement. Avant de provisionner, il vérifie que l’application et le projet existent encore pour éviter de recréer un projet supprimé pendant la file d’attente. Il initialise ensuite manager et membres. Les erreurs métier de reprise donnent RETRY, les autres ERROR. La route de lien calcule l’URL par utilisateur et slug du projet. La route d’informations destinée au notebook vérifie la permission centrale de création, la visibilité du projet et retourne le contexte utilisateur/projet/Git. Le paramètre applicationName de cette dernière route n’est pas le mécanisme de sélection du projet dans le handler lu.",
+          "actors": "Utilisateur ouvrant un notebook, IAM et service d’applications.",
+          "api": "GET /projects/{projectId}/notebooks/link ; GET /users/me/application/{applicationName}/{projectSlug} ; NotebookUseCase.createNotebook.",
+          "state": "Application JUPYTER et statuts WAITING, RETRY ou ERROR ; associations aux membres ; contexte référencé depuis PostgreSQL.",
+          "dependencies": "ApplicationServiceJupyter, événements d’applications, décisions IAM et dépôt Gitea du projet.",
+          "target": "Applications et Runtimes Rust gèrent le lancement et les quotas ; l’interface notebook peut rester Python/TypeScript. Chaque accès aux données passe par les contrats Query/Writer associés au projet et au run, sans session Spark finale.",
+          "migration": "Préserver les liens, volumes et attribution des notebooks. Remplacer le contexte de credentials ambiants par une délégation courte et bornée. Retirer les chemins Spark Connect seulement après qualification du SDK utilisateur de remplacement.",
+          "acceptance": "Supprimer un projet entre l’émission et le traitement du provisioning. Aucun notebook ne réapparaît. Ouvrir un notebook autorisé fournit le bon contexte canonique et les accès au stockage expirent après révocation du run.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/project/usecase/NotebookUseCase.kt",
+              "line": 101,
+              "why": "Provisionnement vérifié puis RETRY/ERROR."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/project/query/handler/GetApplicationInfoQueryHandler.kt",
+              "line": 24,
+              "why": "Visibilité du projet et contexte Git."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/project/controller/UserController.kt",
+              "line": 77,
+              "why": "Décision IAM de création de notebook."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/project/controller/ProjectNotebookController.kt",
+              "line": 33,
+              "why": "Route du lien personnalisé."
+            }
+          ]
+        },
+        {
+          "id": "DD-05",
+          "title": "Découverte des flows, versions, KPI et favoris",
+          "observed": "Les contrôleurs offrent listes de flows par projet et cluster, détail avec branche/version, métadonnées, sorties, état avant publication, historique des versions et dernier script exécuté d’une transformation. Les versions ont des actions visibles ou cachées, notamment collecte, suppression, preview et retouche de colonnes. Les KPI de projets distinguent SINGLE et PUBLIC. Le favori est une association propre à l’utilisateur, idempotente à l’ajout, et émet un événement de création/suppression. L’ajout exige la visibilité de la cible si le point d’entrée n’a pas déjà imposé l’autorisation de gateway.",
+          "actors": "Développeur, frontends et administrateur.",
+          "api": "GET /dataflows ; GET /dataflows/list ; GET /dataflows/clusters/{clusterId} ; GET /dataflows/{id} ; GET /dataflows/{id}/metadata ; GET /dataflows/{id}/outputs ; GET /dataflows/{id}/branches/{branchName}/versions ; GET /kpi/dataflows ; POST /users/favorite.",
+          "state": "Définitions, branches, versions, miroir d’exécutions et favoris en PostgreSQL. Les actions techniques ont un indicateur unshown ; elles ne doivent pas être perdues à cause du filtrage d’interface.",
+          "dependencies": "Miroirs process-data pour l’exécution ; Notifications pour les favoris et abonnements ; IAM/gateway pour la visibilité.",
+          "target": "Flows Rust expose les contrats de recherche et l’historique des définitions. Audit conserve les opérations techniques. Frontends garde les vues distinctes entre versions de définition, runs et éditions de données approuvées.",
+          "migration": "Construire une matrice de champs, ordres, pagination et filtrage pour chaque route. Importer l’historique caché avec son type d’origine. Migrer les favoris sans les convertir en droits persistants.",
+          "acceptance": "Comparer les pages et filtres sur un jeu comportant plusieurs branches, versions cachées et projets non visibles. Les totaux restent cohérents. Un favori ajouté deux fois ne crée qu’une relation et ne redonne pas accès après révocation.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/controller/DataflowGetterController.kt",
+              "line": 77,
+              "why": "Parcours de lecture et sorties."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/version/aggregate/Version.kt",
+              "line": 19,
+              "why": "Actions de version et visibilité."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/favorite/command/UserCreateFavoriteCommandHandler.kt",
+              "line": 37,
+              "why": "Idempotence et décision de visibilité des favoris."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/version/controller/VersionController.kt",
+              "line": 26,
+              "why": "Historique par branche."
+            }
+          ]
+        },
+        {
+          "id": "DD-06",
+          "title": "Sauvegarde de graphes et concurrence d’édition",
+          "observed": "POST /dataflows crée ou sauvegarde un flow. À la création, owner doit désigner l’appelant. À la sauvegarde, le handler charge le flow et refuse de changer son projet ou son propriétaire par ce parcours. Le type et le cluster doivent être compatibles. Le graphe est validé avant génération. Un baseVersionId optionnel provoque un verrou de sauvegarde puis une comparaison avec la dernière version. Un décalage lève un conflit. Le diff distingue changement fonctionnel, métadonnées et absence de changement. Sans baseVersionId, certains changements de métadonnées actualisent la version existante ; avec cette précondition une nouvelle version est générée. Un changement fonctionnel de main déjà en production doit passer par proposition.",
+          "actors": "Auteur et collaborateurs du flow.",
+          "api": "POST /dataflows ; DataflowCreateCommandHandler ; DataflowSaveConflictAdvice.",
+          "state": "DataflowDefinition, DataflowBranch et GraphVersion. Le graphe contient entrées, transformations, sorties, arêtes et positions. Le graphe sauvegardé et ses scripts sont liés à une version, mais le chemin historique peut actualiser une version pour un changement de métadonnées.",
+          "dependencies": "Cluster miroir, variables, compilateur de scripts, S3, événements de versions et faits d’autorisation.",
+          "target": "Flows Rust sépare draft mutable et révision exécutable immuable. Chaque sauvegarde porte une révision attendue. Le manifeste compilé fixe code, schémas, dépendances, paramètres non secrets et références d’entrées.",
+          "migration": "Importer les graphes et actions de version sans réécrire les anciennes preuves. Rendre la précondition obligatoire dans le nouveau contrat. Conserver un adaptateur de sauvegarde legacy pendant la migration de l’éditeur TypeScript.",
+          "acceptance": "Deux collaborateurs sauvegardent le même draft à partir de la même révision. Une seule écriture gagne et l’autre reçoit un conflit avec la révision courante. Le manifeste d’un run déjà lancé reste identique après déplacement de nœuds ou changement de cluster.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/controller/DataflowDevelopController.kt",
+              "line": 107,
+              "why": "Transaction, auteur authentifié et canonicalisation du projet."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/definition/command/DataflowCreateCommandHandler.kt",
+              "line": 153,
+              "why": "Refus des changements de propriétaire/projet."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/definition/command/DataflowCreateCommandHandler.kt",
+              "line": 456,
+              "why": "Verrou, précondition, diff et règles de production."
+            }
+          ]
+        },
+        {
+          "id": "DD-07",
+          "title": "Règles du graphe et compilation des transformations",
+          "observed": "GraphValidator refuse les imports wildcard. PYSPARK et SQL exigent exactement une sortie par transformation ; une sortie doit avoir une transformation productrice. Python accepte plusieurs sorties. Le compilateur calcule les dépendances par les entrées, sorties et transformations amont, parcourt les transformations prêtes et propage leurs schémas. Il rend des templates différents pour Python, PySpark et SQL. SQL reste aujourd’hui une exécution PySpark dans le contrat Protobuf. Chaque transformation reçoit un ScriptId, un type, des dépendances, des sorties et éventuellement un cluster. Les archives contiennent main.py et les modules publiés du projet, puis sont écrites en S3 sous la version et le script.",
+          "actors": "Développeur de flow, éditeur et exécuteur.",
+          "api": "ScriptGeneratorService.generateGraphVersion ; GraphValidator.valid ; GraphExecutionEventProducer ; GET /dataflows/{id}/transformations/{tid} pour le contrat pylib.",
+          "state": "GraphVersion avec scripts ; artefacts S3 par version/script ; dépendances de scripts ; mappings des transformations et étapes.",
+          "dependencies": "JGraphT, templates Python/SQL, modules internes, schémas des datasets, S3 et process-data via VersionEvent.",
+          "target": "Flows Rust compile un graphe typé indépendant du moteur. Les opérateurs tabulaires produisent un plan SQL/Arrow exécuté par Query/Runtimes Rust. Python utilisateur reste possible dans un processus isolé. Aucune dépendance finale à PySpark, Spark Connect ou runtime JVM.",
+          "migration": "Classer chaque flow par langage et fonctions utilisées. Transpiler les opérateurs déclaratifs et traiter les appels Spark spécifiques comme incompatibilités explicites. Conserver les artefacts historiques ; produire de nouveaux artefacts avec empreinte et version du compilateur.",
+          "acceptance": "Pour un graphe Python à deux sorties et un graphe SQL à jointure, vérifier ordre de dépendances, schémas, résultats et erreurs équivalentes. Une fonction exclusivement Spark est signalée avant activation du runtime Rust, avec localisation de la transformation.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/definition/aggregate/graph/GraphValidator.kt",
+              "line": 13,
+              "why": "Contraintes wildcard et nombre de sorties."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/service/ScriptGeneratorServiceImpl.kt",
+              "line": 229,
+              "why": "Calcul des dépendances et Script par transformation."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/service/ScriptGeneratorServiceImpl.kt",
+              "line": 420,
+              "why": "Parcours et propagation de schémas."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/service/ScriptGeneratorServiceImpl.kt",
+              "line": 776,
+              "why": "Archive et modules publiés."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/event/producer/GraphExecutionEventProducer.kt",
+              "line": 107,
+              "why": "SQL encodé comme PYSPARK."
+            }
+          ]
+        },
+        {
+          "id": "DD-08",
+          "title": "Transformations low-code et schémas intermédiaires",
+          "observed": "Le vocabulaire low-code comprend filtrage/renommage/standardisation de colonnes, group by, jointures gauche/droite/interne/externe, colonne conditionnelle, suppression de doublons, filtres de lignes, concaténation, calcul mathématique, cast, union, calcul et recherche textuelle, top N et preview. Un alias historique FILTER_COLUMN reste accepté. Les étapes sont ordonnées, valident leur payload et calculent leurs schémas avant génération. Les opérations à deux entrées doivent nommer des sources disponibles. Les endpoints generate et validate opèrent sur un graphe et une étape cible ; si un flow existant est nommé, son projet doit correspondre au projet du payload.",
+          "actors": "Utilisateur de l’éditeur visuel et concepteur de modèles de transformation.",
+          "api": "POST /dataflows/generate ; POST /dataflows/validate ; StepProcessorServiceFactoryImpl et DataflowGraphProcessorServiceImpl.",
+          "state": "Étapes typées avec identifiant, ordre et payload ; OwnerSchemasCompute avec schéma rattaché au nœud/étape ; pas d’édition Iceberg créée par la seule validation.",
+          "dependencies": "Schémas des branches datasets, factory des processors et templates PySpark.",
+          "target": "Flows et Query Rust portent un registre versionné d’opérateurs. Chaque opérateur définit types, nulls, dates, ordre, validation et lowering vers le moteur sans JVM. L’interface TypeScript consomme le même contrat de schéma.",
+          "migration": "Établir une fiche de parité par opérateur, y compris null, timezone, doublons, casts invalides, ordre des colonnes et stabilité top N. Garder les identifiants d’étapes et alias de payload pendant l’import.",
+          "acceptance": "Exécuter une campagne par opérateur sur types mixtes et valeurs limites. generate et validate du même draft annoncent le schéma réellement obtenu à l’exécution. Une jointure désignant une entrée absente échoue avant création d’un job.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/definition/aggregate/graph/step/LowCodeTypeEnum.kt",
+              "line": 5,
+              "why": "Inventaire exhaustif des opérateurs et alias."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/service/ScriptGeneratorServiceImpl.kt",
+              "line": 101,
+              "why": "Validation des entrées et calcul des schémas avant génération."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/service/factory/DataflowGraphProcessorServiceImpl.kt",
+              "line": 116,
+              "why": "Parcours récursif jusqu’à l’étape cible."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/controller/DataflowSchemaCompute.kt",
+              "line": 70,
+              "why": "Cohérence projet/flow du payload."
+            }
+          ]
+        },
+        {
+          "id": "DD-09",
+          "title": "Manifestes d’accès et séparation des branches de données",
+          "observed": "Chaque script généré porte une liste d’entrées dataset/branche et de sorties dataset/branche/mode. APPEND et OVERRIDE deviennent APPEND et REPLACE. Les versions techniques de suppression utilisent DELETE. Le manifeste est sérialisé dans VersionEvent et conservé côté exécution. DataflowForLibService calcule les entrées/sorties de la transformation et choisit aujourd’hui main pour une branche en production ou une branche Nessie dérivée de l’identifiant de branche pour un draft. Sur une sortie en production, le schemaMode est relu depuis le dataset main. Les opérations techniques peuvent porter executionProjectId pour ne pas traiter leur référence synthétique de dataset comme un vrai projet.",
+          "actors": "Compilateur, service d’exécution, bibliothèque Python et services d’autorisation du stockage.",
+          "api": "ExecutionStorageManifest ; DatasetInputAccess ; DatasetOutputAccess ; VersionEvent.storageManifest ; DataflowForLibServiceImpl.getTransformationFromBranch.",
+          "state": "Manifeste par script et metadata execution_project_id pour versions techniques. Les branches métier, les branches de datasets et les références de catalogue doivent rester distinguées.",
+          "dependencies": "Miroir de schémas data-model, process-data, S3 et catalogue actuel Nessie dans le runtime.",
+          "target": "Flows Rust produit un manifeste immuable qui fixe les éditions d’entrée autorisées et les huit kinds cible. Writer de confiance autorise le staging exact ; Publisher décide la publication Iceberg. Le worker reçoit uniquement la portée nécessaire, sans table.modify générique qui permettrait aussi drop/commit.",
+          "migration": "Reprendre les manifestes déjà présents et mettre à part les versions anciennes nulles. Un backfill s’appuie sur la version historique prouvée, jamais sur le draft courant. Adapter les références Nessie vers UUID/ref/schema/spec Iceberg et garder l’identité d’origine dans origin.* du candidat.",
+          "acceptance": "Un script qui tente une écriture vers un dataset hors manifeste est refusé. Une ancienne version sans preuve de ses entrées ne reçoit pas d’accès large. Un candidat conserve les références d’édition de ses entrées après une publication concurrente de main.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/service/ScriptGeneratorServiceImpl.kt",
+              "line": 309,
+              "why": "Construction du manifeste par transformation."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/service/DataflowForLibServiceImpl.kt",
+              "line": 55,
+              "why": "Branches Nessie et schemaMode production."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/event/producer/GraphExecutionEventProducer.kt",
+              "line": 144,
+              "why": "Manifeste dans le contrat Protobuf."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/definition/command/DataflowCreateOrUpdateCollectDatasetCommandHandler.kt",
+              "line": 45,
+              "why": "Projet réel des versions techniques."
+            }
+          ]
+        },
+        {
+          "id": "DD-10",
+          "title": "Variables globales, locales et valeurs secrètes",
+          "observed": "Le flow porte des variables globales et chaque branche des variables locales. Les globales ne changent que depuis main. Leur modification déclenche une génération VERSION_ENV_VAR sur les autres branches. Un secret reçu sans nouvelle valeur conserve la valeur stockée par son identifiant, alors qu’une valeur absente sans remplacement possible est refusée. Les doublons de clés globales sont vérifiés. Le DTO masque un secret par une chaîne vide. Le DAO stocke toutefois la valeur dans une colonne String sans convertisseur de chiffrement visible, et le générateur transforme les variables en code d’environnement inclus dans le script. Le masquage d’API ne prouve donc pas un chiffrement ni une absence du secret dans les artefacts.",
+          "actors": "Auteur du flow et opérateur des secrets.",
+          "api": "EnvVarDTO dans POST /dataflows ; EnvVarCommand.toEnvVar ; DataflowCreateCommandHandler.buildEnvVars.",
+          "state": "EnvVar avec portée, clé, description, isSecret et valeur en PostgreSQL ; versions régénérées et scripts S3.",
+          "dependencies": "Générateur de scripts et bus de versionnement automatique.",
+          "target": "Flows Rust conserve les noms et références de secrets ; Runtimes résout une version de secret au lancement via IAM. Le manifeste et les artefacts publiés contiennent la référence et une preuve de version, jamais la valeur. Les logs et erreurs n’exposent pas cette valeur.",
+          "migration": "Inventorier les variables et artefacts qui peuvent incorporer des secrets sans exporter leur contenu. Migrer vers un magasin chiffré et faire tourner les secrets concernés selon une procédure contrôlée. Fixer la règle de priorité entre portée globale et locale dans le contrat.",
+          "acceptance": "Une sauvegarde d’un secret masqué préserve sa référence. Un changement global crée de nouvelles révisions pour les branches concernées. Une recherche sur les artefacts et événements du nouveau runtime ne retrouve aucune valeur secrète injectée au lancement.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/definition/command/DataflowCreateCommandHandler.kt",
+              "line": 74,
+              "why": "Conservation d’une valeur secrète omise."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/definition/command/DataflowCreateCommandHandler.kt",
+              "line": 251,
+              "why": "Portées, doublons et régénération des autres branches."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/controller/dto/EnvVarDTO.kt",
+              "line": 39,
+              "why": "Masquage en restitution."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/repository/dao/EnvVarDAO.kt",
+              "line": 18,
+              "why": "Valeur String sans convertisseur visible."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/service/ScriptGeneratorServiceImpl.kt",
+              "line": 431,
+              "why": "Variables rendues dans les scripts."
+            }
+          ]
+        },
+        {
+          "id": "DD-11",
+          "title": "Branches de développement et restauration contrôlée",
+          "observed": "Une branche naît d’une branche source existante, après validation du flow, du nom et de l’unicité active. Le nom doit satisfaire à la fois les contraintes Git historiques et Spark ; main est réservé au parcours prévu. La création d’une branche précédemment supprimée peut réutiliser son identifiant puis la restaurer explicitement. Le simple upsert de graphe refuse au contraire de ressusciter une branche supprimée. La branche reçoit un propriétaire, un graphe copié puis régénéré, des versions et une configuration de cluster. La suppression clôt les MR source ou cible non finales et émet les faits d’autorisation correspondants. Le handler contient encore un contrôle local de propriétaire de branche ou de flow.",
+          "actors": "Développeur et propriétaire du flow.",
+          "api": "GET /dataflows/{id}/branches ; GET /dataflows/{id}/branches/exist ; POST /dataflows/{id}/branches ; DELETE /dataflows/{id}/branches/{branchName} ; PUT /dataflows/{id}/branches/{branchName}/cluster.",
+          "state": "DataflowBranch avec sourceId, statut, owner, deleted, lastMergedAt, cluster et versions. Noms de branche main et personnalisés.",
+          "dependencies": "Générateur, variables, versions, MR, cluster miroir et IAM par faits de branches.",
+          "target": "Flows Rust conserve la filiation et les droits de branches. La branche de définition devient indépendante des contraintes de nom de Spark et des refs Iceberg de staging, ces dernières étant produites par Writer/Publisher.",
+          "migration": "Conserver les IDs, noms et tombstones. Retirer les contraintes de nom propres à Spark seulement avec un mapping explicite. Clarifier dans IAM les règles de suppression encore contrôlées localement pour éviter un changement de droit durant le transfert.",
+          "acceptance": "Créer, supprimer puis recréer une branche par la route dédiée préserve la filiation attendue. Un upsert ordinaire du même nom reste refusé. Les MR touchées se ferment ou se retargetent selon le contrat, sans référence orpheline.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/branch/command/DataflowBranchCreateCommandHandler.kt",
+              "line": 43,
+              "why": "Validation, copie, restauration et nouvelle version."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/branch/command/DataflowBranchDeleteCommandHandler.kt",
+              "line": 36,
+              "why": "Contrôle local résiduel et clôture des MR."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/branch/aggregate/DataflowBranch.kt",
+              "line": 134,
+              "why": "Contraintes combinées Git/Spark."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/definition/command/DataflowCreateCommandHandler.kt",
+              "line": 226,
+              "why": "Refus de résurrection par upsert."
+            }
+          ]
+        },
+        {
+          "id": "DD-12",
+          "title": "Propositions de fusion, diff et résolution des conflits",
+          "observed": "Une MR référence source, cible, auteur, reviewer, titre, description et suppression éventuelle de source. La création vérifie que le demandeur possède la source, que le reviewer existe et appartient au projet, puis calcule le statut de conflit. Elle émet des abonnements, notifications et faits d’autorisation. Les API listent les MR, les comptent, retournent leurs changements et le contenu d’un nœud. La résolution applique un choix de nœud au graphe source et conserve le hash du script cible contre lequel la décision a été prise. Une MR finale n’est plus résoluble. L’appartenance de la MR au flow de l’URI est vérifiée. Les diffs distinguent entrées, sorties, arêtes, code et étapes low-code.",
+          "actors": "Auteur, reviewer et collaborateurs du projet.",
+          "api": "POST/GET /dataflows/{id}/merge_requests ; GET /dataflows/{id}/merge_requests/{mrId} ; GET /dataflows/{id}/merge_requests/{mrId}/content/{nodeId} ; POST /dataflows/{id}/merge_requests/{mrId}/resolve ; GET /dataflows/{id}/merge_requests/countOpen.",
+          "state": "DataflowMergeRequestDefinition, historique de statuts et MergeRequestResolution avec auteur, date et hash du script cible ; nouvelles versions de la source après résolution.",
+          "dependencies": "GraphDiffCalculator, ConflictResolutionApplier, versions et modules compilés, Notifications et IAM.",
+          "target": "Flows Rust reprend le diff sémantique et associe chaque revue aux révisions source/cible exactes. Audit conserve les décisions de résolution. Une revue de définition reste distincte de l’audit d’un candidat de données.",
+          "migration": "Importer les MR ouvertes et leurs preuves de résolution. Conserver les identifiants des nœuds et les hashes déjà produits. Lors du basculement, recalculer les conflits contre les révisions importées et invalider les revues dont la cible a changé.",
+          "acceptance": "Résoudre un conflit, modifier ensuite la cible puis tenter la fusion. La résolution obsolète est détectée et une nouvelle revue est demandée. Une MR d’un autre flow donne la même absence que si elle n’existait pas dans le flow demandé.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/branch/command/DataflowMergeRequestCreateCommandHandler.kt",
+              "line": 71,
+              "why": "Validations de création, droits métier et notifications."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/branch/command/ResolveConflictsCommandHandler.kt",
+              "line": 54,
+              "why": "Application, version et hash de cible."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/branch/aggregate/DataflowMergeRequestDefinition.kt",
+              "line": 55,
+              "why": "Appartenance au flow."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/branch/controller/MergeRequestController.kt",
+              "line": 60,
+              "why": "Routes de revue, diff et résolution."
+            }
+          ]
+        },
+        {
+          "id": "DD-13",
+          "title": "Approbation, fusion et maintenance des MR dépendantes",
+          "observed": "L’approbation charge le flow et la MR, vérifie leur relation, puis construit une version VERSION_MERGE sur la branche cible à partir du graphe fusionné et des variables de la cible. Un refus doit porter un commentaire. Après fusion, la source peut être supprimée ou conserver lastMergedAt. Si elle disparaît, les MR qui partaient de cette source sont clôturées ; celles qui la visaient sont retargetées vers la nouvelle cible, sauf si cela ferait de la branche sa propre source. Les triggers devenus sans objet peuvent être retirés. Le retour indique aussi si les clusters source et cible sont identiques. Un recalcul des statuts des autres MR est tenté après la fusion et son échec est journalisé.",
+          "actors": "Reviewer, auteur et responsable de production.",
+          "api": "POST /dataflows/{id}/merge_requests/{mrId}/approval ; DataflowMergeRequestApproveCommandHandler.",
+          "state": "Statut final MERGED ou DELETED, nouvelle version de cible, source supprimée ou lastMergedAt mis à jour, MR restantes modifiées.",
+          "dependencies": "BranchService pour fusion, variables et scripts, triggers, versions et événement exécutable.",
+          "target": "Flows Rust réalise la fusion par comparaison atomique des révisions approuvées. Les retargets et suppressions font partie d’une commande durable. Audit enregistre qui a approuvé quel diff et la révision résultante.",
+          "migration": "Porter les règles de retarget des MR en chaîne. Faire des échecs de recalcul une tâche persistante observable. Préserver le comportement des variables de cible et clarifier le changement de profil runtime entre source et cible.",
+          "acceptance": "Fusionner A dans main avec suppression de A alors qu’une MR B vise A. La MR B vise ensuite main ; une MR main vers A est clôturée. Une panne après création de la révision cible permet de reprendre les retargets sans deuxième fusion.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/branch/command/DataflowMergeRequestApproveCommandHandler.kt",
+              "line": 122,
+              "why": "Version cible et variables utilisées."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/branch/command/DataflowMergeRequestApproveCommandHandler.kt",
+              "line": 176,
+              "why": "Clôture et retarget des MR dépendantes."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/branch/command/DataflowMergeRequestApproveCommandHandler.kt",
+              "line": 292,
+              "why": "Ordre de fusion, statut et recalcul."
+            }
+          ]
+        },
+        {
+          "id": "DD-14",
+          "title": "Mise en production d’une définition de flow",
+          "observed": "La publication cible aujourd’hui main. Elle refuse un flow absent ou supprimé, lit la dernière exécution pour le résumé, passe la branche au statut PRODUCTION et génère VERSION_PUBLISH. Le script et les sorties sont ensuite émis vers process-data. Le résumé renseigne la dernière exécution et si elle a démarré après la dernière modification. Dans le handler lu, ces indicateurs ne constituent pas une exigence de succès avant publication. L’opération publie donc une définition exécutable, pas une édition de données ayant franchi un audit WAP. La route lazy fournit l’état préalable sans exécuter cette transition.",
+          "actors": "Propriétaire habilité à publier le flow.",
+          "api": "POST /dataflows/{id}/publish ; GET /dataflows/{id}/publish/lazy ; DataflowPublishCommandHandler.",
+          "state": "DataflowStatus DRAFT/PRODUCTION sur la branche ; GraphVersion VERSION_PUBLISH ; information d’exécution distincte.",
+          "dependencies": "Versions, variables, miroir des exécutions et producteur GraphExecutionEvent.",
+          "target": "Flows Rust publie une révision de définition. Publisher Rust publie séparément les résultats de chaque run après audit. Les huit kinds, y compris STREAM, suivent WAP ; la réussite du job ne détermine pas à elle seule l’autorité des données.",
+          "migration": "Renommer les concepts d’interface et de contrat pour garder publication du flow et publication des résultats distinctes. Importer le statut de production existant comme activation de définition, sans le convertir en preuve d’approbation d’un snapshot.",
+          "acceptance": "Activer une définition puis exécuter un run dont l’audit échoue. La définition demeure activée, le candidat reste non publié et les lecteurs restent épinglés sur la dernière édition approuvée. L’historique distingue les deux décisions.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/definition/command/DataflowPublishCommandHandler.kt",
+              "line": 112,
+              "why": "Résumé lazy et publication effective."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/definition/command/DataflowPublishCommandHandler.kt",
+              "line": 131,
+              "why": "Passage PRODUCTION et VERSION_PUBLISH."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/controller/DataflowDevelopController.kt",
+              "line": 186,
+              "why": "Route publique de mise en production."
+            }
+          ]
+        },
+        {
+          "id": "DD-15",
+          "title": "Preview d’une étape low-code et preuve de portée",
+          "observed": "Le preview charge le flow et la branche, utilise le graphe fourni ou le dernier graphe sauvegardé, exige une transformation low-code et une étape existante. Les datasets amont doivent avoir un état SUCCESS dans les branches attendues. Le graphe est tronqué à l’étape demandée avec un nouvel identifiant, puis le compilateur produit une version VERSION_PREVIEW et l’émet. Un endpoint interne destiné à Data Serve retourne les entrées d’un preview seulement si la version persistée est de ce type et si tous ses scripts ont un manifeste. Il vérifie en plus le client du bearer. Le chemin de génération lu ne sauvegarde pas directement cette version ; ce raccord de persistance est une question ouverte vérifiée dans le code.",
+          "actors": "Utilisateur de l’éditeur, runtime de preview et Data Serve.",
+          "api": "POST /dataflows/{id}/preview ; GET /internal/dataflow-versions/{versionId}/preview-scope.",
+          "state": "Graphe tronqué, identifiant de preview, scripts et artefacts temporaires ; PreviewScope lié aux manifestes persistés attendus.",
+          "dependencies": "Schémas/états des datasets, générateur, process-data et contrôle Data Serve.",
+          "target": "Flows Rust crée un RunSpec de preview immuable et persistant. Runtimes applique bornes de lignes, temps et mémoire ; Writer ne publie aucune édition de production. Query n’ouvre le résultat qu’après vérification de sa portée et de sa durée de rétention.",
+          "migration": "Corriger ou établir le raccord entre émission et stockage du preview avant reprise fonctionnelle. Faire du résultat un artefact associé au run et non une permission fondée sur un UUID fourni par le client.",
+          "acceptance": "Créer un preview d’une étape intermédiaire, perdre le navigateur puis reprendre par son ID. Les mêmes entrées épinglées sont restituées, le scope reste disponible au consommateur autorisé et un bearer humain direct reçoit un refus.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/definition/command/DataflowPreviewCommandHandler.kt",
+              "line": 113,
+              "why": "Construction et émission du preview."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/version/query/PreviewScopeQueryHandler.kt",
+              "line": 38,
+              "why": "Exigence de version persistée et manifeste complet."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/version/controller/PreviewScopeController.kt",
+              "line": 52,
+              "why": "Client interne autorisé et 404."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/event/producer/GraphExecutionEventProducer.kt",
+              "line": 48,
+              "why": "Émission outbox sans persistance de version dans le producteur."
+            }
+          ]
+        },
+        {
+          "id": "DD-16",
+          "title": "Modules Python réutilisables et republication des flows",
+          "observed": "Un module interne appartient à un projet et n’accepte que PYTHON ou PYSPARK. Son nom suit des limites, une liste de mots interdits et les contraintes de nom de fichier importable. La sauvegarde distingue script/description/snippet publiés et drafts ; les imports wildcard sont refusés. La publication inscrit publicationId, publishedBy et lastPublished et copie le draft comme script publié. La suppression et la publication déclenchent une régénération asynchrone de toutes les branches du projet. Les archives de run chargent les modules publiés par type. isUsableInRun repose sur publicationId afin qu’une attribution historique manquante n’efface pas l’usage d’un module publié.",
+          "actors": "Auteur de module, publisher du projet et utilisateurs des flows.",
+          "api": "GET/POST /projects/{projectId}/internal-modules ; GET /projects/{projectId}/internal-modules/{moduleId} ; POST/DELETE /projects/{projectId}/internal-modules/{id} ; POST /projects/{projectId}/internal-modules/{id}/publish ; GET /projects/{projectId}/internal-modules/exists.",
+          "state": "InternalModule avec champs draft/publiés et identité de publication ; versions VERSION_MODULE régénérées pour les branches du projet.",
+          "dependencies": "Registre de modules, compilateur d’archives, événement automatique par branche, IAM par faits de module.",
+          "target": "Flows et Runtimes Rust portent un registre d’artefacts de modules immuables avec digest, dépendances et provenance. Python utilisateur reste supporté ; les modules PySpark doivent migrer vers les API de données sans JVM.",
+          "migration": "Importer chaque version publiée séparément du draft. Capturer les dépendances exactes d’un run au lieu de recharger une liste mutable de modules. Remplacer la régénération globale par des dépendances déclarées tout en gardant une réconciliation des branches affectées.",
+          "acceptance": "Publier un module pendant qu’un ancien run est en cours. Ce run conserve l’ancien digest ; un nouveau run utilise le nouveau. Un module draft ou un nom de fichier invalide n’entre pas dans l’archive exécutable.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/internalmodule/command/InternalModuleCommandHandler.kt",
+              "line": 86,
+              "why": "Validation, sauvegarde de draft et publication."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/internalmodule/aggregate/InternalModule.kt",
+              "line": 98,
+              "why": "Champs de versions et règle isUsableInRun."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/internalmodule/service/AsynchPublisherImpl.kt",
+              "line": 20,
+              "why": "Régénération des branches du projet."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/service/ScriptGeneratorServiceImpl.kt",
+              "line": 800,
+              "why": "Modules publiés inclus dans les artefacts."
+            }
+          ]
+        },
+        {
+          "id": "DD-17",
+          "title": "Métadonnées, transfert de propriétaire et faits d’autorisation",
+          "observed": "La mise à jour des métadonnées change nom et description et peut modifier le trigger. Elle refuse un owner différent du propriétaire courant. Le transfert dispose d’une route distincte. Le nouveau propriétaire doit exister, être éligible selon le rôle métier historique et appartenir au projet. Une mise à jour conditionnelle compare l’ancien owner ; zéro ligne modifiée produit une raison explicite, dont conflit concurrent. Le controller ouvre une transaction couvrant le changement et ses événements. Le writer de transfert associe l’événement consommé par process-data au fait d’autorisation consommé par IAM. Une réaffectation après départ de membre emprunte également ce mécanisme spécialisé.",
+          "actors": "Propriétaire du flow, propriétaire de projet autorisé et workflow IAM d’offboarding.",
+          "api": "POST /dataflows/{id}/metadata ; PATCH /dataflows/{dataflowId}/owner/{newOwnerId} ; ChangeDataflowOwnerCommandHandler.",
+          "state": "ownerId courant, version d’autorité attendue au transfert, métadonnées et faits outbox.",
+          "dependencies": "IAM/APISIX pour la permission de route ; miroirs users/members pour règles métier ; process-data et IAM pour propagation.",
+          "target": "IAM Rust décide les droits et éligibilités. Flows Rust conserve la propriété métier et enregistre transfert plus événements dans une même transaction. L’identité capturée d’un run existant ne change pas lors d’un transfert ultérieur.",
+          "migration": "Conserver la séparation entre auteur de révision, propriétaire courant et principal d’exécution. Supprimer les contrôles de rôle hérités seulement après définition d’une règle centrale équivalente.",
+          "acceptance": "Un collaborateur sauvegarde un graphe sans devenir propriétaire. Deux transferts concurrents ne produisent qu’un gagnant et une seule chaîne d’autorité cohérente. Un ancien run garde l’identité responsable de son lancement.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/definition/command/DataflowUpdateMetadataCommandHandler.kt",
+              "line": 130,
+              "why": "Refus de transfert via métadonnées."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/definition/command/ChangeDataflowOwnerCommandHandler.kt",
+              "line": 51,
+              "why": "Éligibilité et compare-and-set de propriétaire."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/controller/DataflowDevelopController.kt",
+              "line": 229,
+              "why": "Transaction de transfert avec rollback."
+            }
+          ]
+        },
+        {
+          "id": "DD-18",
+          "title": "Déclencheurs fonctionnels et miroir de planification",
+          "observed": "Les métadonnées d’un flow peuvent référencer un dataset, un autre flow ou un chemin de fichiers du projet comme trigger. Le handler vérifie l’existence du dataset ou du flow et refuse les flows supprimés ; il émet création, modification ou suppression du trigger selon la différence avec la valeur existante. La liste des triggers possibles parcourt toutes les pages des flows du projet, exclut le flow courant et expose aujourd’hui un choix de chemin racine. Les événements de schedules provenant de process-data alimentent le miroir de développement. L’exécution des cron n’appartient pas à ce service.",
+          "actors": "Développeur configurant une dépendance événementielle.",
+          "api": "GET /dataflows/{id}/triggers ; POST /dataflows/{id}/metadata ; TriggerAtEventDatasetUpdateCommand, TriggerAtEventDataflowUpdateCommand et TriggerAtEventProjectFileUpdateCommand.",
+          "state": "TriggerAtEvent unique associé au flow, dataset/flow déclencheur ou projet/chemin ; miroir ExecutionSchedule.",
+          "dependencies": "Événements de triggers vers process-data, miroirs de datasets/flows et retour des événements de schedule.",
+          "target": "Flows Rust possède la définition des dépendances et Scheduler dans Runtimes produit des commandes idempotentes. Une dépendance de données se déclenche sur une publication approuvée, avec son édition et sa clé de déduplication.",
+          "migration": "Inventorier cycles et changements de triggers, fixer la règle d’événement attendu pour les anciennes dépendances et importer les chemins. Pour STREAM, exiger un journal durable avant gouvernance et découper des runs bornés par epoch/range.",
+          "acceptance": "Rejouer une notification de publication et un événement de fichier. Chaque occurrence légitime crée au plus un run ; une occurrence dupliquée n’en crée pas. Un candidat refusé par audit ne déclenche aucun flow dépendant de données publiées.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/definition/command/DataflowUpdateMetadataCommandHandler.kt",
+              "line": 155,
+              "why": "Validation des ressources déclencheuses."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/definition/command/DataflowUpdateMetadataCommandHandler.kt",
+              "line": 202,
+              "why": "Diff et événements de trigger."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/schedule/query/ListAvailableTriggersQueryHandler.kt",
+              "line": 32,
+              "why": "Découverte paginée et chemin racine."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/event/DataProcessKafkaConsumer.kt",
+              "line": 79,
+              "why": "Consommation des schedules process-data."
+            }
+          ]
+        },
+        {
+          "id": "DD-19",
+          "title": "Demandes de création de datasets et compilation des collectes",
+          "observed": "POST /datasets et /datasets/bulk préparent des demandes de collecte après décision IAM sur les cibles du payload. Le batch doit être non vide et viser un seul projet. Les fréquences PLANNED et les triggers événementiels sont refusés dans ce parcours. La validation des triggers porte sur tout le batch, mais les événements sont ensuite émis dataset par dataset et le controller documente l’absence d’atomicité globale. À réception d’une collecte CREATED ou UPDATED, le service attend brièvement le miroir du dataset, vérifie qu’il existe des entrées valides puis produit une CollectVersion. Il convertit CSV, XLSX, JSON, XML et Parquet ainsi que schéma cible, préparations et modes APPEND/OVERRIDE.",
+          "actors": "Utilisateur de collecte, data-collect et IAM.",
+          "api": "POST /datasets ; POST /datasets/bulk ; DatasetCollectEvent ; DataflowCreateOrUpdateCollectDatasetCommandHandler.",
+          "state": "Commande de dataset créée par événement ; miroir DatasetBranch ; CollectVersion cachée avec executionProjectId réel, script et manifeste de sortie.",
+          "dependencies": "IAM dataset creation authorization, data-collect, data-model, stockage des fichiers importés, process-data et templates de collecte.",
+          "target": "Datasets et Connectors Rust prennent les commandes de collecte. Flows compose les transformations ; Writer écrit les candidats. Le résultat et le checkpoint source publié sont autoritaires dans l’édition Iceberg ; PostgreSQL garde la commande et les reçus.",
+          "migration": "Sortir la génération de scripts Spark du parcours de collecte. Remplacer le batch partiel sans reçu par une commande avec résultat par item et clé d’idempotence. Reprendre chaque préparation et règle de schéma avant changement de moteur.",
+          "acceptance": "Interrompre un batch au troisième dataset puis le rejouer. Chaque item déjà accepté garde le même résultat, les autres reprennent et le client voit le détail. Une collecte sans entrée valide ne crée pas de publication vide implicite.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/dataset/controller/DatasetController.kt",
+              "line": 31,
+              "why": "Routes, décision IAM et limite de batch documentée."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/dataset/command/CreateDatasetWithDatasourceCommandHandler.kt",
+              "line": 86,
+              "why": "Validation globale puis émissions individuelles."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/definition/command/DataflowCreateOrUpdateCollectDatasetCommandHandler.kt",
+              "line": 28,
+              "why": "Attente du miroir, entrées valides et CollectVersion."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/event/DataCollectKafkaConsumer.kt",
+              "line": 71,
+              "why": "Formats, types de source et préparations."
+            }
+          ]
+        },
+        {
+          "id": "DD-20",
+          "title": "Opérations techniques sur datasets et schémas",
+          "observed": "Les événements de data-model peuvent générer des versions techniques de suppression de table/branches, vidage et retouche de colonnes. La suppression supprime le miroir local puis produit une version DELETE par dataset avec branches et projet réel ; si un tombstone sans branches arrive, elle retire le miroir sans relancer un script. Le vidage exige un miroir correspondant à la branche. Une mise à jour compare les anciens/nouveaux schémas, conserve le schemaMode utile et peut générer suppression, renommage ou cast de colonnes. Une garde refuse une suppression massive qui ferait passer un schéma existant d’au moins deux colonnes à moins de deux. Ces opérations sont des exécutions, pas de simples modifications de métadonnées.",
+          "actors": "Data-model, administrateur de données et runtime technique.",
+          "api": "DeleteDatasetCommandHandler ; EmptyDatasetCommandHandler ; UpdateDatasetCommandHandler ; VersioningAction VERSION_DELETE, VERSION_EMPTY_DATASET, VERSION_UPDATE_COLUMN.",
+          "state": "Miroirs DatasetBranch et versions techniques cachées ; scripts et manifestes DELETE/REPLACE selon opération ; identifiant de projet réel séparé des références synthétiques.",
+          "dependencies": "Événements data-model, générateur de templates, S3 et process-data.",
+          "target": "Datasets Rust conserve les commandes métier ; Writer/Publisher applique WAP pour mutations de contenu et schéma. Maintenance traite expiration et GC avec plan audité et gardes de rétention. Une demande de suppression logique ne donne pas au worker le droit de drop de catalogue.",
+          "migration": "Classifier chaque action historique en suppression logique, nouvelle édition vide, évolution de schéma ou destruction physique. Importer les traces et remplacer les versions synthétiques par des RunSpec techniques explicitement typés.",
+          "acceptance": "Un vidage validé publie une nouvelle édition vide et l’ancienne reste lisible selon rétention. Un cast non compatible ou une suppression de colonnes non approuvée laisse la dernière édition publiée intacte. Le GC refuse un fichier encore référencé par un lecteur épinglé.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/dataset/command/DeleteDatasetCommand.kt",
+              "line": 29,
+              "why": "Tombstone, nettoyage miroir et versions de suppression."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/dataset/command/EmptyDatasetCommandHandler.kt",
+              "line": 22,
+              "why": "Vidage par branche et projet réel."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/dataset/command/UpdateDatasetCommandHandler.kt",
+              "line": 67,
+              "why": "Diff de colonnes et garde de schéma."
+            }
+          ]
+        },
+        {
+          "id": "DD-21",
+          "title": "Retour d’exécution dans les graphes et historique de scripts",
+          "observed": "Data-dev consomme les événements de process-data pour conserver états d’exécution, schedules et clusters utilisés par l’éditeur. Le domaine expose les statuts CREATED, PENDING, RUNNING, FAILURE, SUCCESS, SKIPPED, WARNING et CANCELED. Les graphes peuvent mettre à jour les états des nœuds/sorties depuis ces événements. Les lectures de dernière exécution servent au résumé de publication et au dernier script exécuté d’une transformation. Ce miroir de développement n’est pas l’autorité d’exécution ni la preuve qu’un dataset a été publié après audit.",
+          "actors": "Éditeur, utilisateur consultant un flow et process-data.",
+          "api": "DataProcessKafkaConsumer ; UpdateGraphExecutionStateCommandHandler ; GET /dataflows/{id}/transformations/{transformationId}/lastExecutedScript ; GET /dataflows/{id}/publish/lazy.",
+          "state": "Execution miroir, états de graphe et références aux versions ; clusters/schedules miroir.",
+          "dependencies": "Protobuf d’exécutions process-data, stockage des versions et graphes.",
+          "target": "Flows Rust expose une projection reconstruisible depuis le journal de runs et les éditions approuvées. Frontends présente séparément état du calcul, état d’audit et état de publication.",
+          "migration": "Conserver les identifiants de transformation, script, job et version dans les événements de remplacement. Importer les états sans les interpréter comme des preuves WAP. Prévoir la réparation de projection par replay.",
+          "acceptance": "Rejouer les événements de run dans un ordre retardé. Un état terminal ne redevient pas RUNNING et le graphe pointe vers le bon run. Un job réussi avec publication refusée apparaît comme calcul réussi et données non publiées.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/event/DataProcessKafkaConsumer.kt",
+              "line": 59,
+              "why": "Consommateurs d’exécution, schedule et cluster."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/definition/aggregate/DataflowDefinition.kt",
+              "line": 132,
+              "why": "Vocabulaire des statuts."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/branch/command/UpdateGraphExecutionStateCommandHandler.kt",
+              "line": 89,
+              "why": "Projection des états dans le graphe."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/controller/DataflowGetterController.kt",
+              "line": 181,
+              "why": "Lecture du dernier script exécuté."
+            }
+          ]
+        },
+        {
+          "id": "DD-22",
+          "title": "Événements fiables, faits IAM et traitement des messages en échec",
+          "observed": "Les producteurs de versions et de faits d’autorisation utilisent une outbox PostgreSQL. Le relay réclame des lignes par verrou SKIP LOCKED, attend l’acquittement Kafka puis marque sentAt. Pour les messages avec clé, sa requête bloque les successeurs tant qu’un prédécesseur du même topic/clé n’est pas envoyé. Un envoi réussi suivi d’une panne avant commit peut être livré de nouveau. Les messages en échec sont parqués avec statut, cause et informations d’origine. Data-dev dispose d’un drainer, d’un probe de dépendances, de retrait après tombstone, d’expiration et d’un endpoint JMX de census/replay. Les mutations administratives ne sont pas exposées comme endpoints web génériques dans la configuration lue.",
+          "actors": "Consommateurs de domaine, IAM et opérateurs de reprise.",
+          "api": "OutboxPublisher/OutboxRelay ; DeadLetterEventConsumer/DeadLetterEventDrainer ; JMX dlt-replay ; AuthzFactOutboxPublisher.",
+          "state": "outbox_event ordonné par relay_sequence ; dead_letter_event avec reçu de traitement et statut ; faits de ressources pour IAM.",
+          "dependencies": "Kafka/Protobuf et JSON de certains événements, PostgreSQL, IAM comme writer des tuples.",
+          "target": "Audit et Flows Rust conservent outbox/inbox et schémas d’événements versionnés. Le transport final n’a aucune JVM ; les clés de déduplication et d’ordre sont contractuelles. Les reçus de publication ou d’effets restent durables sans dépendre d’un fan-out UI.",
+          "migration": "Importer outbox non envoyée et messages parqués sans modifier leurs payloads. Construire des adaptateurs de double lecture temporaire avec un seul writer par ressource. Qualifier les reprises et l’ordre par agrégat avant remplacement du transport Kafka.",
+          "acceptance": "Faire tomber le relay après acquittement distant et avant sentAt. Le replay est dédupliqué par le consommateur et ne double ni version ni autorité. Un message dépendant d’un projet absent reste parqué puis reprend quand le projet apparaît.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/common/outbox/OutboxEventJPA.kt",
+              "line": 11,
+              "why": "Ordre par clé et verrou SKIP LOCKED."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/common/outbox/OutboxRelay.kt",
+              "line": 25,
+              "why": "Envoi, acquittement, erreurs et rétention."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/common/deadletter/DeadLetterEventDrainer.kt",
+              "line": 143,
+              "why": "Drainer et sweep des messages parqués."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/common/deadletter/DeadLetterReplayEndpoint.kt",
+              "line": 37,
+              "why": "Administration JMX de census et replay."
+            }
+          ]
+        },
+        {
+          "id": "DD-23",
+          "title": "Migrations de code, réconciliation et exploitation",
+          "observed": "Le service combine migrations Flyway et migrations de code suivies par une table cleyrop_migration. Il possède des modes de démarrage dédiés migrate et reconcile, dont un parcours de réparation des applications et de leurs membres. Un reconciler de comptes de service reprend les projets qui ne sont pas encore provisionnés dans IAM. Les déploiements incluent des sondes, un port de management, un espace temporaire pour les archives, un PVC optionnel et des règles réseau de gateway. Les métriques couvrent notamment outbox, DLT et échecs de verrouillage Git. L’état opérationnel dépend donc de PostgreSQL, des artefacts S3 et d’effets distants, pas du seul pod API.",
+          "actors": "Opérateur de plateforme et automatisation de migration.",
+          "api": "MigrateMode ; ReconcileMode ; UpgradeReconcile ; CleyropMigrationRunner ; ServiceAccountReconcileJob ; health/prometheus et endpoints JMX configurés.",
+          "state": "Journal cleyrop_migration, marqueurs de provisioning du projet, miroir d’applications, outbox/DLT, archives en S3.",
+          "dependencies": "Flyway, PostgreSQL, IAM, Git, applications, Kafka et S3.",
+          "target": "Migration Rust orchestre des étapes idempotentes avec préconditions, journal et validation. Audit conserve les preuves de conversion. Maintenance suit rétention et sauvegarde des commandes, graphes et artefacts.",
+          "migration": "Exporter un inventaire vérifiable des tables et artefacts, prendre un point de reprise cohérent puis importer par cohortes. Le retrait de JVM inclut Flyway embarqué et les migrations Kotlin restantes. Garder les outils legacy isolés uniquement pendant la transition.",
+          "acceptance": "Interrompre l’import entre deux lots puis reprendre. Les IDs et graphes importés restent identiques ; aucun effet Git/IAM n’est doublé. Une restauration de sauvegarde retrouve les artefacts référencés et les commandes non terminées.",
+          "evidence": [
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/runmode/UpgradeReconcile.kt",
+              "line": 55,
+              "why": "Actions de backfill et applications."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/runmode/ReconcileMode.kt",
+              "line": 51,
+              "why": "Mode de réconciliation dédié."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/project/service/iam/ServiceAccountReconcileJob.kt",
+              "line": 96,
+              "why": "Réconciliation du provisioning IAM."
+            },
+            {
+              "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/codemigration/runner/CleyropMigrationRunner.kt",
+              "line": 30,
+              "why": "Migrations de code au démarrage."
+            },
+            {
+              "path": "services/data-dev/chart/templates/deployment.yaml",
+              "line": 68,
+              "why": "Sondes et montage des volumes."
+            }
+          ]
+        }
+      ],
+      "entities": [
+        "Project, ProjectMember, User, Group et Subscription sont des objets legacy ou miroirs IAM. Leur correspondance canonique doit précéder l’import des ressources du projet.",
+        "Application représente Gitea/Jupyter et leur provisioning. Les effets distants et leurs erreurs ont un cycle distinct de l’enregistrement projet.",
+        "DataflowDefinition conserve identité, projet, propriétaire et type PYTHON/PYSPARK/SQL. DataflowBranch conserve filiation, propriétaire, statut DRAFT/PRODUCTION, cluster, suppression et dernières versions.",
+        "GraphVersion contient le graphe et ses scripts. VERSION_SAVE, VERSION_MERGE, VERSION_PUBLISH, VERSION_MODULE et VERSION_ENV_VAR décrivent des changements de définition ; CollectVersion, DeleteVersion, EmptyDatasetVersion et ColumnOperationVersion décrivent des opérations techniques.",
+        "Script conserve dépendances, transformations/étapes, sorties, type et manifeste dataset/branche/mode. L’artefact de code S3 est une seconde ressource à sauvegarder avec sa référence.",
+        "InternalModule possède draft et publication séparés. EnvVar possède portée globale/locale et un masquage de réponse pour secrets, sans chiffrement applicatif visible dans son DAO.",
+        "MergeRequest conserve auteur, reviewer, branches, historique de statut et choix de suppression de source. MergeRequestResolution conserve le hash de script cible de la décision.",
+        "DatasetBranch, Execution, Cluster et ExecutionSchedule sont des projections d’autres services. Leur stockage local ne leur donne pas l’autorité sur les données publiées.",
+        "OutboxEvent et DeadLetterEvent portent les commandes/événements non délivrés, les tentatives et les reçus. Ils font partie du périmètre de sauvegarde et de bascule."
+      ],
+      "dependencies": [
+        "IAM fournit canonicalisation des projets, décisions de visibilité et d’autorisations spécialisées, comptes de service et événements d’identité. IAM est le writer des tuples, data-dev émet des faits.",
+        "APISIX autorise les routes humaines puis le service authentifie. Les contrôles de cohérence de payload, de propriété d’objet et certains rôles métier résiduels restent dans les handlers lus.",
+        "Process-data reçoit VersionEvent et les triggers ; il renvoie exécutions, schedules et clusters par Kafka/Protobuf.",
+        "Data-model fournit datasets, branches, schémas, labels et liens projet/dataset. Ses demandes de vidage/suppression/changement de colonnes peuvent provoquer des jobs.",
+        "Data-collect émet les collectes CREATED/UPDATED ; data-dev compile leurs transformations et les rend exécutables.",
+        "Gitea est appelé par REST pour organisation, dépôt, compte et collaboration. Jupyter passe par ApplicationServiceJupyter et événements d’applications.",
+        "Notification-center reçoit les abonnements et notifications de MR/flows ainsi que les changements de favoris.",
+        "PostgreSQL/JPA/Flyway porte graphes et état de commande. S3 conserve les archives et scripts. Kafka transporte les événements de contrôle ; ce transport JVM doit aussi quitter la cible finale."
+      ],
+      "target_domains": [
+        "Flows",
+        "IAM",
+        "Datasets",
+        "Connectors",
+        "Writer",
+        "Publisher",
+        "Query",
+        "Runtimes",
+        "Applications",
+        "Notifications",
+        "Audit",
+        "Migration",
+        "Maintenance",
+        "Frontends"
+      ],
+      "control_plane": [
+        "Flows Rust possède drafts, révisions exécutables, branches, graphes, MR, résolution, activation et manifestes. La révision inclut digest du code/modules et version du compilateur.",
+        "IAM Rust possède projets, membres et droits. Les contrats conservent une vérification de cohérence entre l’objet nommé par une route, le projet du payload et les objets réellement persistés.",
+        "Définir un RunSpec qui nomme principal, projet réel, version de flow, éditions d’entrée, profils de ressources, sorties autorisées, secret refs et deadline. Les huit kinds sont TABLE, INCREMENTAL, VIEW, FILESET, MODEL, EMBEDDINGS, FEATURESET et STREAM.",
+        "Writer médie le staging et Publisher médie la publication. Flows n’accorde pas au worker un accès REST générique table.modify ; le droit inclut commit/drop et dépasserait le besoin du job.",
+        "La définition publiée et la donnée publiée ont des cycles distincts. L’historique de publications approuvées ne se reconstruit pas en listant tous les snapshots.",
+        "Les événements de dépendance et les checkpoints publiés référencent l’édition Iceberg autoritaire. PostgreSQL reste autoritaire pour drafts, commandes, identités et reçus d’effets.",
+        "Applications traite provisionnement Git/notebooks comme effets idempotents, avec état de réparation. Notifications traite le fan-out UI séparément des preuves durables."
+      ],
+      "data_plane": [
+        "Compiler le low-code vers un plan typé sans Spark. Chaque opérateur doit avoir une sémantique prouvée sur schéma, nulls, types, dates, ordre et erreurs.",
+        "Exécuter SQL et transformations tabulaires dans le moteur Rust retenu après campagnes. Python/SQL utilisateur reste un format d’usage, dans des processus bornés et sans API Spark conservée par défaut.",
+        "Stager des fichiers immuables, produire un candidat avec origin.* au summary puis faire auditer ce candidat. La preuve post-candidat est liée durablement, sans réécriture du summary par fast-forward.",
+        "Pour un flow à plusieurs sorties, produire une release qui est elle-même une édition Iceberg avec checkpoint source/epoch/range/participants et lecteurs épinglés.",
+        "Un preview est un résultat de run temporaire avec portée et rétention, jamais une exception aux règles d’accès. Les résultats STREAM viennent d’un journal durable et franchissent WAP.",
+        "EXPORT est un effet avec reçu et EXPOSURE un consommateur déclaré. Ni l’un ni l’autre n’ajoute un neuvième kind de sortie."
+      ],
+      "rust_core": [
+        "Proposition flows-model : contrats serde pour graphe, étapes, branches, révisions, modules, manifestes et types d’erreurs, avec import du JSON historique.",
+        "Proposition flows-compiler : tri du graphe, validation des opérateurs, calcul des schémas, dépendances d’artefacts et génération de plans SQL/Arrow ou invocation Python.",
+        "Proposition flows-revisions : sauvegarde à révision attendue, diff sémantique, MR, règles de résolution et activation de définition.",
+        "Proposition flow-run-contract : RunSpec immuable, liaisons vers Writer/Publisher, preuves origin.*, entrées épinglées et sorties déclarées.",
+        "Proposition applications-adapters : Gitea, notebooks, comptes de service et procédures d’offboarding sous commande durable.",
+        "Proposition event-runtime : outbox/inbox, déduplication, ordre par agrégat, DLT et réconciliation indépendants du transport final.",
+        "Réutilisation d’un moteur Rust existant à qualifier, sans annoncer qu’Icegres ou Eidos couvrent les opérateurs de ce service. Leur capacité concrète est hors de cette lecture."
+      ],
+      "security": [
+        "Garder séparés appelant, auteur de version, propriétaire et principal de run. Les transferts ne réécrivent pas les preuves historiques.",
+        "Conserver le refus des payloads croisant projet et ressource. La canonicalisation legacy/IAM est obligatoire avant comparaison.",
+        "La directive générale d’autorisation gateway ne suffit pas à décrire le code : suppression de branche, création de MR, éligibilité du propriétaire et création de dataset gardent des contrôles locaux. Ils doivent entrer dans la matrice de migration IAM.",
+        "Les secrets EnvVar sont masqués dans le DTO mais visibles au DAO et incorporés aux scripts générés. La migration doit retirer ces valeurs des artefacts et adopter des références de secrets versionnées.",
+        "Les clés SSH ont un convertisseur de chiffrement ; leur migration et rotation doivent préserver la compatibilité avec la clé partagée existante sans export de clé dans le dossier.",
+        "La portée preview n’est fournie qu’aux clients internes configurés et exige un manifeste complet. Les travaux de migration doivent réparer tout écart entre génération et persistance de cette preuve.",
+        "Un worker cible ne peut ni publier ni drop une table. Les vérifications UUID/ref/schema/spec/ascendance appartiennent au Publisher et ne sont pas présentées comme un fencing Hemera natif."
+      ],
+      "operations": [
+        "Deux modules Gradle séparent domaine et adaptateurs Spring. Les versions lues sont celles du dépôt ; aucune version déployée n’a été interrogée.",
+        "La sauvegarde/restauration doit couvrir PostgreSQL et artefacts S3, ainsi que le rapprochement avec les dépôts Git, clés chiffrées et applications externes.",
+        "Les sondes et le management Prometheus sont définis dans le chart et les propriétés. L’existence d’un PodMonitor dépend des conditions de chart et de la CRD de monitoring.",
+        "Le chart permet un stockage persistant optionnel ; sa documentation indique que cette option impose un seul replica et une stratégie Recreate. L’espace temporaire sert notamment aux ZIP générés.",
+        "L’outbox réclame les événements par verrous et conserve l’ordre par clé, mais les consommateurs doivent supporter la relivraison. Les métriques DLT et de provisioning sont nécessaires au pilotage de bascule.",
+        "Les migrations Kotlin/Flyway et les modes migrate/reconcile constituent une dette JVM opérationnelle à remplacer. Les migrations de code doivent être qualifiées en reprise partielle.",
+        "Un échec de verrouillage Git peut laisser un compte distant ouvert malgré le miroir révoqué. Le dossier propose un suivi durable de cet effet et une réconciliation avant fermeture d’offboarding.",
+        "Aucun test Gradle ou Helm n’a été exécuté pendant cet audit en lecture seule."
+      ],
+      "migration_steps": [
+        "1. Inventorier IDs legacy/IAM, graphes, branches actives/supprimées, versions, MR, modules, variables, artefacts S3 et événements non terminés.",
+        "2. Construire un importeur sans secrets en clair qui conserve IDs, dates, auteurs et liens d’artefacts. Réconcilier les versions dépourvues de manifeste avec leur preuve historique.",
+        "3. Formaliser les contrats API et de payload observés, dont 410 projet, erreurs de sauvegarde concurrente, batch partiel, branches restaurables et MR dépendantes.",
+        "4. Porter le modèle et le compilateur de low-code vers Rust, puis qualifier chaque opérateur et chaque format. Classer les programmes PySpark qui exigent une réécriture utilisateur.",
+        "5. Introduire RunSpec et le protocole Writer/Audit/Publisher WAP. Séparer activation d’une définition et publication de résultats, avec sorties multiples et checkpoints publiés dans Iceberg.",
+        "6. Migrer secrets/modules en artefacts immuables, puis déplacer Git/notebooks et leurs effets vers Applications. Finir le transfert des projets et membres vers IAM.",
+        "7. Basculer par projet avec un seul writer de drafts, compare de projections et replay d’outbox. Maintenir des lecteurs temporaires de l’historique sans autoriser les anciens runtimes à republier.",
+        "8. Retirer générateur Spark, clients JVM, Spring/Flyway Kotlin et transport Kafka JVM seulement après les campagnes de résultats, révocation, reprise et restauration."
+      ],
+      "open_questions": [
+        "Preview : le handler lit VersionRepository mais ne sauvegarde pas la version produite ; le producteur ne fait qu’émettre. PreviewScopeQueryHandler exige pourtant findById. Vérifier l’existence d’un autre chemin de persistance et qualifier ce raccord avant d’en faire un contrat cible.",
+        "Publication : le code lit la dernière exécution pour le résumé sans exiger son succès dans le handler de publication. La politique d’activation d’un flow doit être décidée séparément de WAP.",
+        "Variables secrètes : le périmètre historique d’artefacts qui incorporent des valeurs n’a pas été inspecté, conformément à la consigne. Une campagne sécurisée d’inventaire est requise.",
+        "Concurrence : baseVersionId reste optionnel et certains chemins actualisent une GraphVersion. Il faut décider la durée de compatibilité de ces écritures historiques avant immutabilité stricte.",
+        "Autorisation : le code conserve des règles de propriétaire et d’éligibilité dans des handlers malgré la note générale gateway. Réconcilier code, routes IAM et contrat métier avant suppression de ces règles.",
+        "Suppression de dataset : distinguer les événements sans branches, qui ne génèrent pas de script, et les suppressions de contenu. Aucun tombstone importé ne doit être converti en destruction physique automatique.",
+        "La compatibilité des fonctions Python/PySpark privées, modules utilisateurs et images installées dépend de données client non lues. Aucun taux de compatibilité n’est annoncé.",
+        "Le couplage observé à Nessie et aux noms Spark de branches doit être traduit ; un renommage de ref seul ne fournit pas un protocole de publication autorisé et audité."
+      ],
+      "evidence": [
+        {
+          "path": "services/data-dev/app/gradle/libs.versions.toml",
+          "line": 23,
+          "why": "Versions Kotlin et Spring dans le dépôt."
+        },
+        {
+          "path": "services/data-dev/app/data-dev-app/build.gradle.kts",
+          "line": 24,
+          "why": "Toolchain JVM 21."
+        },
+        {
+          "path": "services/data-dev/app/data-dev-domain/src/main/kotlin/com/cleyrop/data/dev/domain/version/aggregate/Version.kt",
+          "line": 19,
+          "why": "Familles de versions."
+        },
+        {
+          "path": "services/data-dev/app/data-dev-app/src/main/kotlin/com/cleyrop/data/dev/app/definition/service/ScriptGeneratorServiceImpl.kt",
+          "line": 339,
+          "why": "Compilation d’une version exécutable."
+        },
+        {
+          "path": "services/data-dev/chart/templates/deployment.yaml",
+          "line": 50,
+          "why": "Processus non root, sondes et volumes."
+        },
+        {
+          "path": "services/data-dev/chart/values.yaml",
+          "line": 239,
+          "why": "Contraintes du mode persistence."
+        }
+      ]
+    },
+    {
+      "id": "process-data",
+      "title": "Exécution des flows, planification et ressources de calcul",
+      "purpose": "Service qui reçoit les versions exécutables produites par data-dev, crée et suit les runs et jobs, orchestre les sessions Python/PySpark, gère les déclenchements, clusters et images, expose historique et temps réel, et relaie les états aux autres services.",
+      "stack": "Kotlin 2.4.10, Spring Boot 4.1.1 et JVM 21 observés dans Gradle. PostgreSQL/JPA/Flyway, Kafka/Protobuf avec outbox/inbox, Quartz JDBC clusterisé pour cron, boucles Spring de réconciliation, S3, REST app-management et HTTP vers les processus de session Python/PySpark.",
+      "source_dir": "services/process-data",
+      "read_scope": [
+        "Controllers execution, schedule, session, image et admin, DTO de soumission et filtres.",
+        "Agrégats DataflowVersion, Script, ExecutionStorageManifest, DataflowExecution, jobs, files persistantes, Cluster, Session et schedules.",
+        "Handlers de run manuel/automatique/partiel, soumission, suivi, logs, fin de job, annulation et callback Spark.",
+        "Adaptateur app-management et appels directs de sessions, cycle de clusters/images, bibliothèque PyPI, startup et réconciliation.",
+        "Consumers DataDev/ProcessData/IAM, outbox/inbox/DLT, maintenance PostgreSQL, RunnerAuthorizationClient, manifestes Gradle et chart."
+      ],
+      "capabilities": [
+        {
+          "id": "PD-01",
+          "title": "Réception des versions et intégrité du manifeste",
+          "observed": "Le consommateur VersionEvent réclame une clé d’inbox dans sa transaction puis construit une version locale. VERSION_SAVE conserve la version sans run. MERGE, PUBLISH, COLLECT, PREVIEW, DELETE, EMPTY_DATASET et UPDATE_COLUMN peuvent lancer automatiquement le traitement si le démarrage des clusters est actif. Les actions inconnues sont rejetées pour retry/DLT. Une version dupliquée ne ressuscite pas une version supprimée. Le handler peut enrichir uniquement un manifeste absent ; il vérifie le même ensemble de scripts et refuse un manifeste non nul divergent. Il préserve les autres métadonnées de la version existante. La portée execution_project_id vient du producteur et une valeur invalide ne devient pas un runner global.",
+          "actors": "Data-dev, service de migration et exécuteur.",
+          "api": "Kafka VersionEvent ; DataDevKafkaEventConsumer.consumeVersionEvent ; DataflowVersionCreateCommandHandler ; VersionEventProtoConverter.",
+          "state": "DataflowVersion immatriculée par VersionId, branches et projet, scripts avec dépendances et manifestes ; inbox de déduplication ; marqueur deletedAt.",
+          "dependencies": "Data-dev par Protobuf/Kafka, PostgreSQL et contrôleur de runs.",
+          "target": "Flows/Runtimes Rust acceptent un RunSpec immuable et versionné. Un même ID ne peut désigner des artefacts ou droits différents. Les versions anciennes sans manifeste sont isolées jusqu’à preuve ou conversion explicite.",
+          "migration": "Importer versions, scripts, manifestes et inbox de manière cohérente. Conserver les références d’origine mais remplacer les IDs synthétiques d’opérations techniques par un type de run explicite. Ne jamais reconstruire des droits depuis le flow courant.",
+          "acceptance": "Rejouer la même version avec un manifeste égal, absent puis divergent. Les deux premiers cas conservent les droits existants ; le troisième est refusé. Rejouer une version supprimée ne la remet ni en file ni en service.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/common/event/consumer/DataDevKafkaEventConsumer.kt",
+              "line": 45,
+              "why": "Inbox, stockage et déclenchement conditionnel."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/DataflowVersionCreateCommandHandler.kt",
+              "line": 44,
+              "why": "Immutabilité et enrichissement limité du manifeste."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/common/event/consumer/converter/VersionEventProtoConverter.kt",
+              "line": 142,
+              "why": "Portée projet et matrice d’actions automatiques."
+            }
+          ]
+        },
+        {
+          "id": "PD-02",
+          "title": "Lancement manuel d’un flow complet",
+          "observed": "Le lancement manuel attend que la version demandée soit visible, refuse une version supprimée et une version sans script, puis consulte la dernière exécution de sa branche. Si elle est CREATED, PENDING ou RUNNING, il refuse un nouveau run concurrent selon la règle métier locale. Le cluster vient de l’override de requête, de la version ou du précédent run, avec repli vers un cluster par défaut du type attendu. Le service crée un DataflowExecution, calcule son nom numérique par comptage des exécutions du projet, persiste ses jobs éventuels puis émet ExecutionCreatedEvent. Le demandeur authentifié devient le principal MANUAL_CALLER distinct du propriétaire de version.",
+          "actors": "Utilisateur autorisé à exécuter le flow.",
+          "api": "POST /dataflows/{id}/versions/{version}/run, paramètre cluster optionnel ; DataflowVersionRunManualCommand.",
+          "state": "Execution CREATED puis événement vers le traitement de file ; principal capturé, cluster, version, timestamps et deadline.",
+          "dependencies": "Versions répliquées de data-dev, clusters, miroirs utilisateurs/projets, outbox d’exécution et notifications.",
+          "target": "Runtimes Rust accepte une commande idempotente par projet et version, acquiert une réservation atomique de concurrence et fige RunSpec. Le run est borné en temps, octets et ressources, indépendamment du pod worker.",
+          "migration": "Conserver la politique de concurrence par branche ou la faire évoluer explicitement. Remplacer le contrôle lecture-puis-écriture par une contrainte/lease transactionnelle. Corréler le flow de l’URI avec la version persistée dans le nouveau contrat.",
+          "acceptance": "Envoyer deux requêtes concurrentes de même clé de commande sur deux replicas. Elles retournent un seul run. Deux clés différentes visant une branche limitée à un run produisent un gagnant et un conflit déterministe.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/execution/controller/DataflowPipelineController.kt",
+              "line": 206,
+              "why": "Route et identité du demandeur."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/DataflowVersionRunCommandHandler.kt",
+              "line": 198,
+              "why": "Conditions de lancement et choix du cluster."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/DataflowVersionRunCommandHandler.kt",
+              "line": 101,
+              "why": "Création, persistance et événements du run."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/session/aggregate/Cluster.kt",
+              "line": 196,
+              "why": "Sélection d’un cluster ou d’un défaut par type."
+            }
+          ]
+        },
+        {
+          "id": "PD-03",
+          "title": "Exécution partielle d’une transformation et réutilisation d’amont",
+          "observed": "La route de transformation résout le script correspondant à l’identifiant métier de transformation. Elle refuse un dernier run de branche encore actif, choisit un cluster puis calcule les dépendances à relancer. Un amont dont le job précédent est SUCCESS ou WARNING n’est pas ajouté à la fermeture de dépendances. Le nouveau run peut copier des jobs du précédent avec de nouveaux IDs et isFromAnotherExecution=true, tout en relançant les scripts sélectionnés. Les dates de démarrage, la session et la deadline sont renouvelées. Le résultat est marqué isPartialRun ; le statut global ignore certains jobs copiés dans son calcul d’échec.",
+          "actors": "Développeur qui corrige ou inspecte une transformation.",
+          "api": "POST /dataflows/{id}/versions/{version}/transformations/{transformation}/run ; DataflowVersion.getDepends ; DataflowExecution.singleScriptExecution.",
+          "state": "Nouveau run partiel, jobs réutilisés marqués, nouveaux jobs pour le sous-graphe nécessaire et nouvelle attribution du lancement.",
+          "dependencies": "Historique des jobs de branche, graphe de dépendances de la version et runtime de session.",
+          "target": "Runtimes Rust réutilise uniquement des résultats liés à des éditions d’entrée et artefacts immuables prouvés. La sélection d’un sous-graphe enregistre les dépendances réutilisées, leur provenance et la politique d’invalidation.",
+          "migration": "Ne pas convertir isFromAnotherExecution en preuve suffisante de réutilisation. Importer cette information comme provenance historique, puis exiger digests, éditions et paramètres pour les nouveaux runs partiels.",
+          "acceptance": "Relancer une transformation après modification d’une entrée amont. Le runtime invalide l’ancien résultat et recalcule le sous-graphe requis. Si aucun élément du manifeste n’a changé, il réutilise l’édition exacte et l’explicite dans le reçu du run.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/DataflowVersionRunCommandHandler.kt",
+              "line": 163,
+              "why": "Sous-graphe, dernier run et principal du run partiel."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/aggregate/DataflowVersion.kt",
+              "line": 68,
+              "why": "Amonts SUCCESS/WARNING réutilisés."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/aggregate/DataflowExecution.kt",
+              "line": 83,
+              "why": "Copie de jobs et renouvellement du run."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/aggregate/DataflowExecution.kt",
+              "line": 137,
+              "why": "Calcul de résultat partiel."
+            }
+          ]
+        },
+        {
+          "id": "PD-04",
+          "title": "Identité d’exécution, projet réel et durée d’autorisation",
+          "observed": "L’exécution conserve ExecutionPrincipal avec MANUAL_CALLER, SCHEDULED_OWNER ou INTERNAL_OWNER. Les runs planifiés capturent le propriétaire de la version utilisée ; les manuels capturent le demandeur. La deadline d’autorisation est fixée à la création et le repository conserve celle de la ligne verrouillée lors des sauvegardes. Submit refuse de lancer un job après cette borne. Pour les jobs de flow/preview, le projet vient de la version ; pour collecte/suppression/vidage/colonnes, il vient de executionProjectId, distinct des anciennes références synthétiques. Le service n’envoie pas directement le manifeste dans SubmitJobRequestDTO ; app-management reçoit les IDs du job et doit résoudre les droits selon son propre contrat.",
+          "actors": "Utilisateur, scheduler, run technique, IAM et app-management.",
+          "api": "ExecutionPrincipal ; DataflowExecution.capabilityDeadline ; SubmitCommandHandler ; SubmitJobRequestDTO.",
+          "state": "Principal et deadline persistés dans dataflow_execution ; version et type de job ; projet d’exécution réel optionnel pour l’historique.",
+          "dependencies": "IAM et broker de credentials via app-management ; miroirs de projet ; manifeste de scripts conservé en base.",
+          "target": "IAM/Runtimes Rust délivrent une capacité liée à tenant, projet, run, tentative, manifestes et échéance. La révocation coupe les nouveaux accès. Les workers sont fongibles et ne possèdent ni credentials de catalogue génériques ni état autoritaire.",
+          "migration": "Importer le principal seulement quand il est prouvé. Les exécutions anciennes sans principal ne doivent pas recevoir de fallback global. Fixer le protocole de résolution app-management et la borne de renouvellement avant remplacement.",
+          "acceptance": "Changer le propriétaire après lancement d’un run puis réessayer une soumission. L’identité d’origine reste inchangée. Après l’échéance, aucune nouvelle délégation n’est émise et la tentative se termine avec un motif contrôlable.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/aggregate/DataflowExecution.kt",
+              "line": 20,
+              "why": "Types de principal et deadline."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/execution/repository/DataflowExecutionRepositoryImpl.kt",
+              "line": 76,
+              "why": "Préservation de la deadline sur ligne verrouillée."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/SubmitCommandHandler.kt",
+              "line": 99,
+              "why": "Borne de soumission et choix du projet réel."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/session/service/appmanagement/dto/RequestDTO.kt",
+              "line": 67,
+              "why": "Contrat de soumission sans valeur de credential."
+            }
+          ]
+        },
+        {
+          "id": "PD-05",
+          "title": "Files persistantes et progression du graphe de jobs",
+          "observed": "ExecutionCreatedEvent fait passer une exécution CREATED à PENDING et crée DataflowSubmission. La file est ordonnée par cluster et expose une position. Le démarreur charge les clusters et jobs déjà soumis, cherche une session libre et crée des JobSubmission pour les racines du graphe. Une session est choisie parmi les IDLE sans job en attente/soumis ; les jobs d’un même flow peuvent rester rattachés à sa session. Les enfants sont déclenchés après succès et seulement si tous leurs amonts sont SUCCESS. Le traitement parcourt successivement nettoyage, sessions, annulation, démarrage, soumission, suivi et fin de job. Cette boucle est un @Scheduled du pod ; elle n’est pas le job Quartz utilisé pour les cron.",
+          "actors": "Ordonnanceur interne et opérateur suivant les files.",
+          "api": "DataflowExecutionRunCommandHandler ; StartExecutionCommandHandler ; Orchestrator.manageOrchestratorLifecycle.",
+          "state": "DataflowSubmission, JobSubmission, JobSubmitted, JobCompleted et ExecutionCancelled en PostgreSQL ; run CREATED/PENDING/RUNNING.",
+          "dependencies": "PostgreSQL, ClusterService et événements de succès/session.",
+          "target": "Runtimes Rust possède un ordonnanceur durable avec claims atomiques, leases bornés, tentative monotone et déduplication. Les files ne donnent pas de droits au stockage. Le worker remplaçable ne modifie jamais le checkpoint publié.",
+          "migration": "Conserver les identifiants de commande/job lors de la transition. Remplacer les séquences d’appels au repository par des transactions définies. Qualifier la fenêtre entre création distante du job et enregistrement local avant montée en replicas.",
+          "acceptance": "Perdre un pod entre réservation d’une session et création distante du job. Un autre contrôleur reprend après expiration de lease ; un seul effet de soumission est accepté et la file ne reste pas bloquée.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/DataflowExecutionRunCommandHandler.kt",
+              "line": 82,
+              "why": "Passage PENDING et file persistante."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/StartExecutionCommandHandler.kt",
+              "line": 84,
+              "why": "Déqueue, session et racines."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/session/aggregate/Cluster.kt",
+              "line": 156,
+              "why": "Sélection de session libre."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/execution/service/Orchestrator.kt",
+              "line": 45,
+              "why": "Boucle périodique du pod."
+            }
+          ]
+        },
+        {
+          "id": "PD-06",
+          "title": "Soumission aux sessions Python et Spark Connect",
+          "observed": "Submit examine JobSubmission et évite un nouveau job si la session possède déjà un JobSubmitted. Il exige une session IDLE, charge l’exécution, refuse un run final ou hors deadline et soumet via ClusterService. L’adaptateur crée une URL S3 présignée pour l’artefact version/script puis envoie job, cluster, session et projet à app-management. Une création distante valide devient job RUNNING, JobSubmitted et session BUSY. Une session absente, invalide ou une réponse nulle déclenche FAILURE. Le statut et l’annulation du job passent ensuite directement par HTTP vers le processus de session. Les appels distants et écritures PostgreSQL ne forment pas une transaction atomique dans les handlers lus.",
+          "actors": "Ordonnanceur, app-management et processus de calcul.",
+          "api": "POST app-management /private/sessions/jobs/submit ; HTTP de session submit/{statementId} ; ClusterConnectServerServiceAppManagementImpl.submitJob/getJobState/cancel.",
+          "state": "JobSubmission vers JobSubmitted avec StatementId distant ; session IDLE/BUSY ; artefact S3 référencé par URL courte.",
+          "dependencies": "App-management authentifié par client de service, S3, réseau de sessions Python/PySpark.",
+          "target": "Runtimes Rust soumet un JobSpec à un adaptateur Kubernetes/processus non JVM. L’ID de tentative est idempotent côté exécuteur ; la réponse distante peut être retrouvée après perte réseau. L’artefact est vérifié par digest avant exécution.",
+          "migration": "Préserver les contrats de job et les reçus pendant le remplacement de l’adaptateur. Introduire une opération query-by-attempt pour résoudre une soumission ambiguë. Remplacer les sessions Spark Connect par workers bornés et pools Python adaptés.",
+          "acceptance": "Faire créer un job distant puis couper la réponse. La reprise retrouve le même job par son ID de tentative, vérifie son digest et ne le crée pas une deuxième fois. Une URL d’artefact expirée donne une erreur reprise sans fallback de credentials.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/SubmitCommandHandler.kt",
+              "line": 56,
+              "why": "Garde de session et transitions locales."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/SubmitCommandHandler.kt",
+              "line": 128,
+              "why": "Traitement des résultats de soumission."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/session/service/appmanagement/ClusterConnectServerServiceAppManagementImpl.kt",
+              "line": 173,
+              "why": "Présignature et soumission distante."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/session/service/appmanagement/ClusterConnectServerServiceAppManagementImpl.kt",
+              "line": 198,
+              "why": "Suivi et annulation HTTP directs."
+            }
+          ]
+        },
+        {
+          "id": "PD-07",
+          "title": "États des jobs, étapes et sorties",
+          "observed": "Le run et les jobs utilisent CREATED, PENDING, RUNNING, FAILURE, SUCCESS, SKIPPED, WARNING et CANCELED. Les états finaux d’un job ne sont pas remplacés par un nouvel état. Les détails associent transformation, étape, sortie, logs et un outputStatus distinct. Le suivi de session convertit available en succès, error en échec et un état inconnu en échec. Un job échoué marque les descendants non réussis SKIPPED. Une réussite déclenche les enfants admissibles. Le run devient terminal quand tous les scripts possèdent un job final ; WARNING peut contribuer à l’échec global, avec une règle propre aux runs partiels. Les messages Python renseignent aussi les étapes sans déterminer seuls le résultat global.",
+          "actors": "Exécuteur, bibliothèque Python, frontends et consommateurs de datasets.",
+          "api": "ExecutionUpdateStatusCommandHandler ; JobCompletedCommandHandler ; ScriptExecutionEvent ; ExecuteFinalPipelineEvent.",
+          "state": "DataflowExecution, DataflowJobExecution, JobDetail et ExecutionState de sortie. Historiques terminal et de provenance des jobs repris.",
+          "dependencies": "Runtime de session pour résultat, Kafka pour messages de scripts et événements de fin, projection data-dev/data-model.",
+          "target": "Runtimes Rust sépare état du calcul, état du candidat, décision d’audit et publication. Une sortie n’est disponible au lecteur que par une édition approuvée. Le vocabulaire legacy peut être exposé par une projection de compatibilité.",
+          "migration": "Écrire une table de transition et une matrice de conversion des états inconnus, WARNING, SKIPPED et reprises partielles. Éviter de recopier SUCCESS dans un statut de publication. Corréler les événements au run/tentative, pas seulement à version/script.",
+          "acceptance": "Livrer successivement RUNNING, SUCCESS puis un RUNNING retardé pour une même tentative. Le job reste terminal. Un run avec un enfant sauté et un candidat refusé expose séparément ces faits et ne publie aucune sortie partielle non approuvée.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/aggregate/DataflowExecution.kt",
+              "line": 137,
+              "why": "Calcul de fin et état global."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/aggregate/DataflowExecution.kt",
+              "line": 488,
+              "why": "Monotonie des statuts de jobs."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/ExecutionUpdateStatusCommandHandler.kt",
+              "line": 187,
+              "why": "Succès, échec, descendants et messages d’étape."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/JobCompletedCommandHandler.kt",
+              "line": 50,
+              "why": "Interprétation des résultats de session."
+            }
+          ]
+        },
+        {
+          "id": "PD-08",
+          "title": "Logs bornés, historique des transformations et conservation finale",
+          "observed": "Les messages de scripts écrivent des chunks associés à run/job/étape dans dataflow_job_execution_log. La normalisation gère les retours de ligne réels et échappés ; le traitement borne les lignes et peut filtrer les lignes marquées administrateur. Le poll de session extrait stdout, message et traceback. À la fin du job, le handler reconstruit les logs finaux, les sauvegarde dans les détails puis peut retirer les chunks déjà compactés. Les routes permettent détail du run, logs d’une transformation et choix showAll/showAllLogs. Des logs finaux tardifs peuvent encore être ajoutés alors que des transitions non finales tardives sont ignorées.",
+          "actors": "Développeur, support et opérateur.",
+          "api": "GET /executions/{id}?showAllLogs=... ; GET /dataflows/{dataflowDefinitionId}/transformations/{transformationId}/logs ; DataflowJobExecutionLogRepository ; LogUtils.",
+          "state": "Chunks PostgreSQL puis logs finaux dans les détails du job ; IDs run/job/step et createdAt.",
+          "dependencies": "Messages Python, résultats HTTP du runtime, repository des jobs et fonctions de filtrage.",
+          "target": "Audit/Runtimes Rust conserve des logs structurés bornés avec tenant, run, tentative, étape et offsets. Les gros volumes vont en objet immuable ; PostgreSQL garde index et reçus. Le filtrage de secrets précède diffusion et stockage des vues utilisateur.",
+          "migration": "Préserver formats et choix de filtre requis par l’interface, documenter explicitement la troncature et migrer les historiques accessibles. Ne pas assimiler l’agrégation actuelle de lignes à une piste d’audit de publication.",
+          "acceptance": "Produire un log volumineux, un message final retardé et une valeur secrète de test. Le log reste consultable par pages, signale sa borne, conserve le final une seule fois et ne diffuse pas le secret.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/execution/repository/dao/DataflowJobExecutionLogDAO.kt",
+              "line": 9,
+              "why": "Stockage des chunks par run/job/étape."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/ExecutionUpdateStatusCommandHandler.kt",
+              "line": 170,
+              "why": "Finalisation puis nettoyage des chunks."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/ExecutionUpdateStatusCommandHandler.kt",
+              "line": 217,
+              "why": "Messages retardés et borne des logs."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/util/LogUtils.kt",
+              "line": 5,
+              "why": "Normalisation, filtre et borne de lignes."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/SubmittedCommandHandler.kt",
+              "line": 63,
+              "why": "Extraction des sorties de session."
+            }
+          ]
+        },
+        {
+          "id": "PD-09",
+          "title": "Annulation et signal de commit Spark",
+          "observed": "DELETE /executions/{id} est idempotent pour une exécution déjà finale. Pour un job unique actuellement marqué Spark committed, l’annulation est refusée. Pour plusieurs jobs avec un job committé et des travaux en attente, le service annule mais remonte une exception de commit partiel. Le marqueur est posé par un callback authentifié qui charge la dernière exécution de la version, vérifie le projet persistant et le job actif. L’annulation inscrit ExecutionCancelled, passe le run en CANCELED et émet l’événement. Une boucle retire ensuite les files et tente l’annulation distante. Ce booléen ne constitue pas une preuve d’audit ni un historique de publications approuvées.",
+          "actors": "Utilisateur qui annule, runtime appelant le callback et IAM.",
+          "api": "DELETE /executions/{id} ; POST /spark-hook/versions/{versionId}/scripts/{scriptId}/commit avec contrat pylib ; DataflowExecutionCancelCommandHandler ; SparkCommitCommandHandler.",
+          "state": "Flag isSparkCommitted sur job, run CANCELED, commande ExecutionCancelled et files supprimées ; résultat partiel possible.",
+          "dependencies": "IAM runner authorize, PostgreSQL, runtime HTTP et événements d’exécution.",
+          "target": "Runtimes Rust définit l’annulation par phase. Avant publication, elle arrête la tentative et abandonne le candidat. Après publication, elle n’efface pas l’édition approuvée. Publisher conserve le reçu exact ; une compensation devient une nouvelle commande auditée.",
+          "migration": "Importer isSparkCommitted comme signal historique limité. Remplacer la résolution dernière-exécution-par-version par run/tentative explicites. Garder un reçu d’annulation distante jusqu’à confirmation au lieu de déduire le succès de la suppression de file.",
+          "acceptance": "Annuler avant audit, entre audit et publication, puis après publication. Les deux premiers cas ne changent pas l’édition visible ; le dernier conserve l’édition et retourne son reçu. Un callback d’une vieille tentative ne peut marquer un nouveau run.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/DataflowExecutionCancelCommandHandler.kt",
+              "line": 115,
+              "why": "Idempotence et règles committed/partial committed."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/SparkCommitCommandHandler.kt",
+              "line": 30,
+              "why": "Autorisation, recherche et flag commit."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/CancelExecutionCommandHandler.kt",
+              "line": 43,
+              "why": "Retrait des files et annulation distante."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/execution/controller/SparkHookController.kt",
+              "line": 23,
+              "why": "Callback transactionnel du runner."
+            }
+          ]
+        },
+        {
+          "id": "PD-10",
+          "title": "Planification cron, fuseaux et récupération des horaires",
+          "observed": "Le service conserve les schedules et exige une version en production non supprimée pour les modifier. La commande temporelle accepte notamment MANUAL et RECURRENT ; elle refuse PLANNED et les types événementiels dans ce parcours. Les schedules temporels existants sont diffés tandis que les schedules événementiels sont préservés. Quartz conserve jobs et triggers dans PostgreSQL, demande recovery et interdit une exécution concurrente d’un même job. L’adaptateur normalise certaines expressions, applique le fuseau et peut relancer les schedules dont une prochaine occurrence existe au démarrage. Le contrôle initial de cron utilise directement CronExpression.isValidExpression, distinct du chemin de normalisation. Un listener journalise les misfires ; il ne décrit pas à lui seul une politique métier exhaustive de rattrapage.",
+          "actors": "Utilisateur planifiant un flow et opérateur du scheduler.",
+          "api": "POST/GET /dataflows/{id}/schedules ; DataflowScheduleTimeCommand ; DataflowSchedulerServiceQuartzImpl ; DataflowJob.",
+          "state": "DataflowSchedule avec fréquence, expression, timezone et date ; tables Quartz JDBC avec état de cluster.",
+          "dependencies": "Version de production, PostgreSQL/Quartz, contrôleur de runs et événements de schedules vers data-dev.",
+          "target": "Runtimes Rust possède un scheduler durable. Chaque occurrence est identifiée par schedule/version/instant logique, avec politique explicite de DST, retard, chevauchement, rattrapage et annulation. Le déclenchement produit une commande idempotente.",
+          "migration": "Exporter les expressions et fuseaux puis comparer une séquence d’occurrences avant bascule. Décider le support du type PLANNED historique et des formats acceptés. Éviter la double activation Quartz/Rust pour un même schedule.",
+          "acceptance": "Comparer les occurrences sur changement d’heure, arrêt prolongé et redémarrage de deux contrôleurs. Les occurrences exécutées, ignorées ou rattrapées ont chacune un reçu et aucune occurrence n’est créée deux fois.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/schedule/command/DataflowScheduleCommandHandler.kt",
+              "line": 104,
+              "why": "Diff des schedules et types refusés."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/schedule/service/quartz/DataflowSchedulerServiceQuartzImpl.kt",
+              "line": 87,
+              "why": "Création Quartz avec recovery."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/schedule/service/quartz/DataflowSchedulerServiceQuartzImpl.kt",
+              "line": 175,
+              "why": "Validation, normalisation, fuseau et reprise."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/schedule/service/quartz/DataflowSchedulerServiceQuartzImpl.kt",
+              "line": 217,
+              "why": "Job non concurrent transactionnel."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/resources/application.properties",
+              "line": 292,
+              "why": "Quartz JDBC clusterisé."
+            }
+          ]
+        },
+        {
+          "id": "PD-11",
+          "title": "Déclenchements par fin de flow, dataset ou fichier",
+          "observed": "Le consumer d’exécution traite FINISHED en recherchant les schedules dépendants. Seules les versions de branche par défaut fournissent des candidats. Selon le type de script, les candidats identifient le flow et éventuellement un dataset ; les opérations techniques hors collecte sont exclues. Pour chaque schedule, le handler cherche la dernière version en production et déclenche si elle n’est pas supprimée, si un cluster est disponible et si sa dernière exécution n’est pas active. Un endpoint projet/fichier cherche les schedules par projet et chemin. Le déclenchement planifié temporel exige dans le chemin lu une précédente exécution de production. Le handler de fin lu ne filtre pas lui-même le succès de l’exécution source ; la sémantique FINISHED doit être prise en compte.",
+          "actors": "Producteur d’événement de fichier, runtime amont et scheduler.",
+          "api": "POST /dataflows/events/projects/{id} ; EventExecutionFinishedCommand ; DataflowVersionRunProjectIdCommand ; TriggerAtEventEvent.",
+          "state": "DataflowSchedule avec eventTriggerId/path ; nouveau run avec triggerId, triggerDisplayName et principal SCHEDULED_OWNER.",
+          "dependencies": "Événements process-data et data-dev, données de projet, versions de production et clusters.",
+          "target": "Flows/Runtimes Rust distinguent événement technique de fin, publication approuvée et événement source. Les dépendances de données se basent sur une édition Iceberg approuvée. Un flux éphémère est d’abord écrit dans un journal durable ; son epoch/range déclenche des runs bornés sous WAP.",
+          "migration": "Inventorier quels flows dépendent actuellement d’une fin même échouée et proposer une règle explicite. Donner un ID durable aux événements de fichiers et une clé de déduplication par occurrence. Ne pas perdre les triggers consommés pendant une période de désactivation.",
+          "acceptance": "Un calcul amont qui échoue n’active pas une dépendance déclarée publication réussie. Rejouer la même édition ou le même fichier ne crée pas un doublon. Une nouvelle occurrence légitime du même chemin crée un nouveau run.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/DataflowVersionRunCommandHandler.kt",
+              "line": 231,
+              "why": "Précondition de dernière exécution pour cron."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/DataflowVersionRunCommandHandler.kt",
+              "line": 288,
+              "why": "Déclenchement sur fin et projet/fichier."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/schedule/aggregate/ScheduleCandidate.kt",
+              "line": 14,
+              "why": "Candidats selon type de script."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/schedule/controller/ScheduleController.kt",
+              "line": 60,
+              "why": "Route de fichier projet."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/common/event/consumer/ProcessDataKafkaEventConsumer.kt",
+              "line": 38,
+              "why": "Traitement de FINISHED."
+            }
+          ]
+        },
+        {
+          "id": "PD-12",
+          "title": "Profils de clusters, capacité et commandes de cycle de vie",
+          "observed": "Les API créent, vérifient, mettent à jour, listent, arrêtent, reprennent et suppriment des clusters. Deux familles de configuration existent : Python avec CPU/RAM/image, et PySpark avec ressources du driver et des exécuteurs. La validation vérifie notamment nom disponible, image compatible, taille mémoire minimale et au moins une session. Une mise à jour ne peut changer de famille ; un changement de configuration remplace les sessions, tandis qu’un changement de nombre augmente ou réduit leur effectif. La réduction préfère les sessions supprimables puis marque les autres à supprimer. Les clusters par défaut sont protégés de certaines commandes de pause et suppression. La pause mémorise le nombre souhaité de sessions pour la reprise. L’état du cluster est dérivé des états des sessions. Le parcours /projects/{projectId}/execution-clusters restitue les profils disponibles sans appliquer de filtre projet dans le handler de liste lu.",
+          "actors": "Administrateur des ressources, utilisateur choisissant un profil et moteur de planification.",
+          "api": "POST /clusters/check ; GET/POST /clusters ; GET/PATCH/DELETE /clusters/{clusterId} ; POST /clusters/{clusterId}/stop et /start ; GET /clusters/{clusterId}/sessions ; GET /projects/{projectId}/execution-clusters ; GET /projects/{projectId}/execution-clusters/{clusterId}/libraries.",
+          "state": "Cluster avec owner, configuration, default, paused, toDelete, nombre avant pause et image de serveur ; collection de Session avec état. La suppression physique du cluster attend la disparition de ses sessions.",
+          "dependencies": "Catalogue d’images et bibliothèques, app-management pour les ressources, événements de cluster vers data-dev et historique d’exécutions.",
+          "target": "Runtimes Rust remplace les clusters persistants par des profils de capacité et des pools de workers fongibles. Les quotas organisation/projet, admission, priorité et limites par run sont explicites. Python utilisateur reçoit un profil isolé ; aucun profil final ne dépend de Spark.",
+          "migration": "Conserver des identifiants et noms de profil pour les flows importés, traduire les ressources utiles et signaler les options Spark sans équivalent. Distinguer arrêter l’admission, drainer les tentatives et détruire la capacité. Décider si les profils sont globaux ou limités au projet.",
+          "acceptance": "Réduire un pool pendant deux runs : les runs admis terminent ou sont annulés selon la politique et aucune session occupée n’est perdue implicitement. Un projet à quota épuisé reste en attente avec raison visible, puis démarre après libération. Le changement de moteur exige requalification du manifeste.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/session/controller/ClusterController.kt",
+              "line": 80,
+              "why": "Toutes les commandes de cluster et lectures de sessions."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/session/aggregate/Cluster.kt",
+              "line": 40,
+              "why": "Remplacement, réduction, pause et reprise des sessions."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/session/aggregate/Cluster.kt",
+              "line": 208,
+              "why": "Configurations et validations de ressources."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/session/command/UpdateClusterCommandHandler.kt",
+              "line": 36,
+              "why": "Famille du cluster immuable."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/session/controller/ExecutionClusterController.kt",
+              "line": 27,
+              "why": "Route de sélection de profil dans un projet."
+            }
+          ]
+        },
+        {
+          "id": "PD-13",
+          "title": "Réconciliation des sessions et des serveurs Spark Connect",
+          "observed": "L’orchestrateur compare les sessions persistées, les files d’exécution et les états remontés par app-management. Pour PySpark, un serveur Spark Connect est assuré tant que le cluster conserve des sessions. Une nouvelle image provoque le remplacement du serveur. La réconciliation récupère un inventaire des sessions et serveurs, actualise les images effectivement déployées et oublie un serveur absent pour le recréer. Les sessions mortes ou revenues à STARTING/NOT_STARTED font échouer leurs jobs, retirent leurs soumissions et peuvent conduire à une annulation distante. Le log de ce chemin emploie un message out-of-memory même si la cause exacte n’est pas établie ici. L’adaptateur suit aussi localement le dernier retour des sessions et applique des délais distincts de démarrage et de silence. Ces caches de temps et l’état désiré PostgreSQL n’ont pas le même périmètre de reprise.",
+          "actors": "Orchestrateur process-data et opérateur d’exploitation.",
+          "api": "SessionCheckCommandHandler ; SessionGroupingResultBuilder ; REST app-management /private/sessions/reconcile, /private/sessions/start, /private/sessions/delete, /private/sessions/server/start et /private/sessions/server/delete.",
+          "state": "Session avec sessionKey, startedAt, updatedAt, deployedImage et flags de suppression ; Cluster.serverImage ; files des jobs ; caches locaux de dernier retour dans l’adaptateur.",
+          "dependencies": "App-management et runtime Python/PySpark ; catalogue d’images ; journal d’exécutions et événements de sessions.",
+          "target": "Runtimes Rust réconcilie tentative, bail et worker observé. Un worker disparu devient une tentative perdue, avec cause structurée et nouvelle tentative décidée par politique. L’ancien worker ne peut plus publier : Writer/Publisher vérifient l’autorité de tentative avant toute transition approuvée.",
+          "migration": "Importer les diagnostics et règles utiles de nettoyage ; supprimer entièrement Spark Connect à la fin de migration. Remplacer les caches de silence significatifs par des heartbeats et échéances persistés. Prévoir un inventaire Kubernetes encapsulé et une réconciliation sans dépendre d’un nom d’image mutable.",
+          "acceptance": "Perdre un pod, un serveur et une réponse d’inventaire à des moments différents. La disparition est distinguée d’une indisponibilité de l’API. Une reprise ne crée pas deux publications ; les octets d’une tentative expirée restent candidats non approuvés et sont traités par rétention.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/SessionCheckCommandHandler.kt",
+              "line": 107,
+              "why": "Cycle de serveur Spark Connect selon sessions et image."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/SessionCheckCommandHandler.kt",
+              "line": 234,
+              "why": "Échec des jobs attachés aux sessions mortes."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/SessionCheckCommandHandler.kt",
+              "line": 286,
+              "why": "Réconciliation de l’inventaire et serveurs absents."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/session/service/appmanagement/ClusterConnectServerServiceAppManagementImpl.kt",
+              "line": 85,
+              "why": "Polling, délais et inventaire distant."
+            }
+          ]
+        },
+        {
+          "id": "PD-14",
+          "title": "Images d’exécution, builds et historique des mises à jour",
+          "observed": "Une image personnalisée est créée à partir d’une image de base avec des bibliothèques validées. L’appel de build est délégué à app-management ; l’état et l’historique de mise à jour sont conservés localement. Une image de base ne suit pas le parcours de modification/suppression des images personnalisées. Une mise à jour refuse une construction encore RUNNING et refuse une liste inchangée. Le rebuild repart du dernier besoin exprimé, y compris après un échec, et peut retargeter le registre interne configuré. Les callbacks de build ne modifient l’image que si le dernier update est RUNNING et correspond exactement au nom/tag attendu. Au démarrage, les images de base sont synchronisées ; les changements de tags peuvent redémarrer les sessions. Les images personnalisées construites avant une base actualisée peuvent être reconstruites si aucun build ne tourne déjà. La suppression d’image déclenche aussi la suppression des clusters concernés.",
+          "actors": "Administrateur et auteur d’un environnement Python personnalisé.",
+          "api": "POST/GET /images ; PATCH/DELETE/GET /images/{imageId} ; POST /images/{imageId}/builds ; GET /images/{imageId}/updates ; ImageServiceAppManagement ; UpdateImageStatusCommandHandler.",
+          "state": "Image, ImageUpdate et historique incrémental de bibliothèques ; RUNNING puis SUCCESS/FAILURE ; nom de base, nom d’image construite et dates de build.",
+          "dependencies": "App-management /private/build/image, registre de conteneurs, callbacks Kafka de build, images de base configurées et clusters.",
+          "target": "Runtimes/Applications Rust conservent une spécification d’environnement immuable et un digest de résultat, avec provenance, SBOM, politique de sécurité et reçu de build. Les builders tiers peuvent être Go/C++ ou outils sans JVM encapsulés. Le run référence le digest qualifié.",
+          "migration": "Exporter historique, base et besoins de packages, puis construire des environnements sans Spark/JVM. Ne pas assimiler nom/tag à identité immuable. Traiter les échecs et callbacks retardés comme des tentatives de build distinctes. Conserver les images legacy uniquement pendant la transition contrôlée.",
+          "acceptance": "Un callback ancien reçu pendant une reconstruction n’écrase pas le nouveau résultat. Une base changée crée un nouveau digest et nécessite la requalification attendue ; les runs déjà admis conservent leur digest d’origine. La suppression d’une image encore retenue par l’audit est refusée ou différée.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/image/controller/ImageController.kt",
+              "line": 58,
+              "why": "Contrats de création, mise à jour, rebuild et lecture."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/image/command/UpdateImageCommandHandler.kt",
+              "line": 42,
+              "why": "Restrictions et diff des besoins."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/image/command/RebuildImageCommandHandler.kt",
+              "line": 44,
+              "why": "Reconstruction après échec et reprise des besoins."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/image/command/UpdateImageStatusCommandHandler.kt",
+              "line": 130,
+              "why": "Protection contre callback obsolète."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/image/command/RebuildOutdatedCustomImagesCommandHandler.kt",
+              "line": 49,
+              "why": "Reconstruction des images dépendantes devenues anciennes."
+            }
+          ]
+        },
+        {
+          "id": "PD-15",
+          "title": "Validation et consultation des bibliothèques Python",
+          "observed": "La validation compare les bibliothèques demandées avec celles de l’image de base. Une bibliothèque de base imposée ne peut être redéfinie avec une version contradictoire. Les bibliothèques personnalisées sont résolues puis enregistrées avec leur contrainte demandée. Les erreurs sont agrégées pour retourner plusieurs problèmes à la fois ; une demande sans bibliothèque personnalisée est refusée dans ce service de vérification. L’adaptateur consulte les métadonnées PyPI ou un index particulier pour la bibliothèque interne. Il normalise les noms/extras et vérifie les versions et extras quand les métadonnées permettent de conclure. Une absence de métadonnées extras n’équivaut pas à une validation complète. Les lectures distinguent bibliothèques appliquées à l’image et besoins du dernier update.",
+          "actors": "Auteur d’environnement et administrateur du registre.",
+          "api": "GET /images/{imageId}/libraries?lastUpdate=... ; GET /projects/{projectId}/execution-clusters/{clusterId}/libraries ; LibraryService.checkLibraries ; LibraryServicePyPiImpl.",
+          "state": "Library et relations base/custom/update avec nom, contrainte et version résolue ; historique des demandes d’environnement.",
+          "dependencies": "Index Python public/interne, image de base, service de build et réseau sortant du service.",
+          "target": "Runtimes Rust définit le lock d’environnement, tandis qu’un builder Python encapsulé résout les dépendances. Le lock fixe versions transitives, hashes, provenance et plateforme. Egress gère l’accès aux index ; Audit conserve le besoin demandé et le résultat exact.",
+          "migration": "Rejouer les demandes historiques contre un index contrôlé, détecter les packages disparus, natifs ou dépendants de Java, puis qualifier les locks. Préserver les contraintes initiales comme information sans les utiliser seules pour reproduire un run.",
+          "acceptance": "Une contrainte inchangée produit le même environnement quand le lock existe, même si l’index publie une nouvelle version. Un package lié à la JVM ou un extra inconnu est bloqué avant activation selon la règle de qualification ; une indisponibilité d’index reste une erreur distincte d’un package inexistant.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/image/service/LibraryService.kt",
+              "line": 20,
+              "why": "Contrôle des packages de base, custom et agrégation des erreurs."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/image/service/LibraryServicePyPiImpl.kt",
+              "line": 28,
+              "why": "Résolution des métadonnées et index."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/image/service/LibraryServicePyPiImpl.kt",
+              "line": 89,
+              "why": "Normalisation et traitement des extras."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/image/controller/ImageController.kt",
+              "line": 134,
+              "why": "Lecture appliquée ou dernier update."
+            }
+          ]
+        },
+        {
+          "id": "PD-16",
+          "title": "Historique des exécutions, filtres, facettes et consultation",
+          "observed": "POST /executions exige le projet, convertit les identifiants IAM/legacy et retourne une recherche paginée d’exécutions visibles. Les critères entre dimensions sont combinés par AND et les valeurs d’une dimension par OR. Les facettes ignorent leur propre sélection pour présenter les alternatives. La recherche peut viser noms d’exécution/flow, branches, clusters, utilisateurs, statuts et bornes temporelles. Le repository filtre les versions techniques selon toShow et utilise la date de création pour les bornes. Les tris autorisés sont contrôlés dans le controller. Les autres routes servent l’historique d’une branche, le détail d’un run, les logs d’une transformation, les exécutions d’un cluster et les exécutions RUNNING. Le paramètre showAllLogs influe sur la restitution des logs, pas sur leur autorisation.",
+          "actors": "Développeur, opérateur et frontends.",
+          "api": "POST /executions ; GET /executions/{executionId} ; GET /dataflows/{dataflowId}/branches/{branchName}/executions ; GET /dataflows/{dataflowDefinitionId}/transformations/{transformationId}/logs ; GET /clusters/{clusterId}/executions ; GET /clusters/executions/running.",
+          "state": "DataflowExecution, JobExecution, versions toShow, utilisateurs/projets miroirs et logs stockés ; DTO détail et réponses paginées/facettes.",
+          "dependencies": "PostgreSQL, canonicalisation IAM, agrégats d’exécution et authorization gateway.",
+          "target": "Runtimes/Audit Rust exposent une vue indexée des runs, tentatives et transitions, liée aux éditions approuvées sans confondre statut technique et publication. Les totaux, facettes et logs appliquent la même portée d’autorisation que les lignes.",
+          "migration": "Reproduire un corpus de requêtes UI et comparer tri, pagination, filtres vides, fenêtres temporelles et versions cachées. Ajouter les IDs de tentative et de publication de manière additive avant de retirer les DTO Spark/session.",
+          "acceptance": "Comparer historique et facettes sur des runs de plusieurs projets, branches, statuts et utilisateurs. Les données invisibles ne changent ni les options ni les compteurs. Un run techniquement terminé sans publication reste distinguable d’une édition approuvée.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/execution/controller/DataflowPipelineController.kt",
+              "line": 90,
+              "why": "Recherche, facettes, tri et canonicalisation."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/execution/controller/DataflowPipelineController.kt",
+              "line": 147,
+              "why": "Historique, détail et logs."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/execution/repository/DataflowExecutionFilteredQuery.kt",
+              "line": 35,
+              "why": "Prédicats, dates, recherche et toShow."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/query/ExecutionFilter.kt",
+              "line": 6,
+              "why": "Dimensions du filtre."
+            }
+          ]
+        },
+        {
+          "id": "PD-17",
+          "title": "Suivi temps réel SSE et notifications de clusters",
+          "observed": "Les routes exposent un abonnement SSE par utilisateur, version de flow et éventuellement exécution, ainsi que des routes pour un cluster ou toutes les exécutions en cours. Les emitters sont conservés dans une map du processus et réutilisés pour une même clé. Ils expirent et sont supprimés sur erreur, fin ou timeout. Le chemin d’émission lu envoie directement aux clés de flow compatibles ; les données de cluster et de toutes les exécutions sont relayées vers Notification Center par Kafka. Les clés SSE de cluster peuvent être enregistrées, mais ce chemin n’émet pas directement vers elles. L’état SQL et les endpoints de détail restent nécessaires pour rétablir l’affichage après reconnexion ; aucun replay durable par Last-Event-ID n’a été constaté dans ce service.",
+          "actors": "Frontend de développement et console d’exploitation.",
+          "api": "GET /dataflows/{dataflowId}/versions/{versionId}/sse ; GET /clusters/{clusterId}/executions/sse ; GET /clusters/executions/running/sse ; SseEmitterService ; NotificationCenterRelayKafkaImpl.",
+          "state": "Emitters locaux indexés par SseKey ; DTO d’état construit au fil des événements ; relay Kafka vers rooms de cluster.",
+          "dependencies": "Runtimes d’exécution, serveur HTTP/SSE, Notification Center et Kafka.",
+          "target": "Notifications Rust fournit un flux de mises à jour autorisé avec curseur durable et reprise. Les messages signalent un changement identifié ; les détails sont relus avec contrôle de portée. Les clients gèrent doublons, réordonnancement et perte de connexion.",
+          "migration": "Confirmer les routes effectivement utilisées par les interfaces et décider le retrait des anciens abonnements cluster SSE. Introduire une séquence de changement par run et une resynchronisation explicite. Retirer Kafka JVM lorsque le nouveau journal/relay sans JVM est qualifié.",
+          "acceptance": "Déconnecter le client pendant plusieurs transitions puis reconnecter sur un autre pod. Il récupère toutes les transitions utiles ou un signal explicite de resynchronisation, sans accéder à un run dont le droit a été retiré. Deux onglets d’un même utilisateur ne se neutralisent pas.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/execution/controller/DataflowPipelineController.kt",
+              "line": 248,
+              "why": "Abonnement par flow/version et exécution optionnelle."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/session/controller/ClusterController.kt",
+              "line": 185,
+              "why": "Routes SSE de clusters et exécutions actives."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/execution/service/SseEmitterService.kt",
+              "line": 39,
+              "why": "Map locale et cycle de vie des emitters."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/execution/service/SseEmitterService.kt",
+              "line": 94,
+              "why": "Émission flow directe et relais cluster vers Notification Center."
+            }
+          ]
+        },
+        {
+          "id": "PD-18",
+          "title": "Autorisation des runners et configuration lakehouse",
+          "observed": "Deux opérations techniques sont contrôlées par RunnerAuthorizationClient : la lecture de configuration et le signal de commit. Le client exige une identité BEARER_JWT et un clientId ; il appelle IAM avec les credentials entrants, l’utilisateur, le client, l’opération et éventuellement le projet. Une réponse négative donne un refus ; un IAM indisponible donne une erreur de service. Le client n’a pas de cache ou d’autorisation de secours dans le code lu. /lakehouse/conf retourne les noms de catalogue et namespace après autorisation et exige le User-Agent pylib. Le hook commit reprend le projet du run trouvé puis vérifie l’opération dédiée. Le User-Agent est un critère de route, pas une preuve d’identité autonome.",
+          "actors": "Runner Python/PySpark et IAM.",
+          "api": "GET /lakehouse/conf ; POST /spark-hook/versions/{versionId}/scripts/{scriptId}/commit ; RunnerAuthorizationClient.requireConfiguration ; RunnerAuthorizationClient.requireCommit ; IAM /internal/runners/authorize.",
+          "state": "Décision centrale à la demande ; contexte d’identité entrante ; signal isSparkCommitted sur le job. Aucune preuve de publication Iceberg n’est créée par la réponse de configuration.",
+          "dependencies": "IAM runner authorization, bearer entrant et paramètres de catalogue configurés.",
+          "target": "IAM/Runtimes Rust délivrent des capacités de run limitées au projet, à la tentative, aux entrées, sorties et à l’échéance. Query contrôle la lecture ; Writer médie le staging ; Publisher seul approuve la publication. Le worker n’obtient jamais table.modify générique qui permet aussi commit/drop.",
+          "migration": "Remplacer le hook Spark par un protocole explicite de proposition de candidat et de publication. Propager runId/tentativeId et portée réelle jusque dans les appels de données. Conserver une façade de configuration temporaire avec les mêmes refus explicites.",
+          "acceptance": "Une identité de service sans délégation de run, un mauvais projet, un client non prévu ou une capacité expirée ne peuvent ni écrire ni publier. Une panne IAM échoue sans fallback permissif. Le worker ne peut pas utiliser son accès staging pour supprimer la table.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/configuration/RunnerAuthorizationClient.kt",
+              "line": 26,
+              "why": "Opérations et appel central, refus et indisponibilité."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/configuration/RunnerAuthorizationClient.kt",
+              "line": 53,
+              "why": "Exigence bearer JWT et clientId."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/execution/controller/ConfigurationForLibController.kt",
+              "line": 19,
+              "why": "Configuration limitée après autorisation."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/SparkCommitCommandHandler.kt",
+              "line": 30,
+              "why": "Projet persisté utilisé pour la décision commit."
+            }
+          ]
+        },
+        {
+          "id": "PD-19",
+          "title": "Miroirs IAM, identifiants canoniques et réconciliation des droits",
+          "observed": "Le service peut consommer l’identité legacy ou IAM selon une propriété exclusive. Les événements IAM créent/actualisent les utilisateurs et projets, lient leurs identifiants et alimentent les adhésions. Une suppression utilisateur désactive le miroir. Une suppression projet laisse le miroir en place car versions et exécutions le référencent. Le transfert de propriétaire arrive via les événements de data-dev, pas directement via l’offboarding IAM. Une adhésion dont les correspondances sont indisponibles est refusée et suit retry/DLT. Les API résolvent les projets IAM vers les IDs historiques pour interroger les tables, puis réexposent l’ID canonique si connu. Une route d’administration lance une réconciliation asynchrone des faits d’autorisation.",
+          "actors": "IAM, gateway et administrateur de migration.",
+          "api": "IamKafkaEventConsumer ; ProjectIdResolver ; POST /admin/reconcile-tuples.",
+          "state": "User/Project/ProjectMember miroirs, tables de correspondance IAM/legacy et faits d’autorisation émis.",
+          "dependencies": "IAM, événements data-dev de propriétaire, PostgreSQL et Kafka.",
+          "target": "IAM Rust reste l’autorité ; Runtimes garde uniquement les références canoniques et l’attribution historique. Les contrôles de run utilisent la décision courante et une capacité bornée.",
+          "migration": "Importer les correspondances, réparer les événements refusés puis basculer une seule source d’identité. Préserver les auteurs historiques quand une identité est supprimée.",
+          "acceptance": "Un membre reçu avant son projet est rejoué après réconciliation sans création de faux projet. Une suppression utilisateur interdit les nouveaux runs et conserve les historiques attribués.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/common/event/consumer/IamKafkaEventConsumer.kt",
+              "line": 56,
+              "why": "Miroirs, suppression et membres."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/common/projectid/ProjectIdResolver.kt",
+              "line": 58,
+              "why": "Conversion des identifiants entrants et sortants."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/admin/controller/AdminReconcileTuplesController.kt",
+              "line": 49,
+              "why": "Réconciliation administrative asynchrone."
+            }
+          ]
+        },
+        {
+          "id": "PD-20",
+          "title": "Outbox, déduplication des événements et quarantaine",
+          "observed": "Les producteurs utilisent une outbox transactionnelle. Le relay réclame les lignes non envoyées avec SKIP LOCKED, attend l’acquittement Kafka puis marque sentAt ; un échec conserve la ligne, incrémente attempts et stocke l’erreur. Le tri par date ne constitue pas la barrière par clé présente dans data-dev. Des consumers emploient ProcessEventInbox dans la transaction : la clé est le messageId ou une empreinte de payload, unique par type d’événement. La couverture n’est pas universelle à tous les listeners. Les dead letters sont conservées avec provenance, payload et erreur ; un échec de stockage est relancé pour empêcher l’acquittement. La rétention supprime seulement les dead letters résolues et les lignes outbox envoyées selon des délais distincts.",
+          "actors": "Consumers interservices et exploitation.",
+          "api": "OutboxRelay.drain ; ProcessEventInbox.claim ; DeadLetterEventConsumer.consume ; DeadLetterRetention.cleanupResolved.",
+          "state": "Outbox SQL, inbox SQL, dead_letter_event et offsets Kafka ; livraison au moins une fois et déduplication locale pour les handlers équipés.",
+          "dependencies": "PostgreSQL, Kafka, événements data-dev/process-data/app-management/IAM et métriques.",
+          "target": "Runtimes/Audit Rust utilisent un journal durable sans JVM, une inbox et des séquences par agrégat. Les effets externes ont leur reçu idempotent. L’acquittement d’une progression de données suit la publication approuvée.",
+          "migration": "Cartographier chaque listener et sa clé d’idempotence, importer les éléments non acquittés, puis arrêter l’ancien producteur avant de transférer une partition logique. Définir explicitement l’ordre par run.",
+          "acceptance": "Couper après acquittement transport mais avant commit SQL du relay : le doublon est accepté sans double effet. Rejouer une dead letter après réparation conserve son lien avec l’événement initial et son résultat.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/common/outbox/OutboxRelay.kt",
+              "line": 25,
+              "why": "Envoi acquitté, tentatives et rétention."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/common/outbox/OutboxEventJPA.kt",
+              "line": 18,
+              "why": "Réclamation ordonnée avec SKIP LOCKED."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/common/event/consumer/ProcessEventInbox.kt",
+              "line": 14,
+              "why": "Déduplication dans la transaction."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/common/deadletter/DeadLetterEventConsumer.kt",
+              "line": 37,
+              "why": "Quarantaine persistante et refus d’ack si échec."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/common/deadletter/DeadLetterRetention.kt",
+              "line": 22,
+              "why": "Nettoyage limité aux éléments résolus."
+            }
+          ]
+        },
+        {
+          "id": "PD-21",
+          "title": "Démarrage, reprise des files et coexistence des réplicas",
+          "observed": "Au démarrage de production, le service cherche un autre pair vivant dans les tables Quartz. Si un pair existe, il évite les opérations de cold start qui annuleraient les runs et réinitialiseraient clusters/schedules. Sinon, il annule les runs orphelins tout en conservant ceux dont une file durable prouve une progression reprenable, initialise les clusters si activés et relance les schedules selon les flags. La disponibilité app-management est attendue avec un nombre borné de tentatives. Les images et bibliothèques sont synchronisées même en présence d’un pair. La détection de pair et les protections SQL observées ne qualifient pas à elles seules toute la boucle d’orchestration pour plusieurs réplicas.",
+          "actors": "Opérateur du déploiement et orchestrateur.",
+          "api": "RunAfterStartup.resetSessions ; StartCluster.startClusters ; ClusterPeerCheck.hasOtherLivePeer ; DataflowExecutionCancelRunningCommand.",
+          "state": "Files persistées, exécutions actives, état Quartz/heartbeat et images ; état local de la boucle d’orchestration.",
+          "dependencies": "PostgreSQL, Quartz, app-management, Kafka et readiness des runtimes.",
+          "target": "Runtimes Rust utilise des baux persistants et une réconciliation idempotente par run/tentative. Un rolling update ne change pas la propriété d’une publication ni l’identité de sa tentative. Les workers ne possèdent aucun état métier durable indispensable.",
+          "migration": "Qualifier crash et rolling update pour chaque étape de file avant de migrer les runs actifs. Importer les intentions restantes ou laisser finir les runs legacy ; empêcher l’activation simultanée de deux orchestrateurs sur un même run.",
+          "acceptance": "Redémarrer tous les contrôleurs puis effectuer un rolling update avec des jobs en attente, soumis et terminés mais non finalisés. Chaque run retrouve une issue expliquée et au plus une publication approuvée.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/RunAfterStartup.kt",
+              "line": 94,
+              "why": "Différence cold start/rolling update et flags."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/RunAfterStartup.kt",
+              "line": 54,
+              "why": "Attente bornée d’app-management."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/common/cluster/ClusterPeerCheck.kt",
+              "line": 24,
+              "why": "Détection de pair Quartz."
+            },
+            {
+              "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/command/DataflowExecutionCancelCommandHandler.kt",
+              "line": 179,
+              "why": "Conservation des runs possédant une progression durable."
+            }
+          ]
+        },
+        {
+          "id": "PD-22",
+          "title": "Maintenance SQL, migrations et exploitation du service",
+          "observed": "Le service comporte les migrations Flyway et un runner de migrations de code. Ce runner marque le résultat dans la table de suivi ; le chemin d’échec demande une sortie Spring avec code 0, ce qui nécessite une vérification explicite côté déploiement. La maintenance planifie VACUUM ANALYZE des tables d’exécution/jobs et collecte des statistiques de taille PostgreSQL. Le chart configure utilisateur non-root, probes et ressources ; le stockage persistant optionnel impose des contraintes de réplica et stratégie de mise à jour documentées. Les caches, outbox, quarantaine, tables Quartz et artefacts S3 ne se sauvegardent pas par un seul mécanisme.",
+          "actors": "Exploitation, équipe de migration et administrateur PostgreSQL.",
+          "api": "DatabaseMaintenanceService ; CleyropMigrationRunner ; Flyway ; probes et configuration Helm.",
+          "state": "Schémas SQL, table de migrations, statistiques, logs et volumes optionnels.",
+          "dependencies": "PostgreSQL, Kubernetes/Helm, S3, métriques et plateforme de sauvegarde.",
+          "target": "Migration/Maintenance Rust gèrent les opérations suivies, idempotentes et à échec explicite. Les migrations suivent Expand/Migrate/Contract. Audit établit les plans de rétention des candidats et preuves ; compaction de données sous WAP et GC séparé par garde de rétention.",
+          "migration": "Conserver une sauvegarde restaurable des commandes, historiques et reçus avant conversion. Remplacer le runner de migration JVM et ses codes de sortie ambigus. Documenter la restauration coordonnée avec les éditions Iceberg et artefacts immuables.",
+          "acceptance": "Une migration échouée bloque l’activation et expose son erreur. Restaurer la base de contrôle avec le catalogue plus récent reconstruit les projections sans faire reculer une édition approuvée ni republier un effet déjà reçu.",
+          "evidence": [
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/maintenance/DatabaseMaintenanceService.kt",
+              "line": 39,
+              "why": "Maintenance SQL et collecte de statistiques."
+            },
+            {
+              "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/codemigration/runner/CleyropMigrationRunner.kt",
+              "line": 30,
+              "why": "Suivi et sortie sur échec de migration."
+            },
+            {
+              "path": "services/process-data/chart/templates/deployment.yaml",
+              "line": 50,
+              "why": "Exécution non-root et probes du chart."
+            }
+          ]
+        }
+      ],
+      "entities": [
+        "DataflowVersion : copie exécutable reçue de data-dev, avec scripts, dépendances, manifestes, propriétaire, branche et projet réel d’exécution ; ce n’est pas une édition de données publiée.",
+        "DataflowExecution : run avec statut, déclencheur, principal, cluster, échéance de capacité, dates et jobs. L’exécution partielle conserve des résultats antérieurs marqués comme réutilisés.",
+        "DataflowJobExecution et JobDetails : script, étapes, sorties, logs et flag historique isSparkCommitted. Les statuts finaux ne décrivent pas à eux seuls un reçu de publication.",
+        "DataflowSubmission, JobSubmission, JobSubmitted, JobCompleted et ExecutionCancelled : intentions et étapes de progression durables utilisées pour reprendre après incident.",
+        "Cluster et Session : capacité persistante Python/PySpark, ressources, images, état observé, pause et suppression différée.",
+        "Image, ImageUpdate et Library : base, environnement personnalisé, demandes de packages, builds et historique.",
+        "DataflowSchedule : expression/fuseau ou déclenchement événementiel ; Quartz stocke jobs, triggers et heartbeat.",
+        "Miroirs User/Project/ProjectMember, correspondances IAM, outbox, inbox, quarantaine, chunks de logs et suivi de migration."
+      ],
+      "dependencies": [
+        "Data-dev produit VersionEvent, changements de propriétaire, suppressions et triggers ; process-data renvoie états de run, schedules et clusters.",
+        "App-management reçoit les appels REST de session, serveur Spark Connect, submission, cancellation, inventaire et build d’image ; les sessions exposent aussi leur état/job en HTTP.",
+        "S3 héberge les archives de scripts ; le run obtient une URL signée vers la version/script. Le contenu effectif et les versions déployées ne sont pas inspectés.",
+        "IAM autorise les opérations de runner et fournit les miroirs ; gateway protège les routes externes ; Notification Center relaie les mises à jour de clusters.",
+        "PostgreSQL conserve contrôle et historique ; Kafka transporte Protobuf et événements ; Quartz ajoute la planification clusterisée ; PyPI/index interne fournit les bibliothèques."
+      ],
+      "target_domains": [
+        "Runtimes",
+        "Flows",
+        "IAM",
+        "Writer",
+        "Publisher",
+        "Query",
+        "Applications",
+        "Notifications",
+        "Audit",
+        "Migration",
+        "Maintenance",
+        "Egress"
+      ],
+      "control_plane": [
+        "API Rust de commandes de run, admission, tentative, annulation, planification et progression, avec idempotence, révision attendue et journal durable.",
+        "Flows fournit une révision immuable et un manifeste typé. Runtimes épingle entrées approuvées, environnement, paramètres, portée IAM, budget et échéance avant admission.",
+        "PostgreSQL reste l’autorité des commandes, identités et reçus d’effets ; les checkpoints publiés se lisent dans les éditions Iceberg approuvées.",
+        "Publisher coordonne les sorties et crée une release multi-sorties elle-même édition Iceberg, comprenant source/epoch/range/participants ; les lecteurs épinglent cette release.",
+        "Le statut du run distingue calcul, staging, audit, publication et effets. EXPORT est un effet ; EXPOSURE est un consommateur déclaré."
+      ],
+      "data_plane": [
+        "Workers fongibles pour runs bornés, moteurs Rust/Arrow/SQL et Python isolé. Suppression finale des sessions Spark, Spark Connect, Quartz JVM, Kafka JVM et de toute autre dépendance Java.",
+        "Le worker soumet les octets au Writer de confiance. Il ne détient pas table.modify générique ; Publisher contrôle la publication après audit de fichiers immuables.",
+        "Tous les kinds TABLE, INCREMENTAL, VIEW, FILESET, MODEL, EMBEDDINGS, FEATURESET et STREAM utilisent WAP. Un flux éphémère est journalisé durablement avant gouvernance et traité par intervalles bornés.",
+        "Le candidat porte origin.* ; la preuve post-candidat est liée durablement sans réécriture du summary par fast-forward. UUID/refs/schema/spec/ascendance ne remplacent pas un protocole de fencing Hemera.",
+        "Publish-then-ack lie checkpoint publié et édition approuvée. Compaction suit le même circuit WAP ; expiration/GC utilisent un plan audité et les gardes de rétention."
+      ],
+      "rust_core": [
+        "runtimes-api : DTO compatibles, admission, autorisations et résolution des identités canoniques.",
+        "run-controller : machine d’états, files persistées, baux de tentative, réconciliation, annulation et receipts.",
+        "scheduler : occurrences durables, cron/fuseaux, événements, déduplication et politique de rattrapage.",
+        "environment-registry : locks Python, digests de conteneur, provenance et builders encapsulés.",
+        "worker-gateway : lancement, état, logs structurés et capacités bornées ; aucune API de publication générique vers le worker.",
+        "audit-projection : historique des runs/tentatives, lien aux publications approuvées, métriques et flux de notification reprenables."
+      ],
+      "security": [
+        "Conserver la distinction initiateur manuel, owner interne/planifié et projet réel des opérations fabriquées. Ne pas dériver des droits du seul owner courant ou du dataflowId synthétique.",
+        "Les dates de capacité persistées doivent survivre à la reprise. Une nouvelle tentative ne prolonge pas implicitement l’autorisation du run.",
+        "Le code utilisateur, packages, logs, URL signées et fichiers sont des surfaces tenant ; limiter octets, durée, réseau, secrets et scopes, avec redaction dans les diagnostics.",
+        "La suppression de projet/utilisateur conserve l’attribution historique sans conserver un droit d’accès. Les projections et caches ne sont pas une source d’autorisation autonome."
+      ],
+      "operations": [
+        "La lecture établit les mécanismes présents, pas leur qualification en multi-réplicas. Quartz clusterisé ne suffit pas à prouver la sûreté de la boucle Orchestrator de chaque pod.",
+        "Surveiller âge des files, durée d’admission, tentatives perdues, dead letters, relay attempts, silences runtime, dérive d’image, retard de schedule et différences entre fin technique et publication.",
+        "Sauvegarder PostgreSQL, artefacts et catalogue avec une procédure de restauration qui réconcilie les éditions déjà publiées ; ne pas traiter la base de contrôle comme checkpoint data autoritaire.",
+        "Qualifier redémarrage complet, rolling update, perte réseau après submit, arrêt pendant commit et callback retardé. Aucun de ces parcours n’a été exécuté dans cet audit."
+      ],
+      "migration_steps": [
+        "Geler le contrat API/événements et un corpus représentatif : Python, SQL, PySpark, partial, preview, collect, delete, empty et update-column.",
+        "Importer IDs canoniques, versions, manifestes, profils, schedules et historique ; isoler les versions anciennes sans manifeste complet.",
+        "Construire scheduler et controller Rust en observation passive puis comparer leurs décisions sans lancer de travail concurrent.",
+        "Qualifier l’exécution sans JVM par opérateur, package et type de flow ; rendre les incompatibilités explicites avant activation.",
+        "Déployer Writer/Publisher, audit immuable, checkpoints d’édition et receipts ; qualifier les scénarios de panne et de multi-sorties.",
+        "Basculer par projet/profil après drainage ou reprise explicite des runs legacy ; attribuer chaque occurrence et run à un seul controller.",
+        "Réconcilier queues/outbox/DLT puis retirer process-data JVM, Spark Connect, sessions Spark, Quartz et transport Kafka JVM. Conserver les lectures d’historique nécessaires."
+      ],
+      "open_questions": [
+        "Le contrat exact de succès attendu par les triggers FINISHED doit être décidé ; le handler lu ne filtre pas le succès source.",
+        "Le parcours schedule temporel requiert une exécution antérieure de production : confirmer la création initiale attendue côté produit.",
+        "Le signal isSparkCommitted pointe le dernier run d’une version et un script ; préciser les garanties de corrélation actuelles avant de le remplacer.",
+        "Le submit distant peut réussir avec réponse perdue. La clé d’idempotence réellement garantie par app-management doit être qualifiée.",
+        "La sûreté multi-réplicas de la boucle de files et les limites des verrous observés exigent des tests de panne ; aucune garantie globale exactly-once n’est déduite.",
+        "Les anciennes routes SSE cluster enregistrent des clés qui ne sont pas ciblées par le chemin d’émission direct lu ; vérifier les clients encore concernés.",
+        "Quelles fonctions PySpark, packages natifs et ressources personnalisées n’ont pas d’équivalent sans JVM ? L’inventaire des définitions clientes n’a pas été consulté.",
+        "Les paramètres réellement déployés, volumes, budgets et versions runtime restent inconnus ; le dossier décrit le code du commit de référence."
+      ],
+      "evidence": [
+        {
+          "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/aggregate/DataflowExecution.kt",
+          "line": 55,
+          "why": "État, identité et lifecycle d’un run."
+        },
+        {
+          "path": "services/process-data/app/data-exec-domain/src/main/kotlin/com/cleyrop/data/exec/domain/execution/aggregate/DataflowVersion.kt",
+          "line": 35,
+          "why": "Version et manifestes de scripts."
+        },
+        {
+          "path": "services/process-data/app/data-exec-app/src/main/kotlin/com/cleyrop/data/exec/app/execution/service/Orchestrator.kt",
+          "line": 45,
+          "why": "Boucle opérationnelle."
+        },
+        {
+          "path": "services/process-data/app/gradle/libs.versions.toml",
+          "line": 16,
+          "why": "Versions Kotlin et Spring déclarées."
+        },
+        {
+          "path": "services/process-data/app/data-exec-app/build.gradle.kts",
+          "line": 25,
+          "why": "Cible JVM du module applicatif."
+        }
+      ]
+    }
+  ]
+}

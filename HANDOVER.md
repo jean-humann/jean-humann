@@ -133,9 +133,9 @@ bloquer puis reconstituer la source sous une nouvelle époque.
 
 ## 4. Lecture et conventions documentaires
 
-Lire [l’index](docs/hemera-v2/README.md) pour les onze documents et huit planches. Les sept HTML
+Lire [l’index](docs/hemera-v2/README.md) pour les douze documents et huit planches. Les sept HTML
 initiaux restent les copies historiques de leurs publications. Les addenda
-08 à 11 sont locaux ; aucune publication claude.ai nouvelle n’est annoncée.
+08 à 12 sont locaux ; aucune publication claude.ai nouvelle n’est annoncée.
 Les six invariants et les addenda priment en cas de contradiction.
 
 Le [DESIGN du prototype](cleyrop-dm/DESIGN.md) distingue désormais dans son corps
@@ -197,8 +197,30 @@ contre-exemples ne doivent pas être comptés comme des tests produit verts.
 > Reprends Hemera v2 sur la branche imposée. Lis HANDOVER.md, puis
 > docs/hemera-v2/README.md, puis cleyrop-dm/DESIGN.md dans cet ordre. Installe
 > l’environnement, exécute la démo et les dix tests avant modification.
-> Lis ensuite les addenda 08 à 10 et l’atlas 11. Respecte les six invariants, la cible finale
+> Lis ensuite les addenda 08 à 10, l’atlas 11 et le dossier 12. Respecte les six invariants, la cible finale
 > zéro JVM et le core Rust des services. Continue le backlog §5 dans l’ordre,
 > en distinguant décision, implémentation et preuve. Committe et pousse sur la
 > même branche, sans PR. Les gates de confidentialité, fencing et reprise
 > restent ouverts malgré la démo verte.
+
+## 8. Dossier détaillé des services et fonctionnalités
+
+La demande de détail a produit le [dossier 12](docs/hemera-v2/12-dossier-services-fonctionnalites.html)
+et son [portail](docs/hemera-v2/dossier/index.html). Il couvre les 22 dossiers
+de services et les 34 composants de support recensés dans le monorepo. Chaque
+fiche fonctionnelle distingue comportement observé, utilisateurs, interfaces,
+états, dépendances, cible Rust, migration et critère d’acceptation. Icegres,
+Eidos, la référence clonée, les contrats communs et la restauration disposent
+de chapitres dédiés.
+
+Les données structurées et la [couverture](docs/hemera-v2/dossier/coverage.json)
+permettent de retrouver les sources et limites. L’annexe indexe 744 déclarations
+statiques d’interfaces, y compris des préfixes partiels ; ce nombre ne décrit
+pas les routes actives d’un déploiement. La couverture des dossiers de services
+n’est pas une certification de tous les chemins ou configurations.
+
+Préflight répété avant cette rédaction : démo réussie et 10 tests verts en
+0,88 s. Aucun service source ni prototype modifié, aucun banc de production
+exécuté. Les contrôles du [rapport documentaire](docs/hemera-v2/dossier/validation.json)
+portent sur références, liens, couverture, navigateur et exports PDF. Voir le
+[guide du dossier](docs/hemera-v2/dossier/README.md) pour reconstruire les fichiers.

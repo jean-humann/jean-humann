@@ -1,0 +1,172 @@
+{
+  "mission": "19-parcours",
+  "title": "Parcours utilisateurs et recette de compatibilité",
+  "summary": "Le dossier relie les fiches techniques aux usages. Les critères ci-dessous valent pour le frontend, le SDK et les interfaces automatisées lorsqu’ils exposent la même opération.",
+  "sections": [
+    {
+      "id": "user-journeys",
+      "title": "Parcours à conserver de bout en bout",
+      "paragraphs": [],
+      "evidence": [
+        {
+          "repo": "study",
+          "path": "docs/hemera-v2/03-design-frontend.html",
+          "line": 1,
+          "why": "Parcours historiques dont les exceptions sont corrigées par les addenda."
+        }
+      ],
+      "requirements": [],
+      "tables": [
+        {
+          "headers": [
+            "Persona",
+            "Séquence",
+            "Critère visible"
+          ],
+          "rows": [
+            [
+              "Administrateur",
+              "Créer projet, inviter, déléguer, configurer secrets et egress",
+              "Droits effectifs expliqués ; révocation vérifiée sur données, listings et URLs déjà émises."
+            ],
+            [
+              "Data engineer",
+              "Connexion → source → bootstrap → incrémental → reprise",
+              "Plage observée, plage préparée, édition publiée et ack affichés séparément."
+            ],
+            [
+              "Analyste",
+              "Trouver dataset → prévisualiser → SQL → exporter",
+              "Même édition sur pagination, statistiques, requête et export ; provenance consultable."
+            ],
+            [
+              "Développeur",
+              "Dev zéro-copie → draft → run → audits → promotion",
+              "Branches Git, branches métier et refs Iceberg identifiées ; promotion conditionnelle."
+            ],
+            [
+              "Steward / approbateur",
+              "Décrire → classifier → auditer → approuver ou veto",
+              "Preuve du candidat exact ; aucun bouton pour forcer un veto."
+            ],
+            [
+              "Data scientist",
+              "Notebook → features → entraînement → modèle → app",
+              "Données, code, artefacts et évaluations liés ; routage app dans son contrôle durable."
+            ],
+            [
+              "Utilisateur métier",
+              "Explorer Eidos → proposition → approbation → résultat",
+              "Action passe par Flows ; undo devient compensation sur le nouvel état."
+            ],
+            [
+              "Utilisateur assistant",
+              "Question → outils → citations → action éventuelle",
+              "Permissions du sujet conservées ; approbation explicite d’effet, coûts et sources visibles."
+            ],
+            [
+              "Exploitant",
+              "Incident → diagnostic → restauration → réouverture",
+              "Statuts et journaux cohérents ; aucun effet rejoué silencieusement."
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "frontend-context",
+      "title": "Contrat d’interface pour une édition stable",
+      "paragraphs": [
+        "Le frontend conserve le contexte identité/projet/environnement/édition/version sémantique dans ses clés de cache et ses requêtes. Une bascule d’environnement invalide les appels pendants. Un tableau paginé doit afficher le pin de lecture, pas une valeur latest recalculée entre deux pages.",
+        "Les événements de progression utilisent une séquence rejouable ou imposent un rechargement complet. Un événement SSE perdu ne change pas l’autorité d’une publication. L’interface distingue PREPARED, AUDITING, VETOED, CONFLICT, PUBLISHED, ACK_PENDING et résultat de commit inconnu à réconcilier.",
+        "Les clients reçoivent des erreurs versionnées avec operation_id et informations suffisantes pour décider d’un retry. Un retry automatique n’est permis que lorsque l’idempotence du contrat le couvre. Annuler une tentative publiée ne promet pas de rétracter un ack ou une livraison externe."
+      ],
+      "evidence": [
+        {
+          "repo": "monorepo",
+          "path": "services/cleyrop-front-end/app/src/entities/dataset/dataset.service.ts",
+          "line": 49,
+          "why": "Requêtes et polling des datasets."
+        },
+        {
+          "repo": "monorepo",
+          "path": "services/cleyrop-front-end/app/src/utils/xhrSource.ts",
+          "line": 3,
+          "why": "Transport SSE actuel."
+        },
+        {
+          "repo": "monorepo",
+          "path": "services/cleyrop-front-end/app/src/entities/authz/authz.service.ts",
+          "line": 44,
+          "why": "Appels d’autorisation frontend."
+        }
+      ],
+      "requirements": []
+    },
+    {
+      "id": "acceptance-suite",
+      "title": "Recette transverse minimale",
+      "paragraphs": [],
+      "evidence": [
+        {
+          "repo": "study",
+          "path": "docs/hemera-v2/10-preuves-et-campagnes.html",
+          "line": 20,
+          "why": "Distinction entre résultats du banc et gates encore ouverts."
+        }
+      ],
+      "requirements": [],
+      "tables": [
+        {
+          "headers": [
+            "Famille",
+            "Scénario",
+            "Acceptation"
+          ],
+          "rows": [
+            [
+              "Concurrence",
+              "Deux approbations contre la même base",
+              "Une publication valide ; l’autre conflit explicite, aucune perte silencieuse."
+            ],
+            [
+              "Confidentialité",
+              "Reader tente les octets staging et une ressource voisine",
+              "Refus avant/après veto, via SQL, catalogue, URL et cache."
+            ],
+            [
+              "Panne",
+              "Arrêt worker avant/après publication et avant/après ack",
+              "Reprise documentée, reçu exact, ni perte ni double effet."
+            ],
+            [
+              "Schéma",
+              "Renommage, ajout, type incompatible, changement spec",
+              "Compatibilité validée ou blocage lisible ; pas de binding par nom erroné."
+            ],
+            [
+              "UI",
+              "Révocation et changement de contexte durant pagination/export",
+              "Pas de fuite ni mélange d’éditions."
+            ],
+            [
+              "Événements",
+              "SSE perdu, doublé, désordonné puis reconnexion",
+              "Projection réparée et commandes non répétées."
+            ],
+            [
+              "Accessibilité",
+              "Clavier, focus, contraste, langues et écran mobile",
+              "Toutes les actions critiques utilisables, statuts non fondés sur la couleur seule."
+            ],
+            [
+              "Performance",
+              "Gros scan/join, skew, mémoire, quotas, cancellation",
+              "Mesures reproductibles par workload ; placement refusé s’il ne tient pas le contrat."
+            ]
+          ]
+        }
+      ]
+    }
+  ]
+}

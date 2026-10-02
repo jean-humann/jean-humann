@@ -1,0 +1,503 @@
+{
+  "mission": "11-support",
+  "title": "Les 34 composants de support : bibliothèques, charts et images",
+  "summary": "Le retrait des services Kotlin ne suffit pas à produire une plateforme sans JVM. Le contrat porte aussi sur les bibliothèques, générations de clients, runtimes, opérateurs, jobs et outils de secours.",
+  "sections": [
+    {
+      "id": "support-packages",
+      "title": "packages : responsabilités et trajectoires",
+      "paragraphs": [
+        "Les lignes décrivent la disposition proposée de chaque dossier recensé. Les métadonnées du planner et les fichiers d’entrée étayent son rôle et ses dépendances ; elles ne constituent pas un audit ligne par ligne de tout le composant. Les gates ci-dessous restent à exécuter."
+      ],
+      "evidence": [
+        {
+          "repo": "monorepo",
+          "path": "packages/cleyrop-common/README.md",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant packages/cleyrop-common"
+        },
+        {
+          "repo": "monorepo",
+          "path": "packages/cleyrop-sdk/README.md",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant packages/cleyrop-sdk"
+        },
+        {
+          "repo": "monorepo",
+          "path": "packages/cleyrop-spring-auth/README.md",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant packages/cleyrop-spring-auth"
+        },
+        {
+          "repo": "monorepo",
+          "path": "packages/cleyrop-testing/README.md",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant packages/cleyrop-testing"
+        },
+        {
+          "repo": "monorepo",
+          "path": "packages/client-python/README.md",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant packages/client-python"
+        },
+        {
+          "repo": "monorepo",
+          "path": "packages/downloads-site/README.md",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant packages/downloads-site"
+        },
+        {
+          "repo": "monorepo",
+          "path": "packages/error-lib/README.md",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant packages/error-lib"
+        },
+        {
+          "repo": "monorepo",
+          "path": "packages/keycloak-plugins/README.md",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant packages/keycloak-plugins"
+        },
+        {
+          "repo": "monorepo",
+          "path": "packages/keycloak-theme/Dockerfile",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant packages/keycloak-theme"
+        },
+        {
+          "repo": "monorepo",
+          "path": "packages/name-lib/README.md",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant packages/name-lib"
+        },
+        {
+          "repo": "monorepo",
+          "path": "packages/proto/README.md",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant packages/proto"
+        },
+        {
+          "repo": "monorepo",
+          "path": "packages/pyaicleyrop/README.md",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant packages/pyaicleyrop"
+        }
+      ],
+      "requirements": [],
+      "tables": [
+        {
+          "headers": [
+            "Composant",
+            "Rôle",
+            "Trajectoire proposée",
+            "Gate de retrait ou maintien"
+          ],
+          "rows": [
+            [
+              "packages/cleyrop-common",
+              "Utilitaires Python communs",
+              "Conserver les adaptateurs utilisateurs ; transférer politique et invariants dans des crates Rust partagées.",
+              "Parité des erreurs, identifiants et contexte tenant."
+            ],
+            [
+              "packages/cleyrop-sdk",
+              "SDK de développement",
+              "Préserver Python/SQL et ajouter source(), manifests, pins, run et receipts.",
+              "Notebook existant migré sans écriture directe sur main."
+            ],
+            [
+              "packages/cleyrop-spring-auth",
+              "Authentification Spring et intégration FGA",
+              "Retirer la bibliothèque JVM ; extraire contrats et fixtures vers le middleware Rust.",
+              "Même décision sur une matrice de sujets/actions/ressources."
+            ],
+            [
+              "packages/cleyrop-testing",
+              "Fixtures et aides Python",
+              "Réutiliser les jeux de contrat entre anciens et nouveaux services.",
+              "Tests clients identiques contre API de compatibilité puis Rust."
+            ],
+            [
+              "packages/client-python",
+              "Client de plateforme",
+              "Générer un client versionné avec types de pins, erreurs et opérations asynchrones.",
+              "Pagination, cancellation et retries ne dupliquent pas les effets."
+            ],
+            [
+              "packages/downloads-site",
+              "Distribution des clients",
+              "Conserver le site et signer les distributions des clients migrés.",
+              "Liens, checksums et compatibilité des versions contrôlés."
+            ],
+            [
+              "packages/error-lib",
+              "Contrat d’erreurs JVM",
+              "Retirer le JAR ; garder codes stables et corrélation dans Rust et clients.",
+              "Erreurs machine stables, aucun détail de ressource interdite."
+            ],
+            [
+              "packages/keycloak-plugins",
+              "Extensions Keycloak",
+              "Reproduire les comportements nécessaires via IdP natif et IAM Rust.",
+              "Recette de fédération, claims, sessions et révocation."
+            ],
+            [
+              "packages/keycloak-theme",
+              "Écrans et packaging Keycloak",
+              "Porter les écrans vers l’IdP retenu, supprimer le JAR.",
+              "Connexion, récupération, MFA, accessibilité et langues."
+            ],
+            [
+              "packages/name-lib",
+              "Conventions de nommage JVM",
+              "Porter les règles utiles dans une crate sans dépendance JVM.",
+              "Corpus de noms existants et collisions conservé."
+            ],
+            [
+              "packages/proto",
+              "Contrats protobuf et génération",
+              "Préserver les contrats nécessaires ; remplacer Gradle par génération sans JVM.",
+              "Wire compatibility, champs réservés et clients mixtes."
+            ],
+            [
+              "packages/pyaicleyrop",
+              "Bibliothèque IA Python",
+              "Conserver côté utilisateur ; médiation des appels par core Rust et proxy gouverné.",
+              "Identité, quotas, isolation et provenance des artefacts."
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "support-charts",
+      "title": "charts : responsabilités et trajectoires",
+      "paragraphs": [
+        "Les lignes décrivent la disposition proposée de chaque dossier recensé. Les métadonnées du planner et les fichiers d’entrée étayent son rôle et ses dépendances ; elles ne constituent pas un audit ligne par ligne de tout le composant. Les gates ci-dessous restent à exécuter."
+      ],
+      "evidence": [
+        {
+          "repo": "monorepo",
+          "path": "charts/cleyrop-backup/README.md",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant charts/cleyrop-backup"
+        },
+        {
+          "repo": "monorepo",
+          "path": "charts/cleyrop-common/Chart.yaml",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant charts/cleyrop-common"
+        },
+        {
+          "repo": "monorepo",
+          "path": "charts/cnpg-operator/AGENTS.md",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant charts/cnpg-operator"
+        },
+        {
+          "repo": "monorepo",
+          "path": "charts/gitea/AGENTS.md",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant charts/gitea"
+        },
+        {
+          "repo": "monorepo",
+          "path": "charts/jupyterhub/Dockerfile",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant charts/jupyterhub"
+        },
+        {
+          "repo": "monorepo",
+          "path": "charts/kafka-operator/README.md",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant charts/kafka-operator"
+        },
+        {
+          "repo": "monorepo",
+          "path": "charts/keycloak-operator/README.md",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant charts/keycloak-operator"
+        },
+        {
+          "repo": "monorepo",
+          "path": "charts/postgres/AGENTS.md",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant charts/postgres"
+        },
+        {
+          "repo": "monorepo",
+          "path": "charts/registry/Chart.yaml",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant charts/registry"
+        },
+        {
+          "repo": "monorepo",
+          "path": "charts/sftp/AGENTS.md",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant charts/sftp"
+        },
+        {
+          "repo": "monorepo",
+          "path": "charts/trino/README.md",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant charts/trino"
+        },
+        {
+          "repo": "monorepo",
+          "path": "charts/valkey/AGENTS.md",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant charts/valkey"
+        }
+      ],
+      "requirements": [],
+      "tables": [
+        {
+          "headers": [
+            "Composant",
+            "Rôle",
+            "Trajectoire proposée",
+            "Gate de retrait ou maintien"
+          ],
+          "rows": [
+            [
+              "charts/cleyrop-backup",
+              "Sauvegarde plateforme",
+              "Étendre le manifeste de restauration à toutes les autorités et journaux.",
+              "DR-1 à DR-8, aucun effet relancé par restauration."
+            ],
+            [
+              "charts/cleyrop-common",
+              "Bibliothèque Helm",
+              "Réutiliser avec profils contrôle/données, capabilities et service accounts séparés.",
+              "Lint et rendu : pas de secret partagé ni JVM transitive."
+            ],
+            [
+              "charts/cnpg-operator",
+              "Opérateur PostgreSQL",
+              "Conserver et qualifier sauvegarde/restauration des autorités de contrôle.",
+              "PITR réel, bascule et compatibilité des extensions."
+            ],
+            [
+              "charts/gitea",
+              "Versionnement des projets",
+              "Conserver pour code et drafts, distinguer branches Git et éditions de données.",
+              "Webhook rejoué une seule fois, accès projet et restauration."
+            ],
+            [
+              "charts/jupyterhub",
+              "Sessions de développement",
+              "Conserver le service utilisateur après changement des images et credentials.",
+              "Notebook sans JRE, lecture épinglée et écriture via Flows."
+            ],
+            [
+              "charts/kafka-operator",
+              "Déploiement du journal Kafka",
+              "Retirer Kafka/Strimzi ; qualifier un journal durable sans JVM.",
+              "Offsets, replay, rétention, panne disque/nœud et protocoles clients."
+            ],
+            [
+              "charts/keycloak-operator",
+              "Cycle de vie Keycloak",
+              "Retirer après migration de l’IdP et de toutes les fédérations.",
+              "Plus aucun realm, SPI ou initContainer JVM résiduel."
+            ],
+            [
+              "charts/postgres",
+              "Clusters PostgreSQL",
+              "Conserver les autorités nécessaires ; différencier caches reconstructibles et contrôle durable.",
+              "Chaîne WAL réellement restaurable et restauration coordonnée."
+            ],
+            [
+              "charts/registry",
+              "Distribution des images",
+              "Conserver, signer et inventorier les images finales par digest.",
+              "Images applicatives, jobs, hooks et initContainers sans JRE/JAR."
+            ],
+            [
+              "charts/sftp",
+              "Entrée fichiers SFTP",
+              "Conserver l’entrée protocolaire ; publier des FILESET après intégrité et scan.",
+              "Upload incomplet invisible ; doublon et retry sans double édition."
+            ],
+            [
+              "charts/trino",
+              "SQL distribué JVM",
+              "Retirer au terme de la qualification workload de Serving Rust et du moteur distribué.",
+              "Parité types, SQL, ACL, charge et annulation sur corpus client."
+            ],
+            [
+              "charts/valkey",
+              "Cache et échanges rapides",
+              "Conserver pour données dérivées ; aucune autorité de checkpoint source.",
+              "Perte totale du cache sans perte d’édition ni effet dupliqué."
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "support-hub",
+      "title": "hub : responsabilités et trajectoires",
+      "paragraphs": [
+        "Les lignes décrivent la disposition proposée de chaque dossier recensé. Les métadonnées du planner et les fichiers d’entrée étayent son rôle et ses dépendances ; elles ne constituent pas un audit ligne par ligne de tout le composant. Les gates ci-dessous restent à exécuter."
+      ],
+      "evidence": [
+        {
+          "repo": "monorepo",
+          "path": "ci/components.json",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant hub/ci"
+        },
+        {
+          "repo": "monorepo",
+          "path": "ci/components.json",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant hub/e2e"
+        },
+        {
+          "repo": "monorepo",
+          "path": "hub/jupyterlab/Dockerfile",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant hub/jupyterlab"
+        },
+        {
+          "repo": "monorepo",
+          "path": "hub/python/Dockerfile",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant hub/python"
+        },
+        {
+          "repo": "monorepo",
+          "path": "ci/components.json",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant hub/shared"
+        },
+        {
+          "repo": "monorepo",
+          "path": "hub/spark/Dockerfile",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant hub/spark"
+        },
+        {
+          "repo": "monorepo",
+          "path": "hub/spark-base/Dockerfile",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant hub/spark-base"
+        }
+      ],
+      "requirements": [],
+      "tables": [
+        {
+          "headers": [
+            "Composant",
+            "Rôle",
+            "Trajectoire proposée",
+            "Gate de retrait ou maintien"
+          ],
+          "rows": [
+            [
+              "hub/ci",
+              "Construction des runtimes",
+              "Adapter matrice, SBOM et tests aux images sans JVM.",
+              "Aucune étape Gradle/Maven/java requise dans la chaîne finale."
+            ],
+            [
+              "hub/e2e",
+              "Acceptation des runtimes",
+              "Remplacer les attentes Spark par scénarios SDK/Flight/SQL qualifiés.",
+              "Même jeu utilisateur exécuté dans chaque image publiée."
+            ],
+            [
+              "hub/jupyterlab",
+              "Image notebook incluant Spark/Java",
+              "Reconstruire avec Python, Arrow et SDK ; moteurs via contrats explicites.",
+              "Import, dataframes, dépendances et kernels sans JRE."
+            ],
+            [
+              "hub/python",
+              "Image Python utilisateur",
+              "Conserver langage et isolation ; injecter seulement des capacités limitées.",
+              "Exécution bornée, secrets, egress et reprise contrôlés."
+            ],
+            [
+              "hub/shared",
+              "Ressources communes des runtimes",
+              "Revoir bootstrap, configuration et dépendances partagées.",
+              "Aucun chemin réintroduisant Spark, JAR ou droits généraux."
+            ],
+            [
+              "hub/spark",
+              "Runtime Spark",
+              "Retirer ; migrer les notebooks et jobs par corpus, pas par renommage d’image.",
+              "SQL, UDF, gros joins, skew, mémoire et délais mesurés."
+            ],
+            [
+              "hub/spark-base",
+              "Base Java/Spark",
+              "Retirer après extinction de toutes les images filles.",
+              "Graphe de dépendances et SBOM sans descendants JVM."
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "support-images",
+      "title": "images : responsabilités et trajectoires",
+      "paragraphs": [
+        "Les lignes décrivent la disposition proposée de chaque dossier recensé. Les métadonnées du planner et les fichiers d’entrée étayent son rôle et ses dépendances ; elles ne constituent pas un audit ligne par ligne de tout le composant. Les gates ci-dessous restent à exécuter."
+      ],
+      "evidence": [
+        {
+          "repo": "monorepo",
+          "path": "images/alpine-tools/Dockerfile",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant images/alpine-tools"
+        },
+        {
+          "repo": "monorepo",
+          "path": "images/cleyrop-devspace/Dockerfile",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant images/cleyrop-devspace"
+        },
+        {
+          "repo": "monorepo",
+          "path": "images/trivy-with-curl/Dockerfile",
+          "line": 1,
+          "why": "Point d’entrée et inventaire du composant images/trivy-with-curl"
+        }
+      ],
+      "requirements": [],
+      "tables": [
+        {
+          "headers": [
+            "Composant",
+            "Rôle",
+            "Trajectoire proposée",
+            "Gate de retrait ou maintien"
+          ],
+          "rows": [
+            [
+              "images/alpine-tools",
+              "Outils opérationnels",
+              "Conserver après inventaire des scripts et capacités.",
+              "Jobs d’installation, secours et maintenance sans JVM."
+            ],
+            [
+              "images/cleyrop-devspace",
+              "Environnement de développement",
+              "Adapter aux clients natifs, génération protobuf et tests de contrat.",
+              "Parcours développeur complet sans Java."
+            ],
+            [
+              "images/trivy-with-curl",
+              "Image de contrôle sécurité",
+              "Conserver et intégrer les contrôles de composition des images.",
+              "Rapport par digest et politique de traitement des écarts."
+            ]
+          ]
+        }
+      ]
+    }
+  ]
+}

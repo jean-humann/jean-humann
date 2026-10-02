@@ -1,0 +1,91 @@
+{
+  "mission": "00-cadre",
+  "title": "Périmètre fonctionnel et règles de lecture",
+  "summary": "Ce dossier descend au niveau des fonctionnalités et des contrats de chaque service. Il décrit les règles présentes dans le code, les données possédées, les appels et événements, le comportement cible et les cas qui devront autoriser la migration. Une fiche de capacité couvre un comportement cohérent ; elle ne correspond pas nécessairement à une seule route HTTP ou à un seul ticket.",
+  "sections": [
+    {
+      "id": "perimetre-dossier",
+      "title": "Un périmètre vérifiable dans les dépôts locaux",
+      "paragraphs": [
+        "Les 22 dossiers de services du monorepo forment la base de couverture obligatoire. La lecture inclut les contrôleurs ou routeurs, DTO et modèles, handlers métier, persistance, événements, configuration de runtime et charts pertinents. Les interfaces, serveurs MCP et petits services d'exploitation ont leurs propres fiches. Le recensement inclut aussi les 12 packages, 12 charts et 10 dossiers sous hub et images. Les workflows de CI, release, installation et migration sont traités dans les chapitres d'exploitation.",
+        "Les sources d'Icegres et d'Eidos sont lues dans leurs arbres locaux, avec leurs modifications utilisateur. Le HEAD Git ne suffit donc pas à identifier tout le contenu observé. L'index des preuves conserve les chemins, lignes et empreintes des fichiers référencés. Aucun de ces deux projets n'est modifié par la rédaction du dossier.",
+        "La comparaison avec iceberg-data-platform porte sur le clone épinglé à 4506d8a82833bef3cd8edd2d613a2285352521b3. Il s'agit d'un laboratoire de référence à comparer aux fonctions de Cleyrop. Sa composition ne devient pas automatiquement une architecture de production Cleyrop.",
+        "L'index automatisé d'interfaces conserve les déclarations rencontrées dans le code. Les préfixes de route, réécritures de gateway, flags de déploiement et registrations dynamiques peuvent changer leur exposition effective. Les fiches manuelles décrivent la sémantique des appels. La mise en service réelle d'une installation cliente et son état de données ne sont pas observés par cette revue de sources."
+      ],
+      "evidence": [
+        {"path":"ci/components.json","line":1,"why":"Racines de composants, dépendances et adaptateurs de build déclarés."},
+        {"path":"AGENTS.md","line":1,"why":"Organisation du monorepo et conventions de services, packages, charts et exploitation."}
+      ]
+    },
+    {
+      "id": "cible-confirmee",
+      "title": "Les exigences qui encadrent toutes les fiches",
+      "paragraphs": [
+        "La cible finale exclut les JVM, même lorsqu'elles sont cachées derrière un protocole client Python, un writer tiers, un notebook, un outil JDBC, un opérateur ou une image de maintenance. Spark, Trino, Keycloak, Kafka/Strimzi et le writer Java OLake doivent donc avoir une trajectoire de retrait explicite. La présence temporaire d'une JVM dans un banc de comparaison ne qualifie pas son remplacement.",
+        "Les cores métier des services cible sont écrits en Rust. Les interfaces restent en TypeScript lorsque leur travail est la présentation et l'interaction. Le code utilisateur Python et SQL reste pris en charge dans des exécutants isolés. Des composants tiers Go ou C++ peuvent être encapsulés, à condition de ne pas posséder l'autorité de publication, les droits métier ou le checkpoint de source.",
+        "Les domaines cible décrivent des responsabilités et des frontières de confiance. Ils ne prescrivent pas tous un déploiement Kubernetes distinct dès le premier lot. Une implémentation peut regrouper des modules de contrôle, tout en séparant les privilèges du writer, du publisher et des exécutants. Les interfaces et propriétaires d'état doivent rester explicites pour permettre une séparation ultérieure.",
+        "La compatibilité se mesure par comportement. Traduire une API Kotlin en Rust sans conserver son contrat de nommage, ses permissions, ses transitions ou ses erreurs ne ferme pas la migration. Inversement, conserver un comportement dangereux observé dans le code n'est pas une obligation : le dossier l'identifie, propose la correction et précise le scénario de non-régression du parcours utilisateur."
+      ],
+      "tables": [{
+        "headers": ["Exigence", "Conséquence pour une fiche de service"],
+        "rows": [
+          ["Destination autoritaire", "Un statut SQL, un cache ou un state file ne valide pas une ingestion. L'édition publiée porte le checkpoint et la provenance."],
+          ["Publication avant ack", "Le service retrouve la publication approuvée couvrant la plage avant d'acquitter la source."],
+          ["WAP sans exception", "Toute sortie gouvernée passe par un candidat privé et ses audits. Un veto n'est pas contourné par un bouton d'administration."],
+          ["Journal rejouable", "Une entrée éphémère doit être capturée durablement avant de prétendre offrir reprise et audit."],
+          ["Outils tiers encapsulés", "Un adaptateur produit des fichiers, des plans ou une préparation ; il ne publie pas main de façon autonome."],
+          ["Runs bornés", "Les workers sont remplaçables. Un ancien worker ne conserve pas le droit de publier après perte d'autorité."]
+        ]
+      }],
+      "evidence": [{"path":"HANDOVER.md","line":94,"why":"Invariants du programme et distinction entre données publiées et autres journaux durables."}]
+    },
+    {
+      "id": "autorites-etats",
+      "title": "Qui possède l'état et comment le reconstruire",
+      "paragraphs": [
+        "Une refonte complète doit traiter séparément données publiées, commandes, identités, configurations et effets externes. Le principe d'édition autoritaire ne permet pas d'effacer les bases de contrôle en supposant qu'Iceberg reconstruira tous les choix humains et toutes les opérations déjà effectuées.",
+        "Les objets audités doivent rester immuables face au worker. Le droit natif Lakekeeper modify comprend les commits et la suppression de table dans le modèle inspecté. Le worker générique ne reçoit donc pas un tel credential ; un writer de confiance médie déjà les commits de staging. Le publisher vérifie ensuite la preuve et les préconditions de publication. Cette séparation applicative reste à implémenter et qualifier.",
+        "Une preuve d'audit est produite après création du candidat. Un déplacement de référence Iceberg ne permet pas de modifier rétroactivement le summary audité. Le lien de preuve doit être immuable, récupérable et retenu avec la publication. Une recherche d'operation_id parmi tous les snapshots ne prouve pas qu'une édition a été approuvée."
+      ],
+      "tables": [{
+        "headers": ["État", "Autorité cible", "Projection ou reprise"],
+        "rows": [
+          ["Données, checkpoint, origine", "Snapshot de l'édition approuvée et son summary origin.*", "Caches Catalog/Flows reconstruits depuis les publications autorisées."],
+          ["Sorties atomiques d'un groupe", "Édition Iceberg de release, membres et checkpoint commun", "Les lecteurs résolvent la release une fois puis épinglent ses membres."],
+          ["Draft de flow ou modèle", "Dépôt versionné ou stockage de contrôle durable", "Ne pas le déduire du dernier résultat publié ; sauvegarder les brouillons et leur historique."],
+          ["Commandes et annulations", "Journal de contrôle durable", "Reconstruire les files et les tentatives sans réexécuter un effet déjà confirmé."],
+          ["Identités, clés et politiques", "IAM, IdP et stockage de secrets avec sauvegardes", "Réconcilier OpenFGA et gateways ; bloquer les accès si la restauration des politiques est incohérente."],
+          ["Déploiements d'applications", "Spécification désirée et journal de contrôle", "Kubernetes fournit l'état observé ; une édition de modèle ne suffit pas à reconstruire les choix de routage."],
+          ["Exports et notifications", "Intentions, clés d'idempotence et reçus d'effets", "Une reconstruction de cache ne doit pas réenvoyer une notification ou une livraison."],
+          ["Index de fichiers, vecteurs, features", "Édition Iceberg de données ou de manifeste", "Index de recherche, collections vectorielles et stores online restent des projections versionnées."],
+          ["Expiration et purge physique", "Plan approuvé, racines de rétention et journal d'application", "Une branche ou un rollback ne restaure pas un objet physiquement supprimé."]
+        ]
+      }],
+      "evidence": [
+        {"path":"docs/hemera-v2/08-plateforme-rust-sans-jvm.html","line":81,"why":"Contrat writer/publisher, preuve d'audit et registre de publications."},
+        {"path":"docs/hemera-v2/09-decision-el4-wap.html","line":25,"why":"Préparation, publication conditionnelle, reprise et acquittement."}
+      ]
+    },
+    {
+      "id": "lecture-des-preuves",
+      "title": "Lire les résultats sans transformer une observation en garantie",
+      "paragraphs": [
+        "Le préflight de cette rédaction a réinstallé le prototype dans son environnement isolé, exécuté demo.py puis python -m pytest -q. La démo réussit et les dix tests passent en 0,88 seconde. Le code produit n'a pas été modifié pour rédiger les fiches.",
+        "Le banc historique contient 33 entrées qui se recoupent. Son bilan brut est 18 passed, 5 failed et 10 not_executed. Il ne s'agit ni de 33 tests indépendants ni d'un pourcentage d'acceptation. I4 prouve un aller-retour de summary sur le même handle, sans reprise de processus. I8 peut être passed tout en rapportant une divergence SQL, car il n'affirme pas de parité. Le dossier conserve ces limites.",
+        "Les critères d'acceptation de chaque fiche sont un travail à exécuter. Leur rédaction ne ferme aucun gate. Les soupçons issus d'une branche conditionnelle du code restent des hypothèses tant que le scénario correspondant n'a pas été reproduit. La présence d'un test dans un dépôt ne signifie pas que ce test a été lancé pendant cette revue.",
+        "La couverture complète des 22 services signifie qu'aucun dossier de services recensé n'est omis. Elle ne vaut pas certification exhaustive de tous les chemins d'exécution, de toutes les configurations possibles ou de tous les déploiements clients. La matrice, l'index des interfaces et les preuves permettent de retrouver les limites du périmètre et de préparer la recette réelle."
+      ],
+      "tables": [{
+        "headers": ["Statut", "Ce que le lecteur peut en déduire"],
+        "rows": [
+          ["Observé dans le code", "Le chemin et sa condition sont localisés. Son comportement en déploiement reste à vérifier lorsque cela compte pour la migration."],
+          ["Reproduit dans le banc historique", "Le résultat est établi pour l'environnement, les versions et les données synthétiques archivés."],
+          ["Cible proposée", "Le contrat définit ce qu'il faut implémenter ou sélectionner ; il n'annonce pas une fonction déjà disponible."],
+          ["Acceptation à exécuter", "Le scénario et le résultat attendu servent à la recette et au découpage des tickets."],
+          ["Décision ouverte", "Le mécanisme ou le candidat n'est pas qualifié. La migration ne doit pas en dépendre implicitement."]
+        ]
+      }],
+      "evidence": [{"path":"docs/hemera-v2/10-preuves-et-campagnes.html","line":20,"why":"Lecture du registre par neuf familles de contrats et limites des sondes."}]
+    }
+  ]
+}

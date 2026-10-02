@@ -1,0 +1,1132 @@
+{
+  "mission": "06-apps-frontends",
+  "scope": "Applications, devspaces et deux interfaces : réemploi des audits 14-front-api et 15-exploitation, complété par lecture ciblée des contrôleurs, services et clients du commit ba0f34e732e582fc362933b8e55544af04208cb8.",
+  "validation": {
+    "observed": "Lecture statique des routes et services cités ; les groupes fonctionnels sont détaillés ci-dessous. Les interfaces observées ne prouvent pas la sémantique de tous leurs serveurs.",
+    "tested": "Aucun test UI, build, navigateur, session SSH, déploiement Kubernetes ou installation client exécuté.",
+    "target": "Propositions de frontières Rust et critères d’acceptation, pas fonctions annoncées existantes. Interfaces TypeScript conservées ; zéro JVM final, Python utilisateur possible.",
+    "indeterminate": "Configuration déployée, contenu utilisateur, performances et garanties sous panne non mesurés."
+  },
+  "services": [
+    {
+      "id": "app-management",
+      "title": "Applications, images et espaces de développement",
+      "purpose": "Provisionne les applications Kubernetes, leurs images, instances, dépôts et devspaces ; fournit aussi à process-data un adaptateur de sessions Python/PySpark.",
+      "stack": "Python, FastAPI, SQLModel/SQLAlchemy, PostgreSQL/Alembic, FastStream/Kafka, Kubernetes, Helm, Kaniko et Trivy.",
+      "source_dir": "services/app-management",
+      "read_scope": [
+        "Routers applications, instances, lifecycle, images, sessions privées, dépôts internes/externes et devspaces.",
+        "Services create_application, deploy_instance, cancel_deployment, create_devspace, image_build et internal_repository_file.",
+        "Adaptateur SessionRuntimeServiceImpl et instructions de chiffrement, secrets SSH, Kafka et migrations."
+      ],
+      "capabilities": [
+        {
+          "id": "AM-01",
+          "title": "Catalogue d’applications, propriété et rattachement au projet",
+          "observed": "Les routes créent, listent, modifient et suppriment les applications, vérifient leur existence et transfèrent leur propriétaire. La création lie une application à son namespace et éventuellement à un projet. Elle vérifie la cohérence du projet dans les arguments, refuse un projet supprimé et sérialise les opérations avec des verrous par propriétaire, projet et application. Les liens vers des applications agents sont autorisés avant création ; une cible absente ou refusée échoue sans laisser un lien. Les faits d’autorisation sont déposés dans l’outbox pour les applications concernées.",
+          "actors": "Développeur, responsable de projet et administrateur.",
+          "api": "Application CRUD router : /apps ; CreateApplicationService.create_application ; update_application_owner.",
+          "state": "ApplicationEntity, NamespaceEntity, lien application-agent, propriétaire, project_id et tombstone de projet.",
+          "dependencies": "IAM/gateway, outbox SQL et Kubernetes par les déploiements ultérieurs.",
+          "target": "Applications Rust possède application, rattachement, propriétaire et configuration désirée. IAM reste l’autorité d’accès ; la création et ses faits utilisent une transaction et une clé idempotente.",
+          "migration": "Importer IDs et rattachements ; préserver les verrous contre création concurrente/offboarding et la validation de chaque cible. Garder une façade HTTP compatible pendant la bascule.",
+          "acceptance": "Créer une application pendant la suppression de son projet : elle est refusée ou appartient explicitement au résultat ordonné de l’opération, sans namespace orphelin ni droits tardifs.",
+          "evidence": [
+            {
+              "path": "services/app-management/src/app_manager/application/router/application_crud_router.py",
+              "line": 158,
+              "why": "Contrat de création et autres commandes du router."
+            },
+            {
+              "path": "services/app-management/src/app_manager/domain/service/application/create_application_service.py",
+              "line": 51,
+              "why": "Validation, verrous, namespace et outbox."
+            }
+          ]
+        },
+        {
+          "id": "AM-02",
+          "title": "Instances, configuration déployable et instance principale",
+          "observed": "Une application possède plusieurs instances dont le détail, la liste, la configuration et les déploiements sont consultables. Le router fournit création, mise à jour, suppression et changement de statut principal. Les dépendances de route contrôlent la parenté application/instance ou application/image afin qu’un identifiant valide d’une autre application ne soit pas accepté sous un parent arbitraire. Les ressources et historiques de sévérité ont des lectures dédiées.",
+          "actors": "Développeur applicatif et opérateur.",
+          "api": "Instance router : create_instance, update_instance, update_instance_main_status, list_instance_deployments ; enforce_path_parentage.",
+          "state": "InstanceEntity, application parente, image, configuration, historique de deployment et sélection principale.",
+          "dependencies": "Applications, images, autorisation de gateway et ressources Kubernetes.",
+          "target": "Applications Rust gère une révision immuable de configuration par déploiement, une référence de digest d’image et une sélection principale explicite. Le namespace n’est pas une preuve de droit.",
+          "migration": "Importer les instances et leur parenté, traduire les secrets en références et conserver les IDs d’historique. Qualifier les contraintes de principale et la concurrence avant activation.",
+          "acceptance": "Changer deux fois simultanément l’instance principale conserve un résultat cohérent. Une instance d’une autre application ne peut être lue ou déployée par substitution de parent.",
+          "evidence": [
+            {
+              "path": "services/app-management/src/app_manager/application/router/instance_router.py",
+              "line": 84,
+              "why": "Création et cycle de configuration."
+            },
+            {
+              "path": "services/app-management/src/app_manager/application/router/instance_router.py",
+              "line": 221,
+              "why": "Sélection de l’instance principale."
+            },
+            {
+              "path": "services/app-management/src/app_manager/application/router/parent_scope.py",
+              "line": 100,
+              "why": "Validation de la parenté du chemin."
+            }
+          ]
+        },
+        {
+          "id": "AM-03",
+          "title": "Déployer, arrêter, reprendre et annuler une instance",
+          "observed": "Le lancement valide l’instance et son état puis contrôle que l’utilisateur peut employer le compte de service configuré. Il crée une exécution de déploiement, passe l’instance à DEPLOYING, synchronise le statut application et commit avant d’émettre la demande. Une précédente demande encore pending peut être marquée CANCELED avant la nouvelle. L’annulation charge le déploiement et exige son état annulable ; elle conserve la date et le résultat en base. Les routes offrent également start, stop et logs. L’émission après commit doit être distinguée d’une transaction unique avec le transport.",
+          "actors": "Propriétaire autorisé et exploitation.",
+          "api": "InstanceLifecycleRouter.deploy_instance, stop_instance, start_instance, cancel_deployment, get_instance_logs.",
+          "state": "DeploymentExecution incrémental, états d’instance/application et dates d’annulation.",
+          "dependencies": "Consumer Kafka, Helm/Kubernetes, compte de service IAM, watchers de déploiement.",
+          "target": "Applications/Runtimes Rust utilisent des commandes persistées, reçus d’effets Helm/Kubernetes et réconciliation de l’état désiré. Une annulation a une phase précise ; un timeout ne vaut pas preuve d’arrêt.",
+          "migration": "Introduire un reçu durable couvrant commit puis publication d’événement. Reprendre les déploiements en attente ou les drainer avant de changer le propriétaire de l’orchestration.",
+          "acceptance": "Couper le service après commit et avant émission : le déploiement reste reprenable et s’exécute une seule fois logiquement. Annuler une demande déjà exécutée retourne son état réel.",
+          "evidence": [
+            {
+              "path": "services/app-management/src/app_manager/domain/service/instance/deploy_instance_service.py",
+              "line": 58,
+              "why": "Validation, compte de service et lancement."
+            },
+            {
+              "path": "services/app-management/src/app_manager/domain/service/instance/deploy_instance_service.py",
+              "line": 102,
+              "why": "Commit avant événement et états."
+            },
+            {
+              "path": "services/app-management/src/app_manager/domain/service/instance/cancel_deployment_service.py",
+              "line": 35,
+              "why": "Annulabilité et persistance."
+            },
+            {
+              "path": "services/app-management/src/app_manager/application/router/instance_lifecycle_router.py",
+              "line": 65,
+              "why": "Lecture des logs et lifecycle public."
+            }
+          ]
+        },
+        {
+          "id": "AM-04",
+          "title": "Construire, reconstruire et inspecter une image",
+          "observed": "La construction à partir d’un dépôt vérifie l’application et son lien vers ce dépôt, résout la référence Git en commit et crée un build. Un dépôt non lié répond comme absent. Le service réutilise les entités registre/image/credentials, commit le build puis publie ses événements. Le rebuild retrouve le build précédent et sa source. Le router expose détail, historique, vulnérabilités et logs ; pour un build actif, les logs sont streamés depuis le pod, sinon lus dans les logs conservés. Le service ferme la transaction de lecture avant le flux long.",
+          "actors": "Auteur d’application et administrateur des environnements.",
+          "api": "Image router : create_image, rebuild_image, list_image_builds, get_image_vulnerabilities, get_build_logs ; ImageBuildService.",
+          "state": "BuildEntity, commit source, image/registre, historique et résultats de scan.",
+          "dependencies": "Git, Kaniko, Trivy, registre OCI, Kubernetes et événements Kafka.",
+          "target": "Applications/Runtimes Rust gèrent la spécification du build et son reçu ; les exécutants sans JVM restent encapsulés. Le déploiement référence un digest qualifié avec provenance, SBOM et audit.",
+          "migration": "Conserver commits, builds et diagnostics ; épingler le digest avant déploiement et qualifier l’idempotence de la demande. Reprendre les packages Python personnalisés via le registre d’environnements Runtimes.",
+          "acceptance": "Un rebuild produit un nouveau reçu sans écraser l’historique. Une réponse perdue ne crée pas deux effets non corrélés. Les logs ne gardent pas une transaction SQL ouverte pendant la durée du build.",
+          "evidence": [
+            {
+              "path": "services/app-management/src/app_manager/domain/service/image/image_build_service.py",
+              "line": 97,
+              "why": "Source Git liée et résolue."
+            },
+            {
+              "path": "services/app-management/src/app_manager/domain/service/image/image_build_service.py",
+              "line": 141,
+              "why": "Persistance et publication du build."
+            },
+            {
+              "path": "services/app-management/src/app_manager/domain/service/image/image_build_service.py",
+              "line": 322,
+              "why": "Logs streamés ou stockés, transaction relâchée."
+            },
+            {
+              "path": "services/app-management/src/app_manager/application/router/image_router.py",
+              "line": 194,
+              "why": "Lecture du résultat de scan."
+            }
+          ]
+        },
+        {
+          "id": "AM-05",
+          "title": "Dépôts externes, dépôts internes et édition de sources",
+          "observed": "Les API distinguent dépôts externes liés aux applications et dépôts internes. Elles vérifient l’accès distant, listent les sources et permettent de lier/délier un dépôt. Le dépôt interne ajoute création, changement de projet, commits, branches, tags, arborescence, lecture/écriture/suppression et upload de fichier. Le service de fichiers résout le dépôt, associe l’auteur et délègue les opérations au client Git ; un renommage avec mise à jour passe par une opération groupée de fichiers. La source d’un build doit être un dépôt lié à l’application.",
+          "actors": "Développeur dans la Factory et administrateur Git.",
+          "api": "Routers /repositories, /repositories/internal et /apps/{app_id}/repositories ; InternalRepositoryFileService.",
+          "state": "RepositoryEntity, liens application-dépôt, visibilité, projet, branches/tags/commits Git et auteurs.",
+          "dependencies": "Gitea interne et autres fournisseurs Git, SSH, utilisateurs et IAM.",
+          "target": "Applications Rust porte la gestion des dépôts et effets Git, Flows épingle les commits qu’il exécute. Gitea Go peut rester encapsulé. L’édition de source ne publie aucune édition de données.",
+          "migration": "Préserver IDs, URLs non secrètes, commits et auteurs. Séparer l’accès de lecture à la source de la permission de build/déploiement. Conserver les préconditions Git de mise à jour.",
+          "acceptance": "Une édition basée sur un fichier devenu obsolète retourne un conflit compréhensible. Changer le dépôt lié ne modifie pas le commit d’un build déjà admis.",
+          "evidence": [
+            {
+              "path": "services/app-management/src/repository/application/router/internal_repository_router.py",
+              "line": 209,
+              "why": "Branches, tags et historique."
+            },
+            {
+              "path": "services/app-management/src/repository/application/router/repository_application_router.py",
+              "line": 59,
+              "why": "Rattachement à l’application."
+            },
+            {
+              "path": "services/app-management/src/repository/domain/service/internal_repository_file_service.py",
+              "line": 154,
+              "why": "Édition groupée et attribution."
+            },
+            {
+              "path": "services/app-management/src/repository/application/router/internal_repository_file_router.py",
+              "line": 194,
+              "why": "Contrats fichiers et arborescence."
+            }
+          ]
+        },
+        {
+          "id": "AM-06",
+          "title": "Devspace personnel, accès SSH et provisioning",
+          "observed": "La création d’un devspace vérifie l’utilisateur et l’absence d’espace déjà associé. Elle autorise les liens vers applications agents, réutilise registre/image, persiste application, instance et clé SSH puis assure l’accès au dépôt interne avant de lancer le déploiement. Les opérations sont donc réparties entre transaction SQL et effets distants. Les services distincts couvrent lecture, liste, mise à jour, suppression, authorized keys et logs de déploiement. Les clés privées sont chiffrées au repos selon le service crypto existant.",
+          "actors": "Développeur et administrateur des espaces.",
+          "api": "DevspaceRouter ; CreateDevspaceService.create_devspace ; UpdateDevspaceAuthorizedKeysService ; DevspaceSSHKeyService.",
+          "state": "Application de type DEVSPACE, instance, utilisateur, clé et déploiement.",
+          "dependencies": "Git interne, Kubernetes, Helm, image devspace, IAM et agent de tunnel.",
+          "target": "Applications/Runtimes Rust orchestre un espace isolé, quotas et reçus de provisioning. Les accès SSH/tunnel ont identité, durée et révocation propres ; le SDK données utilise les frontières Query/Writer.",
+          "migration": "Importer clés par une procédure sécurisée sans export clair, préserver volumes et dépôts, puis recréer les espaces depuis des images sans JVM. Rendre chaque effet réconciliable.",
+          "acceptance": "Interrompre après persistance mais avant accès Git : la reprise complète le même espace sans doublon. Révoquer le développeur coupe les nouvelles sessions et retire les clés prévues.",
+          "evidence": [
+            {
+              "path": "services/app-management/src/devspace/domain/service/create_devspace_service.py",
+              "line": 96,
+              "why": "Parcours SQL, clés, Git puis déploiement."
+            },
+            {
+              "path": "services/app-management/src/devspace/domain/service/create_devspace_service.py",
+              "line": 207,
+              "why": "Unicité et utilisateur."
+            },
+            {
+              "path": "services/app-management/src/devspace/application/router/devspace_router.py",
+              "line": 51,
+              "why": "Surface devspaces."
+            }
+          ]
+        },
+        {
+          "id": "AM-07",
+          "title": "Sessions de calcul Python et Spark pour process-data",
+          "observed": "Les routes privées start/delete/reconcile et jobs délèguent au SessionRuntimeServiceImpl. L’adaptateur rend des templates de pod pour Python, client Spark et serveur Spark Connect, applique services/deployments et réconcilie les objets observés. Le submit adresse le harness de la session ; le chemin concerné résout les credentials du projet avant l’appel. L’état et l’annulation utilisent le statement de cette session. Ces fonctions appartiennent au runtime de données bien qu’elles soient hébergées dans app-management.",
+          "actors": "Process-data et exploitant des runtimes.",
+          "api": "/private/sessions ; SessionRuntimeServiceImpl.start_sessions, start_connect_server, reconcile_clusters, submit_job, get_job_state, cancel_job.",
+          "state": "Ressources Kubernetes de sessions et serveurs ; statement du harness ; process-data conserve le run métier.",
+          "dependencies": "Kubernetes, templates runtime, credentials projet, Python/PySpark et Spark Connect.",
+          "target": "Runtimes Rust reprend cette frontière avec des workers fongibles et des tentatives bornées. Writer médie le staging ; Publisher contrôle la publication. Aucun serveur Spark ou composant JVM final.",
+          "migration": "Conserver un adaptateur temporaire process-data puis déplacer admission, capacités et réconciliation dans Runtimes. Qualifier les scripts Python/SQL ; inventorier les incompatibilités PySpark.",
+          "acceptance": "Perdre la réponse du submit puis réconcilier ne produit pas deux publications. Une ancienne tentative ne peut écrire avec la capacité d’une nouvelle ; aucune permission REST générique table.modify ne parvient au worker.",
+          "evidence": [
+            {
+              "path": "services/app-management/src/app_manager/application/router/private_session_router.py",
+              "line": 37,
+              "why": "Routes privées de sessions."
+            },
+            {
+              "path": "services/app-management/src/app_manager/infra/adapter/session/session_runtime_service_impl.py",
+              "line": 213,
+              "why": "Création des ressources runtime."
+            },
+            {
+              "path": "services/app-management/src/app_manager/infra/adapter/session/session_runtime_service_impl.py",
+              "line": 453,
+              "why": "Harness et credentials de projet."
+            },
+            {
+              "path": "services/app-management/src/app_manager/infra/adapter/session/session_runtime_service_impl.py",
+              "line": 372,
+              "why": "Inventaire et nettoyage."
+            }
+          ]
+        },
+        {
+          "id": "AM-08",
+          "title": "Catalogue d’applications agents et liens de communication",
+          "observed": "Un router dédié liste les applications agents et gère l’octroi/retrait d’accès entre applications. La création d’application valide chaque cible par la décision IAM de lecture car un lien peut ouvrir un accès réseau lors du déploiement. Les cibles inconnues, DEVSPACE ou refusées ne deviennent pas des liens valides. Cette relation doit être traitée comme un changement de droit et de réseau, pas seulement comme une association d’affichage.",
+          "actors": "Auteur d’application, utilisateur métier et IAM.",
+          "api": "ApplicationAgentRouter.list_agents, grant_apps_access, revoke_app_access ; authorize_agent_targets.",
+          "state": "AppToAppLink, applications cibles et faits d’autorisation.",
+          "dependencies": "IAM, catalogue applicatif et NetworkPolicy rendu au déploiement.",
+          "target": "Applications/IAM/Egress Rust gèrent les consommateurs déclarés et relations d’appel. EXPOSURE décrit une consommation autorisée ; elle n’est pas un nouveau kind de publication.",
+          "migration": "Importer les liens existants avec leur justification et vérifier droits sur chaque cible. Rendre la mise à jour réseau observable et révocable après retrait.",
+          "acceptance": "Le retrait d’un lien supprime le droit et converge vers la fermeture réseau. Un appelant ne peut déduire l’existence d’une application privée en essayant de la lier.",
+          "evidence": [
+            {
+              "path": "services/app-management/src/app_manager/application/router/application_agent_router.py",
+              "line": 55,
+              "why": "Catalogue et opérations de liens."
+            },
+            {
+              "path": "services/app-management/src/app_manager/application/router/application_agent_router.py",
+              "line": 183,
+              "why": "Révocation explicite."
+            },
+            {
+              "path": "services/app-management/src/app_manager/domain/service/application/create_application_service.py",
+              "line": 7,
+              "why": "Validation des cibles avant création."
+            }
+          ]
+        },
+        {
+          "id": "AM-09",
+          "title": "Secrets, clés de build et limite de confiance des identités",
+          "observed": "Le service crypto chiffre les passwords basic-auth, credentials de registres, variables secrètes et clés SSH privées. Les builds internes et externes ont des secrets SSH distincts ; seule l’URL exacte du dépôt interne peut utiliser la clé du compte Gitea interne. Les clones écrivent leur URL dans les logs, ce qui interdit d’y embarquer des credentials. Le header X-Userinfo n’est fiable que derrière le proxy configuré qui l’écrase ; sinon l’identité vient du bearer. Ces contraintes sont documentées par le composant et doivent être préservées lors du remplacement du langage.",
+          "actors": "Application, builder, opérateur de secrets et gateway.",
+          "api": "CryptoService ; build_repository_init_container ; contrat TRUST_PROXY_HEADERS ; user keys router.",
+          "state": "Secrets chiffrés en SQL et secrets montés dans les jobs ; identité entrante séparée du propriétaire de ressource.",
+          "dependencies": "Gestion des clés, Kubernetes Secrets, Gitea, IAM/APISIX et registres.",
+          "target": "Applications/IAM/Egress Rust utilisent des références de secrets, rotation et délégations bornées. Les secrets de build interne restent inaccessibles aux dépôts externes ; pas d’algorithme crypto maison.",
+          "migration": "Migrer les ciphertexts avec une procédure de rekey contrôlée et auditée. Tester les mêmes routes derrière et sans proxy ; ne jamais importer de secrets dans le dossier.",
+          "acceptance": "Une URL externe ressemblant à Gitea n’obtient pas sa clé. Un faux X-Userinfo sur un pod qui ne fait pas confiance au proxy ne donne aucun droit. Les logs ne contiennent pas de credential.",
+          "evidence": [
+            {
+              "path": "services/app-management/AGENTS.md",
+              "line": 72,
+              "why": "Contrat de chiffrement documenté."
+            },
+            {
+              "path": "services/app-management/AGENTS.md",
+              "line": 79,
+              "why": "Séparation des clés et risque du clone URL."
+            },
+            {
+              "path": "services/app-management/AGENTS.md",
+              "line": 86,
+              "why": "Limite de confiance du header."
+            }
+          ]
+        },
+        {
+          "id": "AM-10",
+          "title": "Exploitation, événements et migrations avant déploiement",
+          "observed": "Les consumers de build et déploiement attendent la fin des watchers, ce qui exige un poll interval adapté. Le composant documente que NACK_ON_ERROR est nécessaire pour conserver un message échoué, car le simple auto_commit=False ne donne pas cette garantie FastStream. Les migrations Alembic sont exécutées par un hook avant install/upgrade en mode migrate, pendant que les anciens pods peuvent encore servir. Les routes health distinguent live/ready et regardent notamment la base et IAM. La politique automatique de migrations du monorepo ne couvre pas cet arbre src/migrations.",
+          "actors": "Exploitant Kubernetes et équipe de livraison.",
+          "api": "Build/deployment consumers ; /health/live ; /health/ready ; hook migration-job ; Alembic.",
+          "state": "Offsets, exécutions longues, migrations et statut de disponibilité.",
+          "dependencies": "PostgreSQL, Kafka, Helm, IAM et Kubernetes.",
+          "target": "Migration/Applications Rust conservent Expand/Migrate/Contract, transactions d’événement et opérateurs repris après incident. La livraison reste par digest attesté ; tous les hooks/builders sont inclus dans le contrôle zéro JVM.",
+          "migration": "Ajouter les migrations Rust à l’enforcement, transférer les messages non traités sans double propriétaire et qualifier l’arrêt/reprise des watchers. Conserver les checks de readiness utiles.",
+          "acceptance": "Un échec de watcher ne perd pas l’événement. Le binaire précédent reste compatible pendant Expand ; un échec de migration bloque l’activation sans casser les pods servant encore.",
+          "evidence": [
+            {
+              "path": "services/app-management/AGENTS.md",
+              "line": 58,
+              "why": "Hook et coexistence ancien schéma/binaire."
+            },
+            {
+              "path": "services/app-management/AGENTS.md",
+              "line": 66,
+              "why": "Acquittement et watchers."
+            },
+            {
+              "path": "services/app-management/src/app_manager/application/router/healthcheck_router.py",
+              "line": 161,
+              "why": "Disponibilité."
+            }
+          ]
+        }
+      ],
+      "entities": [
+        "Application/Namespace : identité, projet, propriétaire et configuration désirée.",
+        "Instance et DeploymentExecution : configuration et historique de déploiement, principale, annulation et dates.",
+        "Registry/Image/Build : source Git, commit, image, credentials chiffrés et scans.",
+        "Repository : dépôt interne/externe, projet, visibilité et liens applicatifs.",
+        "Devspace/SSHKey : espace personnel, instance et clés.",
+        "Outbox d’autorisation, miroirs utilisateurs et tombstones projets."
+      ],
+      "dependencies": [
+        "IAM/APISIX pour identité, droits et faits de relation.",
+        "PostgreSQL pour entités, chiffrement et historique ; Kafka/FastStream pour demandes et résultats.",
+        "Kubernetes/Helm pour les workloads, Kaniko/Trivy et registre OCI pour les images.",
+        "Gitea ou autres fournisseurs Git ; process-data pour sessions de calcul."
+      ],
+      "target_domains": [
+        "Applications",
+        "Runtimes",
+        "IAM",
+        "Egress",
+        "Audit",
+        "Migration",
+        "Maintenance"
+      ],
+      "control_plane": [
+        "Core Rust pour applications, dépôts, instances, devspaces et opérations suivies.",
+        "Identité IAM, quotas Runtimes, révisions immuables, idempotence et reçus des effets.",
+        "Séparer gestion applicative et sessions de calcul, actuellement réunies dans ce service."
+      ],
+      "data_plane": [
+        "Exécutants de build/déploiement encapsulés, aucun runtime JVM requis à l’état final.",
+        "Espaces Python utilisateur isolés, volumes et tunnel ; workers de données sans autorité de publication."
+      ],
+      "rust_core": [
+        "applications-api et registry de configuration.",
+        "deployment-controller avec commande persistée, watcher et réconciliation.",
+        "git-adapter, environment-build-controller et secret references.",
+        "devspace-controller et tunnel-coordinator séparés du contenu utilisateur."
+      ],
+      "security": [
+        "Préserver parenté des ressources, décisions sur les applications liées et usage des comptes de service.",
+        "Séparer clés SSH internes/externes et conserver chiffrement/rotation des secrets.",
+        "Un header proxy ne fait foi que dans la frontière de confiance explicitement configurée."
+      ],
+      "operations": [
+        "Pré-install/pre-upgrade migrations Expand compatibles ; policy src/migrations à rendre effective.",
+        "Réconcilier les opérations commit SQL puis événement et les watchers interrompus.",
+        "Sauvegarder base, clés, dépôts et volumes avec procédure de restauration des effets déjà réalisés."
+      ],
+      "migration_steps": [
+        "Importer identités, parentés et historique sans changer les IDs.",
+        "Ajouter commandes/reçus et comparer en observation passive.",
+        "Qualifier builds et déploiements sans JVM, puis basculer par application.",
+        "Déplacer sessions de calcul vers Runtimes et retirer les adaptateurs Python métier remplacés."
+      ],
+      "open_questions": [
+        "Idempotence sous réponse perdue de chaque effet Helm, Git et build à qualifier.",
+        "Configurations clients, état réel des registres/volumes et performances non inspectés.",
+        "Les citations AGENTS sur secrets et transport sont des contrats documentés ; cette mission n’a pas réaudité chaque branche du watcher."
+      ],
+      "evidence": [
+        {
+          "path": "services/app-management/src/app_manager/domain/service/application/create_application_service.py",
+          "line": 36,
+          "why": "Cœur applicatif lu."
+        },
+        {
+          "path": "services/app-management/src/app_manager/infra/adapter/session/session_runtime_service_impl.py",
+          "line": 132,
+          "why": "Frontière runtime également présente."
+        }
+      ]
+    },
+    {
+      "id": "devspace-agent",
+      "title": "Agent sortant de tunnel des devspaces",
+      "purpose": "Relie un devspace au coordinateur par WebSocket sortant et transporte les sessions vers son sshd local.",
+      "stack": "Python asyncio, websockets et Pydantic Settings.",
+      "source_dir": "services/devspace-agent",
+      "read_scope": [
+        "Agent.run et canaux contrôle/données.",
+        "Bridge WebSocket/TCP et configuration ; présence de tests, non exécutés."
+      ],
+      "capabilities": [
+        {
+          "id": "DSA-01",
+          "title": "Enregistrement sortant et ouverture de sessions",
+          "observed": "L’agent ouvre un WebSocket vers agent/connect avec un bearer lu sur disque. Les messages de contrôle JSON de type session_request créent une tâche par sessionId ; les frames binaires ou mal formées sont ignorées. La session ouvre le sshd local puis un WebSocket agent/session/{sessionId}. Le token est relu à chaque connexion, ce qui permet de prendre en compte une rotation du fichier. Le code lu ne déduplique pas les sessionId avant de créer une tâche.",
+          "actors": "Devspace et coordinateur de tunnels.",
+          "api": "Agent._connect_and_serve ; Agent._serve_control_channel ; Agent._handle_session.",
+          "state": "Connexion de contrôle et ensemble de tâches locales ; aucune base persistante.",
+          "dependencies": "Coordinateur WSS, token projeté et sshd local.",
+          "target": "Runtimes/Applications Rust peut reprendre l’agent en Rust ou encapsuler le composant sans JVM transitoirement ; session, identité et durée sont explicitement bornées.",
+          "migration": "Préserver le protocole binaire et les URLs durant migration du coordinateur ; ajouter limites de sessions et déduplication de demande.",
+          "acceptance": "Renvoyer deux fois la même demande ne crée pas deux tunnels logiques. Après rotation du token, la reconnexion utilise la nouvelle identité sans redémarrer le pod.",
+          "evidence": [
+            {
+              "path": "services/devspace-agent/src/devspace_agent/agent.py",
+              "line": 61,
+              "why": "Enregistrement authentifié."
+            },
+            {
+              "path": "services/devspace-agent/src/devspace_agent/agent.py",
+              "line": 74,
+              "why": "Validation des frames et création de tâches."
+            },
+            {
+              "path": "services/devspace-agent/src/devspace_agent/agent.py",
+              "line": 127,
+              "why": "Relecture du token."
+            }
+          ]
+        },
+        {
+          "id": "DSA-02",
+          "title": "Transport des octets et fermeture du tunnel",
+          "observed": "Le bridge lance deux pompes asyncio : frames WebSocket vers TCP avec drain, et lectures TCP par chunks vers WebSocket. Les frames textuelles sont encodées en octets ; les payloads vides sont ignorés. La fin d’une pompe entraîne l’annulation de l’autre puis la fermeture du writer TCP. Le code ne parse ni commande SSH ni contenu métier. Les connexions WebSocket emploient max_size=None dans l’agent ; des plafonds globaux doivent donc être évalués au niveau du tunnel.",
+          "actors": "Client SSH et sshd du devspace.",
+          "api": "bridge ; ws_to_tcp ; tcp_to_ws.",
+          "state": "Buffers et tâches éphémères ; flux chiffré SSH relayé comme octets.",
+          "dependencies": "Asyncio streams et WebSocket du coordinateur.",
+          "target": "Runtimes Rust offre un transport à backpressure avec budgets d’octets, durée et connexions, sans inspection métier du flux SSH.",
+          "migration": "Qualifier EOF, fermeture distante, annulation et débit avant remplacement. Ne pas déduire la sémantique de half-close du seul commentaire : vérifier le comportement effectif.",
+          "acceptance": "Un transfert binaire long conserve l’intégrité et borne la mémoire quand le lecteur ralentit. Une fermeture ou annulation libère les tâches et sockets sans tuer un autre tunnel.",
+          "evidence": [
+            {
+              "path": "services/devspace-agent/src/devspace_agent/bridge.py",
+              "line": 25,
+              "why": "Pompes bidirectionnelles et fermeture."
+            },
+            {
+              "path": "services/devspace-agent/src/devspace_agent/agent.py",
+              "line": 69,
+              "why": "Absence de limite de frame dans les connexions lues."
+            }
+          ]
+        },
+        {
+          "id": "DSA-03",
+          "title": "Reconnexion, arrêt et paramètres de l’agent",
+          "observed": "La boucle reconnecte après erreur avec backoff exponentiel plafonné et jitter ; une connexion réussie réinitialise le délai. L’arrêt positionne un événement et annule les tâches de sessions connues. La configuration porte l’URL du coordinateur, la cible sshd, le chemin du token, les délais de reconnexion et les paramètres de healthcheck. Aucun journal de session durable n’est conservé dans ce composant.",
+          "actors": "Opérateur et orchestrateur du devspace.",
+          "api": "Agent.run ; Agent.stop ; AgentConfig.",
+          "state": "Backoff, événement d’arrêt, ensemble des tâches et configuration du processus.",
+          "dependencies": "Cycle de vie du pod, coordinateur et fichier de token.",
+          "target": "Applications/Runtimes Rust observe enregistrement, sessions actives et refus, avec reconnexion bornée et arrêt drainé. Audit journalise les ouvertures/fermetures côté autorité sans contenu SSH.",
+          "migration": "Conserver la compatibilité des paramètres publics et mesurer les tempêtes de reconnexion ; décider explicitement les limites de durée et d’inactivité.",
+          "acceptance": "Redémarrer le coordinateur pour plusieurs devspaces ne crée pas une boucle serrée. L’arrêt ne laisse pas de session active sans propriétaire identifié.",
+          "evidence": [
+            {
+              "path": "services/devspace-agent/src/devspace_agent/agent.py",
+              "line": 35,
+              "why": "Backoff et reprise."
+            },
+            {
+              "path": "services/devspace-agent/src/devspace_agent/agent.py",
+              "line": 56,
+              "why": "Arrêt et annulation des sessions."
+            },
+            {
+              "path": "services/devspace-agent/src/devspace_agent/config.py",
+              "line": 4,
+              "why": "Paramètres du processus."
+            }
+          ]
+        }
+      ],
+      "entities": [
+        "Configuration agent, sessionId, connexion contrôle et tâches de pont ; état éphémère."
+      ],
+      "dependencies": [
+        "Coordinateur de tunnel authentifié, sshd local, fichier de token projeté."
+      ],
+      "target_domains": [
+        "Runtimes",
+        "Applications",
+        "IAM",
+        "Audit"
+      ],
+      "control_plane": [
+        "Autoriser chaque ouverture et révocation côté coordinateur ; bornes de durée et sessions."
+      ],
+      "data_plane": [
+        "Transport opaque WebSocket/TCP avec backpressure et ressources bornées."
+      ],
+      "rust_core": [
+        "Agent Rust asynchrone et bibliothèque de bridge ; protocole compatible pendant transition."
+      ],
+      "security": [
+        "Token relu sans être imprimé ; le tunnel transporte un accès SSH puissant à limiter au bon devspace.",
+        "Les limites de frame/session doivent être explicites ; max_size=None est un état du code lu."
+      ],
+      "operations": [
+        "Backoff avec jitter ; supervision enregistrement et sessions.",
+        "Aucune donnée métier durable dans l’agent ; restauration par reconnexion."
+      ],
+      "migration_steps": [
+        "Qualifier protocole/EOF et token rotation.",
+        "Canary d’un agent Rust avec même coordinateur.",
+        "Remplacer les images et retirer le runtime Python de cet agent si la politique le prévoit."
+      ],
+      "open_questions": [
+        "La qualification de charge, half-close et révocation côté coordinateur n’a pas été exécutée.",
+        "Aucun plafond de sessions actives constaté dans Agent._spawn_session."
+      ],
+      "evidence": [
+        {
+          "path": "services/devspace-agent/src/devspace_agent/agent.py",
+          "line": 29,
+          "why": "Lifecycle agent."
+        },
+        {
+          "path": "services/devspace-agent/src/devspace_agent/bridge.py",
+          "line": 25,
+          "why": "Transport."
+        }
+      ]
+    },
+    {
+      "id": "cleyrop-front-end",
+      "title": "Interface de conception, catalogue et administration",
+      "purpose": "Interface principale des développeurs, responsables de données et administrateurs : projets, sources, datasets, flows, exécutions, IA, applications et sécurité.",
+      "stack": "TypeScript/React, shell Next.js pages router, SPA React Router sous /app, Chakra UI 2, TanStack Query, Redux pour état client, bun, Keycloak JS, Socket.io et SSE/XHR.",
+      "source_dir": "services/cleyrop-front-end",
+      "read_scope": [
+        "Rapport 14-front-api, routes racine/projet/admin/factory et builders d’API.",
+        "Clients datasets, SQL, autorisation, token, SSE et Socket.io.",
+        "Instructions composant et conventions de cache, formulaires, traductions et runtime config."
+      ],
+      "capabilities": [
+        {
+          "id": "FE-01",
+          "title": "Connexion, permissions et navigation autorisée",
+          "observed": "Le shell Next charge une SPA cliente sous /app. Les routes distinguent interface complète, applications accessibles, profil, clés SSH et écrans d’administration. Les clients HTTP nommés utilisent un token renouvelé ; les permissions viennent d’IAM avec traitement distinct d’un refus et d’une réponse dégradée. Les gates de route et navigation doivent poser la même question. Les routes admin séparent accès organisation et capacités exclusivement plateforme. La dépendance Keycloak JS est encore explicite.",
+          "actors": "Tous les utilisateurs et administrateurs.",
+          "api": "AppRoutes ; getFreshToken ; effectivePermissionsOptions ; AdminRoutes.",
+          "state": "Session navigateur, snapshot de permissions, caches TanStack Query et contexte de navigation.",
+          "dependencies": "IAM, IdP Keycloak et gateway.",
+          "target": "Frontends TypeScript reste en place ; un adaptateur OIDC remplace Keycloak JS pour l’IdP sans JVM. Les décisions sont serveur ; refus et indisponibilité restent distincts.",
+          "migration": "Conserver liens et routes, qualifier refresh/logout et révocation. Remplacer les noms/rôles locaux comme source de droit par les capacités canoniques.",
+          "acceptance": "Une panne IAM affiche une reprise et aucun écran autorisé par défaut. La saisie directe d’une route et son menu appliquent la même décision ; une révocation termine les accès suivants.",
+          "evidence": [
+            {
+              "path": "services/cleyrop-front-end/app/src/modules/AppRoutes.tsx",
+              "line": 48,
+              "why": "Racine de la SPA et route groups."
+            },
+            {
+              "path": "services/cleyrop-front-end/app/src/entities/authz/authz.service.ts",
+              "line": 66,
+              "why": "Réponse IAM et état dégradé."
+            },
+            {
+              "path": "services/cleyrop-front-end/app/src/utils/http/auth.ts",
+              "line": 29,
+              "why": "Renouvellement partagé."
+            },
+            {
+              "path": "services/cleyrop-front-end/app/src/modules/admin/AdminRoutes.tsx",
+              "line": 46,
+              "why": "Séparation des capacités administratives."
+            }
+          ]
+        },
+        {
+          "id": "FE-02",
+          "title": "Projets, espaces personnels et outils de développement",
+          "observed": "Les routes projet réunissent bibliothèque de données, flows, applications, notebooks, SQL et fonctions IA. Les identifiants de projet sont passés aux clients des services. Les pages disposent d’une structure commune de navigation, formulaires, états de chargement et erreurs. Redux garde l’état client de projet/flow tandis que les lectures serveur utilisent TanStack Query. Les notebooks et devspaces ouvrent des environnements provisionnés par les services applicatifs.",
+          "actors": "Développeur et membre de projet.",
+          "api": "ProjectRoutes ; ProjectLibraryRoutes ; ProjectDataflowRoutes ; ProjectAIRoutes ; DevspaceRoutes.",
+          "state": "Projet sélectionné, personnal space, formulaires/drafts locaux et réponses serveur.",
+          "dependencies": "IAM, data-dev, app-management, services IA et Query actuel.",
+          "target": "Frontends inclut projet et environnement de données dans le contexte ; les objets exécutés portent leur édition/révision. Applications/Runtimes Rust fournit les outils sans JVM.",
+          "migration": "Préserver bookmarks et espaces personnels, introduire des liens explicites vers l’environnement sans assimiler une branche Git à une édition publiée.",
+          "acceptance": "Passer de projet ou d’environnement annule les requêtes obsolètes et ne réaffiche pas une réponse tardive du contexte précédent.",
+          "evidence": [
+            {
+              "path": "services/cleyrop-front-end/app/src/modules/project/ProjectRoutes.tsx",
+              "line": 23,
+              "why": "Composition des parcours projet."
+            },
+            {
+              "path": "services/cleyrop-front-end/app/src/modules/devspace/DevspaceRoutes.tsx",
+              "line": 6,
+              "why": "Parcours devspace."
+            },
+            {
+              "path": "services/cleyrop-front-end/AGENTS.md",
+              "line": 44,
+              "why": "Séparation ressources et données serveur."
+            }
+          ]
+        },
+        {
+          "id": "FE-03",
+          "title": "Sources, connecteurs et préparation de collecte",
+          "observed": "Les builders d’API exposent connecteurs, datasources, droits de datasource, datasets d’une source et accès SFTP. Le client dataset prépare un import par preview de configuration, lecture d’en-têtes, feuilles de classeur et vérification d’en-têtes. Ces parcours permettent de régler le format avant la création/exécution côté serveurs. L’interface ne doit pas interpréter un aperçu comme preuve de publication.",
+          "actors": "Intégrateur de données et administrateur de sources.",
+          "api": "COLLECT_CONNECTORS_URL ; COLLECT_DATASOURCES_URL ; getDatasetConfigPreview ; getDatasetSheetNames ; checkDatasetHeaders ; DataOriginsRoutes.",
+          "state": "Formulaire de source, configuration d’import, échantillon, schéma proposé et cache.",
+          "dependencies": "Connecteurs/data-collect, Files, SFTP et IAM.",
+          "target": "Frontends consomme Connectors/Flows Rust avec jobs bornés de découverte et secrets référencés. L’écran montre source, epoch/range, candidat, drift et dernier acquittement séparément.",
+          "migration": "Conserver options de format et erreurs ; mapper chaque ancien formulaire à un contrat versionné. Rendre les fonctions JVM non prises en charge visibles avant activation.",
+          "acceptance": "Un drift de schéma ouvre le contrat et une nouvelle décision ; il ne relance pas automatiquement un import destructif. Une preview ne change ni le checkpoint ni l’édition approuvée.",
+          "evidence": [
+            {
+              "path": "services/cleyrop-front-end/app/src/utils/endpoints/endpoints.ts",
+              "line": 66,
+              "why": "API sources et connecteurs."
+            },
+            {
+              "path": "services/cleyrop-front-end/app/src/entities/dataset/dataset.service.ts",
+              "line": 63,
+              "why": "Préparation et preview de configuration."
+            },
+            {
+              "path": "services/cleyrop-front-end/app/src/entities/dataset/dataset.service.ts",
+              "line": 90,
+              "why": "Vérification des en-têtes."
+            }
+          ]
+        },
+        {
+          "id": "FE-04",
+          "title": "Catalogue, aperçu, schéma, qualité et historique des datasets",
+          "observed": "Le client dessert catalogue global/projet, détail, permissions de téléchargement, preview par branche, historique, schéma, métadonnées, règles et politiques de labels/chiffrement. Le détail est rafraîchi périodiquement ; sa clé actuelle utilise dataset et projet. Les clés ne portent pas systématiquement environnement et édition, ce qui constitue un contrat à étendre sans conclure à une fuite déjà prouvée. Les actions de qualité et chiffrement sont des appels serveur distincts.",
+          "actors": "Data steward, analyste et développeur.",
+          "api": "getDatasetsCatalog ; getDatasetDetailsOptions ; getDatasetPreview ; updateDatasetSchema ; getDatasetPolicies ; encryptDataset.",
+          "state": "Cache dataset, page de catalogue, version historique, aperçu et état des traitements.",
+          "dependencies": "Catalog/data-model, data-serve, IAM et services de gouvernance.",
+          "target": "Catalog/Datasets Rust retournent une édition approuvée explicite. Preview, schéma, statistiques, pagination et export épinglent la même édition. L’historique approuvé reste distinct de tous les snapshots techniques.",
+          "migration": "Ajouter identité/projet/environnement/édition/version sémantique aux clés ; annuler les lectures anciennes lors d’un changement. Conserver les champs métiers et vues FILESET/MODEL/EMBEDDINGS adaptées.",
+          "acceptance": "Une publication pendant la pagination ne mélange pas deux éditions. Un snapshot candidat refusé n’apparaît pas dans le sélecteur public ; une révocation masque aussi totaux et métadonnées.",
+          "evidence": [
+            {
+              "path": "services/cleyrop-front-end/app/src/entities/dataset/dataset.service.ts",
+              "line": 54,
+              "why": "Identité actuelle du cache."
+            },
+            {
+              "path": "services/cleyrop-front-end/app/src/entities/dataset/dataset.service.ts",
+              "line": 274,
+              "why": "Catalogue et polling."
+            },
+            {
+              "path": "services/cleyrop-front-end/app/src/entities/dataset/dataset.service.ts",
+              "line": 308,
+              "why": "Politique du dataset."
+            },
+            {
+              "path": "services/cleyrop-front-end/app/src/entities/dataset/dataset.service.ts",
+              "line": 301,
+              "why": "Contrat de changement de schéma."
+            }
+          ]
+        },
+        {
+          "id": "FE-05",
+          "title": "Éditeur de flows, branches, propositions et publication",
+          "observed": "Les routes et builders desservent graphes, validation/génération de schéma, branches, merge requests, versions et modules internes. Le front porte un état local de flow et des formulaires de transformation ; le serveur data-dev contrôle la sauvegarde et les conflits. La publication actuelle de définition ne garantit pas à elle seule une édition de données publiée. Les chemins de run ciblent une version précise du flow.",
+          "actors": "Auteur de flow et relecteur.",
+          "api": "ProjectDataflowRoutes ; DEV_DATAFLOW_VALIDATE_URL ; DEV_DATAFLOW_GENERATE_URL ; DATA_DEV_DATAFLOW_MERGE_REQUESTS_URL ; DATA_DEV_MODULES_URL.",
+          "state": "Draft de graphe, branche, révision, proposition et paramètres d’exécution.",
+          "dependencies": "Flows/data-dev, Runtimes/process-data, schémas datasets et modules.",
+          "target": "Frontends distingue enregistrer une révision, approuver un plan et publier une édition. L’approbation porte hash du plan, bases, manifeste et politique ; une modification l’invalide. Aucun bouton de publication forcée ne contourne un veto.",
+          "migration": "Préserver les opérateurs et graphes ; exposer préconditions de sauvegarde et incompatibilités sans JVM. Les kinds sont TABLE, INCREMENTAL, VIEW, FILESET, MODEL, EMBEDDINGS, FEATURESET, STREAM ; EXPORT reste un effet.",
+          "acceptance": "Deux sauvegardes concurrentes montrent un conflit sans perte de draft. Après audit refusé, aucune édition n’est visible ; modifier le plan requiert nouvelle approbation et nouvel audit.",
+          "evidence": [
+            {
+              "path": "services/cleyrop-front-end/app/src/modules/project/dataflow/ProjectDataflowRoutes.tsx",
+              "line": 10,
+              "why": "Parcours de conception."
+            },
+            {
+              "path": "services/cleyrop-front-end/app/src/utils/endpoints/endpoints.ts",
+              "line": 25,
+              "why": "Validation/génération du graphe."
+            },
+            {
+              "path": "services/cleyrop-front-end/app/src/utils/endpoints/endpoints.ts",
+              "line": 31,
+              "why": "Branches et propositions."
+            },
+            {
+              "path": "services/cleyrop-front-end/app/src/utils/endpoints/endpoints.ts",
+              "line": 38,
+              "why": "Bibliothèque de modules."
+            }
+          ]
+        },
+        {
+          "id": "FE-06",
+          "title": "Exécutions, exploration SQL et mises à jour temps réel",
+          "observed": "Les clients appellent exécutions, versions et clusters, et envoient une requête SQL avec projet et branche optionnelle. Le helper SSE emploie XHR pour joindre un bearer renouvelé. Socket.io utilise uniquement WebSocket, connexion explicite et token dans auth ; il dispose de namespaces général, collect et admin ainsi que de réinscription aux rooms. Le helper SSE lu ne fournit pas le protocole de replay durable de l’édition. Un changement de build vide caches et localStorage avant rechargement.",
+          "actors": "Développeur, analyste et opérateur.",
+          "api": "execSQLQuery ; PROCESS_EXECUTIONS_URL ; XhrSource ; socket/collectSocket/adminSocket ; handleNewBuild.",
+          "state": "Résultats SQL, run, logs, état affiché et caches navigateur éphémères.",
+          "dependencies": "Query/data-serve, Runtimes, Notifications et gateway.",
+          "target": "Frontends expose préparation, audit, conflit, publication et ACK_PENDING séparément. Les événements ont séquence/curseur ; les éditions sont relues depuis Catalog. Une réponse perdue récupère le reçu idempotent au lieu de recommencer la publication.",
+          "migration": "Ajouter pins d’entrées, annulation de requête et curseur de reprise. Les drafts qui doivent survivre à un déploiement sont persistés côté serveur, pas seulement dans localStorage.",
+          "acceptance": "Reconnecter sur un autre pod après une publication récupère le reçu sans régression d’état. SQL, export et pagination utilisent les mêmes éditions ; ack en retard ne devient pas ingestion échouée.",
+          "evidence": [
+            {
+              "path": "services/cleyrop-front-end/app/src/entities/sql/sql.service.ts",
+              "line": 6,
+              "why": "Requête SQL avec contexte projet/branche."
+            },
+            {
+              "path": "services/cleyrop-front-end/app/src/utils/xhrSource.ts",
+              "line": 34,
+              "why": "Transport SSE authentifié."
+            },
+            {
+              "path": "services/cleyrop-front-end/app/src/socket/socket.ts",
+              "line": 37,
+              "why": "Transport WebSocket et authentification."
+            },
+            {
+              "path": "services/cleyrop-front-end/app/src/modules/index.tsx",
+              "line": 9,
+              "why": "Invalidation au changement de build."
+            }
+          ]
+        },
+        {
+          "id": "FE-07",
+          "title": "Factory, images, instances, dépôts et applications publiées",
+          "observed": "La Factory possède création/modification d’application, création/modification d’instance, création d’image et gestion des dépôts. Un groupe de routes distinct conserve les détails d’application, instance et image en lecture dans l’interface Applications restreinte. Les pages de devspace et applications s’appuient sur app-management ; les commandes et états de build/déploiement restent serveur.",
+          "actors": "Développeur applicatif et utilisateur d’une application partagée.",
+          "api": "FactoryRoutes ; FactoryReadRoutes ; FactoryRepositoriesRoutes ; ApplicationsRoutes ; DevspaceRoutes.",
+          "state": "Formulaires applicatifs, image, instance, dépôt et statut de déploiement.",
+          "dependencies": "Applications/app-management, IAM et événements de build.",
+          "target": "Frontends conserve la Factory sur Applications/Runtimes Rust. Chaque lancement montre révision de configuration, digest qualifié et état opérationnel ; partage et exposition portent une autorisation serveur.",
+          "migration": "Maintenir les routes de détail partagé ; qualifier les droits lecture/écriture séparément et les états longs de build avant remplacement des endpoints.",
+          "acceptance": "Un lecteur d’application partagée peut ouvrir le détail autorisé sans obtenir les boutons ni l’API de déploiement. Une image reconstruite affiche son nouveau digest sans changer l’historique.",
+          "evidence": [
+            {
+              "path": "services/cleyrop-front-end/app/src/modules/factory/FactoryRoutes.tsx",
+              "line": 29,
+              "why": "Parcours de construction et déploiement."
+            },
+            {
+              "path": "services/cleyrop-front-end/app/src/modules/factory/FactoryRoutes.tsx",
+              "line": 43,
+              "why": "Détails accessibles dans interface restreinte."
+            }
+          ]
+        },
+        {
+          "id": "FE-08",
+          "title": "IA, gouvernance administrative, notifications et configuration UI",
+          "observed": "Les routes comprennent agents/corpus du projet, applications IA, notifications, utilisateurs, projets, clusters, clés de modèle, monitoring, audit, permissions et sécurité. Les builders couvrent sessions utilisateur, teams/memberships, comptes de service, fournisseurs d’identité et politiques de mot de passe/session. La configuration navigateur est injectée au runtime ; les traductions couvrent français, anglais et allemand. Ces groupes partagent design system, formulaires et contrôle de permissions, mais gardent des services métier distincts.",
+          "actors": "Administrateur plateforme/organisation, auteur d’agent et utilisateur.",
+          "api": "ProjectAIRoutes ; AdminRoutes ; NOTIFICATIONS_URL ; IAM_ADMIN_* ; publicRuntimeConfig.",
+          "state": "Formulaires et projections des politiques, notifications et ressources IA ; paramètres publics de déploiement.",
+          "dependencies": "IAM, AI, Embeddings, MCP, Notifications et Applications.",
+          "target": "Frontends garde les parcours TypeScript en appelant les domaines Rust dédiés. La découverte des noms, relations et erreurs exige un droit explicite ; l’indisponibilité des décisions n’accorde jamais un accès.",
+          "migration": "Garder les trois langues, focus et clavier ; vérifier l’équivalence des formulaires et erreurs, puis retirer les contrats Keycloak/JVM exposés à l’utilisateur.",
+          "acceptance": "Chaque persona accède uniquement aux pages et métadonnées autorisées. Le changement de politique a un reçu serveur ; les traductions et navigation clavier restent utilisables après migration.",
+          "evidence": [
+            {
+              "path": "services/cleyrop-front-end/app/src/modules/admin/AdminRoutes.tsx",
+              "line": 46,
+              "why": "Groupes administratifs et capacités."
+            },
+            {
+              "path": "services/cleyrop-front-end/app/src/utils/endpoints/endpoints.ts",
+              "line": 125,
+              "why": "Parcours IA projet et corpus."
+            },
+            {
+              "path": "services/cleyrop-front-end/app/src/utils/endpoints/endpoints.ts",
+              "line": 203,
+              "why": "Politiques et audit."
+            },
+            {
+              "path": "services/cleyrop-front-end/AGENTS.md",
+              "line": 52,
+              "why": "Configuration publique injectée."
+            }
+          ]
+        }
+      ],
+      "entities": [
+        "Projets/espaces, datasets/branches/historique, sources, graphes/versions/MR, exécutions/clusters.",
+        "Applications/instances/images/dépôts/devspaces, agents/corpus, notifications et politiques IAM.",
+        "Caches serveur TanStack Query, état client Redux, formulaires et config publique."
+      ],
+      "dependencies": [
+        "Gateway et services IAM, Catalog/Datasets, Flows, Query, Connectors, Runtimes, Applications, AI, Notifications.",
+        "Keycloak JS et transport HTTP/SSE/Socket.io ; runtime Next/bun."
+      ],
+      "target_domains": [
+        "Frontends",
+        "IAM",
+        "Catalog",
+        "Datasets",
+        "Flows",
+        "Query",
+        "Connectors",
+        "Runtimes",
+        "Applications",
+        "AI",
+        "Notifications"
+      ],
+      "control_plane": [
+        "Interfaces TypeScript conservées, DTO versionnés et adaptateurs de chemins legacy.",
+        "Pins d’édition, manifestes approuvés et reçus de publication visibles ; aucune autorité métier dans le cache."
+      ],
+      "data_plane": [
+        "Rendu, téléchargement autorisé et flux événementiels ; aucun commit catalogue effectué par navigateur."
+      ],
+      "rust_core": [
+        "Aucun portage Rust de la SPA proposé. Les APIs métier migrent vers les domaines Rust et publient leurs schémas de contrat."
+      ],
+      "security": [
+        "Permissions de découverte couvrent noms, schémas, compteurs, erreurs et lignage.",
+        "Refus et indisponibilité distincts ; menu masqué ne remplace pas contrôle serveur.",
+        "Changer identité/projet/environnement invalide le contexte et annule les requêtes anciennes."
+      ],
+      "operations": [
+        "Runtime config synchronisée entre manifeste frontend, Next et chart.",
+        "Changement de build efface caches/localStorage : conserver les drafts durables côté serveur.",
+        "Tests UI, accessibilité, trois langues et contrats à exécuter avant bascule ; aucun résultat revendiqué ici."
+      ],
+      "migration_steps": [
+        "Extraire adaptateur OIDC et maintenir guards.",
+        "Versionner DTO et ajouter pins édition/environnement dans URLs et caches.",
+        "Séparer sauvegarde, audit, publication, ack et release multi-sorties.",
+        "Basculer les parcours par projet puis retirer les contrats Spark/Keycloak/JVM exposés."
+      ],
+      "open_questions": [
+        "Les clés actuelles ne portent pas toutes une édition ; l’étendue des changements doit être mesurée par parcours.",
+        "Reprise SSE durable et cohérence multi-sorties ne sont pas établies par le code client actuel.",
+        "L’étude antérieure décrit des écrans cible ; leur qualification n’est pas un test de l’interface existante."
+      ],
+      "evidence": [
+        {
+          "path": "services/cleyrop-front-end/app/src/modules/AppRoutes.tsx",
+          "line": 54,
+          "why": "Composition réelle du frontend."
+        },
+        {
+          "path": "services/cleyrop-front-end/app/src/entities/dataset/dataset.service.ts",
+          "line": 54,
+          "why": "Contrat de cache."
+        },
+        {
+          "path": "services/cleyrop-front-end/app/src/utils/http/auth.ts",
+          "line": 29,
+          "why": "Authentification client."
+        }
+      ]
+    },
+    {
+      "id": "business-front-end",
+      "title": "Interface métier de conversations, agents et applications",
+      "purpose": "SPA destinée aux utilisateurs métier pour dialoguer avec des agents, configurer leur contexte et ouvrir les applications disponibles.",
+      "stack": "TypeScript, React, Vite, Chakra UI 3, TanStack Query et contextes React, bun, Keycloak JS ; pas de Next ni Redux.",
+      "source_dir": "services/business-front-end",
+      "read_scope": [
+        "Rapport 14 et instructions du composant.",
+        "AuthProvider, users.access, clients conversations/agents/applications/fileSessions/corpora/toolboxes/datasets.",
+        "Routes chat, agents et applications ; configuration runtime documentée."
+      ],
+      "capabilities": [
+        {
+          "id": "BFE-01",
+          "title": "Admission à l’interface métier et contexte utilisateur",
+          "observed": "AuthProvider attend l’initialisation Keycloak et l’authentification puis charge utilisateur, permissions et espace studio. Seul system.canAccessFullInterface booléen vrai et non dégradé autorise l’application. Valeur absente/mal formée, erreur ou header de dégradation affiche une page de reprise ; le refus explicite possède une variante restreinte. L’ID studio est directement l’ID projet IAM. La langue utilisateur alimente i18n. La décision est rafraîchie périodiquement sans maintien permissif d’une dernière bonne réponse.",
+          "actors": "Utilisateur métier.",
+          "api": "AuthProvider ; getBusinessAppAccess ; readBusinessAppAccess ; accessView.",
+          "state": "AuthContext, utilisateur, studioId et décision allowed/restricted/unavailable.",
+          "dependencies": "IAM, IdP Keycloak et clients HTTP.",
+          "target": "Frontends TypeScript consomme IAM Rust via un adaptateur OIDC indépendant du fournisseur. Le contrat à trois états reste identique.",
+          "migration": "Préserver la sémantique des IDs et la dégradation ; migrer les endpoints sans extraire un ID depuis le nom du projet.",
+          "acceptance": "Un champ non booléen ou un IAM indisponible n’ouvre pas l’application. Après révocation, le prochain rafraîchissement ferme l’accès avec le bon message.",
+          "evidence": [
+            {
+              "path": "services/business-front-end/app/src/providers/AuthProvider.tsx",
+              "line": 17,
+              "why": "Chargement identité, studio et admission."
+            },
+            {
+              "path": "services/business-front-end/app/src/entities/users/users.access.ts",
+              "line": 10,
+              "why": "Validation stricte et dégradation."
+            },
+            {
+              "path": "services/business-front-end/app/src/entities/users/users.access.ts",
+              "line": 41,
+              "why": "Trois états explicites."
+            }
+          ]
+        },
+        {
+          "id": "BFE-02",
+          "title": "Conversation avec un agent et historique",
+          "observed": "Le client liste l’historique global ou par agent, charge une conversation et crée/continue une conversation par SSE/XHR en POST/PUT. La création peut cibler une version de contexte. Le détail utilise staleTime infini et une rétention de cache prolongée pendant le streaming, afin qu’une navigation hors du chat conserve l’historique déjà chargé. Renommage et suppression sont des commandes HTTP dédiées.",
+          "actors": "Utilisateur dialoguant avec un agent.",
+          "api": "getConversationsHistory ; getConversation ; createConversation ; continueConversation ; updateConversation ; deleteConversation.",
+          "state": "Conversation, messages, titre, agent/contextVersion et buffer client durant le flux.",
+          "dependencies": "AI, sessions conversationnelles, IAM et SSE.",
+          "target": "Frontends conserve le chat sur AI Rust, avec IDs de message/run, provenance des entrées et reprise de flux. Les effets outillés suivent leurs contrats d’approbation serveur.",
+          "migration": "Conserver l’historique et la version de contexte choisie ; ajouter curseur durable et déduplication des fragments sans supposer qu’un flux client vaut un résultat final.",
+          "acceptance": "Quitter puis revenir pendant une réponse ne duplique ni prompt ni message. Reconnecter récupère l’état autorisé ; une génération ne peut agir avec des droits issus du texte du prompt.",
+          "evidence": [
+            {
+              "path": "services/business-front-end/app/src/entities/conversations/conversations.service.ts",
+              "line": 30,
+              "why": "Cache du détail pendant streaming."
+            },
+            {
+              "path": "services/business-front-end/app/src/entities/conversations/conversations.service.ts",
+              "line": 43,
+              "why": "Création avec version et continuation."
+            },
+            {
+              "path": "services/business-front-end/app/src/entities/conversations/conversations.service.ts",
+              "line": 55,
+              "why": "Renommage et suppression."
+            }
+          ]
+        },
+        {
+          "id": "BFE-03",
+          "title": "Configuration des agents, corpus et outils",
+          "observed": "Le client liste les agents, lit un agent avec currentVersion optionnelle et crée/modifie/supprime des agents dans un projet. Les corpus de projet peuvent être filtrés par IDs. Les toolboxes sont listées et détaillées, et leurs variables sont lues puis enregistrées par PATCH. La configuration d’un agent rassemble ainsi instructions et ressources venant de plusieurs services ; les validations d’accès doivent rester serveur.",
+          "actors": "Auteur d’agent dans son espace ou projet.",
+          "api": "getAgents ; getAgent ; createProjectAgent ; updateAgent ; deleteAgent ; getProjectCorpora ; getToolboxVars ; saveToolboxVars.",
+          "state": "Agent/version, AgentForm, corpus référencés et variables d’outils.",
+          "dependencies": "AI, corpus/Embeddings, MCP/toolboxes, IAM et projets.",
+          "target": "AI/MCP/Embeddings Rust publient une révision de contexte qualifiée, référencent les éditions de corpus et bornent les outils. Une variable secrète n’est pas un paramètre réaffichable librement.",
+          "migration": "Importer références et versions puis qualifier les permissions de chaque corpus/outil. Conserver brouillon et version publiée séparés.",
+          "acceptance": "Modifier un brouillon n’altère pas une conversation épinglée à une version. Un corpus ou outil refusé ne peut être ajouté par manipulation du payload.",
+          "evidence": [
+            {
+              "path": "services/business-front-end/app/src/entities/agents/agents.service.ts",
+              "line": 20,
+              "why": "Version de contexte et CRUD par projet."
+            },
+            {
+              "path": "services/business-front-end/app/src/entities/corpora/corpora.service.ts",
+              "line": 8,
+              "why": "Sélection des corpus."
+            },
+            {
+              "path": "services/business-front-end/app/src/entities/toolboxes/toolboxes.service.ts",
+              "line": 38,
+              "why": "Variables des outils."
+            }
+          ]
+        },
+        {
+          "id": "BFE-04",
+          "title": "Pièces jointes et sessions de fichiers",
+          "observed": "Le service client crée une session puis téléverse un fichier en multipart avec AbortSignal optionnel. Le même contrat est utilisé par les pièces jointes du chat et les formulaires d’agent. Une route DELETE retire un fichier de la session par nom. Le navigateur ne démontre pas à lui seul le scan, les limites ni la rétention, qui relèvent des serveurs.",
+          "actors": "Utilisateur attachant un document et auteur d’agent.",
+          "api": "createFileSession ; uploadSessionFile ; deleteSessionFile.",
+          "state": "Session de fichier, upload local, nom et annulation de requête.",
+          "dependencies": "AI sessions, Files et stockage serveur.",
+          "target": "Files/AI Rust fournissent upload borné, quarantaine et références immuables ; les corpus publiés suivent WAP. Le navigateur distingue transfert, validation et disponibilité pour le modèle.",
+          "migration": "Conserver le parcours multipart et les erreurs, puis ajouter IDs stables de fichier/édition et état de validation. Ne pas assimiler annulation HTTP à suppression de l’objet déjà reçu.",
+          "acceptance": "Annuler au milieu puis réessayer ne laisse pas de document utilisé sans validation. Un fichier d’une autre session reste inaccessible même si son nom est connu.",
+          "evidence": [
+            {
+              "path": "services/business-front-end/app/src/entities/fileSessions/fileSessions.service.ts",
+              "line": 4,
+              "why": "Session et upload."
+            },
+            {
+              "path": "services/business-front-end/app/src/entities/fileSessions/fileSessions.service.ts",
+              "line": 14,
+              "why": "Suppression partagée entre chat et formulaire."
+            }
+          ]
+        },
+        {
+          "id": "BFE-05",
+          "title": "Documents générés, graphiques et export de données",
+          "observed": "Le client consulte un document généré avec version optionnelle, demande les formats disponibles et télécharge le document. Il peut télécharger un graphique lié à un message. Un autre service envoie une requête d’export dataset avec options de séparateur/quoting et reçoit un blob. Les datasets du projet sont listés pour les usages métier. Le contrat actuel doit être enrichi pour prouver l’édition qui a servi au résultat.",
+          "actors": "Utilisateur métier qui consulte ou exporte une réponse.",
+          "api": "getConversationDocument ; getConversationDocumentFormats ; exportConversationDocument ; downloadConversationChart ; downloadDataset.",
+          "state": "Document/version, graphique de message, blob téléchargé et requête d’export.",
+          "dependencies": "AI documents, Query/data-serve, Files et IAM.",
+          "target": "AI/Query/Files Rust lient chaque résultat à ses éditions d’entrée et à son reçu. EXPORT est un effet auditée et autorisé ; il ne crée pas un neuvième kind de dataset.",
+          "migration": "Préserver formats et noms d’usage, ajouter provenance et reprise du reçu, recontrôler les droits au moment d’export.",
+          "acceptance": "Après révocation, ni un ancien lien ni un cache ne permet un nouvel export. Une réponse et son export pointent vers la même version documentaire et les mêmes éditions de données.",
+          "evidence": [
+            {
+              "path": "services/business-front-end/app/src/entities/conversations/conversations.service.ts",
+              "line": 77,
+              "why": "Document et version."
+            },
+            {
+              "path": "services/business-front-end/app/src/entities/conversations/conversations.service.ts",
+              "line": 90,
+              "why": "Formats et téléchargement."
+            },
+            {
+              "path": "services/business-front-end/app/src/entities/datasets/datasets.service.ts",
+              "line": 10,
+              "why": "Export de requête et paramètres."
+            }
+          ]
+        },
+        {
+          "id": "BFE-06",
+          "title": "Catalogue d’applications et shell métier au runtime",
+          "observed": "Le client charge les applications agents, conserve uniquement les statuts DEPLOYED ou WARNING puis les trie par nom. Le détail d’application possède sa propre clé de cache. Le router compose chat, agents et applications. La configuration est injectée via window avant fallback Vite, et la couche HTTP déballe déjà response.data. Le thème, les composants Chakra 3 et les contextes sont propres à cette SPA.",
+          "actors": "Utilisateur ouvrant une application publiée et opérateur de l’interface.",
+          "api": "getApplications ; getApp ; AppRouter ; config/env.ts.",
+          "state": "Liste d’applications disponibles, détail, configuration publique et cache.",
+          "dependencies": "Applications/app-management, IAM et assets publics.",
+          "target": "Frontends reste TypeScript avec Applications Rust. Disponibilité opérationnelle, droit de découverte et droit d’ouverture sont des propriétés séparées ; une application déployée n’est pas automatiquement visible.",
+          "migration": "Conserver filtrage/tri et compatibilité runtime config ; qualifier liens, états de chargement, langues et accessibilité. Retirer le couplage IdP JVM sans changer les usages.",
+          "acceptance": "Une application supprimée ou révoquée disparaît après invalidation et son lien direct est refusé côté serveur. Le même artefact frontend fonctionne dans deux environnements avec configuration publique injectée.",
+          "evidence": [
+            {
+              "path": "services/business-front-end/app/src/entities/applications/applications.service.ts",
+              "line": 20,
+              "why": "Filtrage de statut et tri."
+            },
+            {
+              "path": "services/business-front-end/app/src/entities/applications/applications.service.ts",
+              "line": 36,
+              "why": "Détail."
+            },
+            {
+              "path": "services/business-front-end/app/src/AppRouter.tsx",
+              "line": 8,
+              "why": "Composition des routes."
+            },
+            {
+              "path": "services/business-front-end/AGENTS.md",
+              "line": 44,
+              "why": "Configuration publique au runtime."
+            }
+          ]
+        }
+      ],
+      "entities": [
+        "Utilisateur et studio IAM, décision d’accès, agents/versions, conversations/messages.",
+        "Documents/versions, sessions de fichiers, corpus, toolboxes/variables et applications."
+      ],
+      "dependencies": [
+        "IAM/IdP, AI, Embeddings/corpus, MCP/tools, Applications, Files et Query.",
+        "TanStack Query, React context et SSE/XHR."
+      ],
+      "target_domains": [
+        "Frontends",
+        "IAM",
+        "AI",
+        "Embeddings",
+        "MCP",
+        "Applications",
+        "Files",
+        "Query"
+      ],
+      "control_plane": [
+        "SPA TypeScript conservée ; contexte/version d’agent, droits et provenance visibles.",
+        "Le cache navigateur ne valide ni publication ni effet d’un outil."
+      ],
+      "data_plane": [
+        "Chat streamé, pièces jointes, rendu documentaire et exports bornés côté serveur."
+      ],
+      "rust_core": [
+        "Aucun core métier navigateur Rust ; consommateurs TypeScript des APIs Rust AI/IAM/Files/Applications."
+      ],
+      "security": [
+        "Admission stricte booléenne non dégradée, sans maintien permissif.",
+        "Contrôler à nouveau l’accès au document, corpus, outil et export sur serveur.",
+        "Ne pas exposer variables secrètes ou résultats de sessions non autorisées dans les caches."
+      ],
+      "operations": [
+        "Config window au runtime avant fallback Vite, build bun et Chakra 3.",
+        "Les conversations en cache pendant streaming requièrent invalidation correcte au logout/changement de contexte.",
+        "Aucun parcours UI ou test en navigateur exécuté dans cet audit."
+      ],
+      "migration_steps": [
+        "Garder le contrat d’admission et remplacer l’adaptateur Keycloak.",
+        "Versionner agents et provenance des corpus.",
+        "Ajouter reprise du stream, reçus d’export et état d’upload validé.",
+        "Qualifier personas, langues, focus/clavier et navigation entre chat et applications."
+      ],
+      "open_questions": [
+        "Reprise exacte d’un flux de conversation après perte réseau à qualifier.",
+        "La protection et rétention des fichiers relèvent des services ; elles ne se déduisent pas des fonctions upload.",
+        "Les effets d’outils doivent être classés selon leur niveau d’approbation ; le prompt utilisateur ne suffit pas à autoriser toute action."
+      ],
+      "evidence": [
+        {
+          "path": "services/business-front-end/app/src/providers/AuthProvider.tsx",
+          "line": 17,
+          "why": "Admission et contexte."
+        },
+        {
+          "path": "services/business-front-end/app/src/entities/conversations/conversations.service.ts",
+          "line": 30,
+          "why": "Conversation et durée de cache."
+        }
+      ]
+    }
+  ]
+}

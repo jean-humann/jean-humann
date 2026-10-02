@@ -1,0 +1,1400 @@
+{
+  "mission": "07-ai-mcp-datasphere",
+  "scope": "Finalisation ciblée de sept services AI, MCP et Datasphere à partir des études existantes et vérifications de code.",
+  "source_revision": "ba0f34e732e582fc362933b8e55544af04208cb8",
+  "verification": {
+    "method": "Lecture seule ; analyses existantes reprises, routes et implémentations ciblées citées ; aucun binaire propriétaire exploré.",
+    "execution": "Aucun service, test runtime, provider, LLM, UI ou scénario de panne exécuté. Les acceptance sont des critères proposés.",
+    "limits": "Ce dernier lot contient 4 à 6 groupes concrets par service. Les inconnues de déploiement et de qualification sont explicites ; aucune parité universelle n’est affirmée.",
+    "target": "Cores Rust proposés, interfaces TS conservées, Python utilisateur isolé. Zéro JVM final y compris Trino, Spark, Kafka et Keycloak. PostgreSQL pour commandes et reçus ; éditions publiées Iceberg autoritaires pour données et embeddings."
+  },
+  "services": [
+    {
+      "id": "ai-gen-assistant",
+      "title": "Assistants, contextes et corpus RAG",
+      "purpose": "Configurer les assistants et leurs contextes, converser avec outils et sources, ingérer les corpus et gérer les artefacts générés.",
+      "stack": "Python/FastAPI, PostgreSQL/SQLAlchemy/Alembic, Milvus, S3, Kafka et schedulers ; dépendances Python de génération.",
+      "source_dir": "services/ai-gen-assistant",
+      "read_scope": [
+        "Analyses existantes 11-ml-embeddings et 14-front-api reprises comme contexte ; vérifications ciblées des routes, outils et implémentations citées ci-dessous.",
+        "Instructions racine et AGENTS.md du composant lorsqu’il existe ; aucun binaire propriétaire inspecté.",
+        "Lecture statique ciblée pour finalisation ; les branches non exécutées et le déploiement restent non qualifiés."
+      ],
+      "capabilities": [
+        {
+          "id": "AIGA-01",
+          "title": "Configurer un contexte d’assistant, ses ressources et son partage",
+          "observed": "Le contexte est rattaché à un projet et porte nom, description, instructions, personnalisation, ressources corpus/datasets/fichiers, toolboxes et choix de modèle avec réglages de génération. Les routes créent, listent et modifient ces configurations, leur statut et leur propriétaire. La création résout le miroir utilisateur avant écriture et canonicalise le projet. Des routes distinctes gèrent le partage. Les faits de création, propriété et partage passent par l’outbox IAM lorsque cette émission est activée.",
+          "actors": "Auteurs d’assistants, membres de projets et propriétaires.",
+          "api": "ContextRouter ; POST /projects/{project_id}/contexts ; ContextShareRouter.",
+          "state": "Context, ContextOwner, ConversationResources, références de sessions de fichiers, miroirs utilisateur/projet.",
+          "dependencies": "IAM, PostgreSQL, modèles du proxy, événements de droits.",
+          "target": "AI Rust gère les configurations versionnées et les mandats de ressources ; IAM décide partage et propriété. Les ressources référencent des éditions autorisées.",
+          "migration": "Importer UUID, propriétaires et références, reconstruire les faits IAM puis comparer les accès avant bascule.",
+          "acceptance": "Créer un contexte avec trois types de ressource, le partager puis révoquer ; les autres projets ne découvrent aucune ressource interdite.",
+          "evidence": [
+            {
+              "path": "services/ai-gen-assistant/app/src/context/application/router/context_router.py",
+              "line": 103,
+              "why": "Création et modèle de configuration."
+            },
+            {
+              "path": "services/ai-gen-assistant/AGENTS.md",
+              "line": 49,
+              "why": "Faits IAM et outbox transactionnelle."
+            }
+          ]
+        },
+        {
+          "id": "AIGA-02",
+          "title": "Historiser, comparer et publier les versions de contexte",
+          "observed": "Le service expose liste et détail des versions, diff, duplication, publication d’une version et suppression simple ou multiple. Une lecture peut résoudre la configuration effective d’une version sans muter le contexte courant. La publication citée ici concerne la configuration de l’assistant ; elle ne démontre aucune publication de données Iceberg.",
+          "actors": "Auteurs et responsables de contextes.",
+          "api": "ContextVersionRouter : list_context_versions, diff_context_version, duplicate_context_version, publish_context_version.",
+          "state": "Versions de contexte et configuration effective ; pagination et auteurs résolus.",
+          "dependencies": "PostgreSQL, service de versions et miroir d’identité.",
+          "target": "AI conserve une version de plan immuable ; Publisher reste seul propriétaire des publications de données déclenchées par un plan.",
+          "migration": "Reprendre versions et diffs ; conserver une distinction de contrat et de vocabulaire entre configuration publiée et édition de données approuvée.",
+          "acceptance": "Lire une ancienne version sans changer la tête ; publier une configuration ne rend aucun candidat de données visible.",
+          "evidence": [
+            {
+              "path": "services/ai-gen-assistant/app/src/context/application/router/context_version_router.py",
+              "line": 148,
+              "why": "Comparaison des versions."
+            },
+            {
+              "path": "services/ai-gen-assistant/app/src/context/application/router/context_router.py",
+              "line": 65,
+              "why": "Résolution explicite sans mutation."
+            }
+          ]
+        },
+        {
+          "id": "AIGA-03",
+          "title": "Ouvrir et reprendre les conversations avec streaming",
+          "observed": "Les conversations existent pour un assistant et pour un contexte. Les routes listent et consultent les messages, créent un tour, reprennent un échange, modifient les propriétés ou suppriment la conversation. Les créations et reprises utilisent une réponse en streaming ; l’absence de modèle instruct par défaut a une réponse dédiée. Une API publique de contextes expose aussi ces parcours avec une dépendance de contrôle d’accès au contexte. Les artefacts graphiques générés possèdent leur propre téléchargement.",
+          "actors": "Utilisateurs de chat, applications clientes et assistants intégrés.",
+          "api": "ConversationRouter ; ContextConversationRouter ; PublicContextRouter /v1/contexts/{context_id}.",
+          "state": "Conversations, messages, ressources de conversation et artefacts ; état en PostgreSQL/S3 selon l’objet.",
+          "dependencies": "AI proxy, IAM, toolboxes/MCP, stockage d’artefacts.",
+          "target": "AI Rust orchestre des tours bornés, annulation et budgets ; messages et citations portent la version de contexte et les éditions effectivement lues.",
+          "migration": "Migrer historiques et identifiants ; qualifier la compatibilité des événements streaming et les reprises avant bascule des clients.",
+          "acceptance": "Une interruption reprend selon un identifiant de tour sans lancer deux effets ; une révocation du contexte bloque lecture et nouveau tour.",
+          "evidence": [
+            {
+              "path": "services/ai-gen-assistant/app/src/assistant/application/router/conversation_router.py",
+              "line": 207,
+              "why": "Création et streaming."
+            },
+            {
+              "path": "services/ai-gen-assistant/app/src/public_api/public_context_router.py",
+              "line": 129,
+              "why": "Dépendance commune d’accès au contexte public."
+            }
+          ]
+        },
+        {
+          "id": "AIGA-04",
+          "title": "Définir les corpus et exécuter leurs ingestions documentaires",
+          "observed": "Les corpus sont créés et listés dans un projet, avec recherche d’existence, documents, métadonnées et configuration de refresh. Les transactions corpus/source/document suivent l’ingestion et la suppression. La boucle source utilise une ligne source_transaction_progress créée avec la transaction, revendiquée sous bail et renouvelée ; un autre worker peut reprendre depuis le curseur validé après disparition du propriétaire. La concurrence des workers est configurée dans le scheduler. Les documents possèdent aussi métadonnées et états de transaction consultables.",
+          "actors": "Gestionnaires de connaissances, auteurs de corpus et opérateurs.",
+          "api": "CorpusRouter ; DocumentRouter ; CorpusTransactionRouter ; SourceTransactionLoopScheduler.",
+          "state": "Corpus, Source, Document, transactions et curseurs de progression PostgreSQL.",
+          "dependencies": "Data-collect pour les sources, stockage objet, extraction de documents, modèle d’embedding.",
+          "target": "Flows/AI/Embeddings utilisent des runs bornés. Writer prépare un FILESET et des EMBEDDINGS immuables ; Publisher publie sous WAP avant acquittement de la plage source.",
+          "migration": "Importer les documents et leurs provenances comme éditions auditées ; reprendre les travaux en attente avec correspondance explicite entre ancien curseur et plage source.",
+          "acceptance": "Tuer un worker pendant une tranche ; reprendre sans perdre les documents et ne faire avancer le checkpoint publié qu’après publication approuvée.",
+          "evidence": [
+            {
+              "path": "services/ai-gen-assistant/app/src/corpus/application/router/corpus_router.py",
+              "line": 111,
+              "why": "Surface de corpus et contrôle projet."
+            },
+            {
+              "path": "services/ai-gen-assistant/app/src/corpus/application/scheduler/source_transaction_loop_scheduler.py",
+              "line": 57,
+              "why": "Concurrence, bail et reprise de source."
+            }
+          ]
+        },
+        {
+          "id": "AIGA-05",
+          "title": "Indexer les chunks et rechercher les corpus autorisés",
+          "observed": "La recherche publique liste les corpus accessibles puis recherche des documents. Le stockage de chunks repose sur Milvus. Le remplacement écrit les nouveaux chunks puis retire les anciens ; le commentaire et le code indiquent l’absence de transaction Milvus, avec une période possible de duplication. En perte de propriété, le nettoyage cible les identifiants écrits par ce worker. La dimension des vecteurs est actuellement sondée par une requête au modèle.",
+          "actors": "Utilisateurs RAG, assistants et MCP corpus.",
+          "api": "PublicCorpusRouter list_corpora/search_corpora ; ChunkAdapter.replace_document_chunks.",
+          "state": "Collections Milvus, documents, IDs de chunks et watermark de génération.",
+          "dependencies": "Milvus, proxy embeddings, corpus en PostgreSQL, autorisation IAM.",
+          "target": "EMBEDDINGS Iceberg conserve vecteurs, hash du contenu, édition source, découpage, modèle et dimension. L’index Milvus ou son remplaçant devient une projection reconstruisible par édition approuvée.",
+          "migration": "Écrire une génération candidate, auditer dimensions et droits, publier puis construire l’index privé avant bascule de lecture ; ne pas assimiler l’alias d’index à la vérité publiée.",
+          "acceptance": "Changer de modèle/dimension, perdre l’index et le reconstruire ; aucune recherche ne mélange deux éditions ni ne restitue un document révoqué.",
+          "evidence": [
+            {
+              "path": "services/ai-gen-assistant/app/src/corpus/infra/adapter/storage/chunk_adapter.py",
+              "line": 308,
+              "why": "Ordre écriture/nettoyage et absence de transaction."
+            },
+            {
+              "path": "services/ai-gen-assistant/app/src/corpus/infra/adapter/storage/chunk_adapter.py",
+              "line": 362,
+              "why": "Sondage de dimension."
+            },
+            {
+              "path": "services/ai-gen-assistant/app/src/public_api/public_corpus_router.py",
+              "line": 61,
+              "why": "Recherche publique."
+            }
+          ]
+        },
+        {
+          "id": "AIGA-06",
+          "title": "Outiller les assistants et gérer fichiers, modèles de documents et exports",
+          "observed": "Les toolboxes exposent leurs outils et variables utilisateur, ainsi que leur instance. Le service gère des sessions S3 pour upload/suppression de fichiers. Il reçoit des modèles de documents, les liste, les prévisualise, les modifie et les archive. Les documents générés proposent consultation, formats exportables et téléchargement ; les graphiques ont un export dédié. Des outils de lecture de fichiers, génération de documents/PPTX, graphiques et exécution Python sont présents ; cette lecture n’établit pas à elle seule leur isolation runtime.",
+          "actors": "Auteurs d’assistants, utilisateurs de pièces jointes et administrateurs d’outils.",
+          "api": "ToolboxRouter ; S3FileSessionRouter ; DocumentTemplateRouter ; GeneratedDocumentRouter ; GeneratedChartRouter.",
+          "state": "Toolbox/Tool, variables par utilisateur, sessions de fichiers, modèles, documents et graphiques générés.",
+          "dependencies": "MCP, S3, moteur de génération et runtime Python.",
+          "target": "AI/Runtimes exécutent les outils sous mandat et budgets ; Files contrôle les pièces jointes. Un EXPORT est un effet à reçu, un artefact durable peut être un FILESET publié via Writer/Publisher.",
+          "migration": "Migrer métadonnées et objets avec hashes ; qualifier isolation Python, droits d’outils, formats et suppression des artefacts avant transfert.",
+          "acceptance": "Un outil n’accède qu’aux fichiers du mandat ; le même export rejoué retrouve son reçu ; une suppression retire objet, index et liens conservés selon politique.",
+          "evidence": [
+            {
+              "path": "services/ai-gen-assistant/app/src/assistant/application/router/toolbox_router.py",
+              "line": 211,
+              "why": "Variables de toolbox utilisateur."
+            },
+            {
+              "path": "services/ai-gen-assistant/app/src/assistant/application/router/document_template_router.py",
+              "line": 47,
+              "why": "Cycle de vie des templates."
+            },
+            {
+              "path": "services/ai-gen-assistant/app/src/assistant/application/router/generated_document_router.py",
+              "line": 115,
+              "why": "Formats et téléchargement."
+            }
+          ]
+        }
+      ],
+      "entities": [
+        "Contextes et versions ; conversations et messages.",
+        "Corpus, sources, documents, métadonnées, chunks et transactions.",
+        "Toolboxes, variables utilisateur, sessions de fichiers, templates et artefacts."
+      ],
+      "dependencies": [
+        "IAM et outbox de droits ; proxy LLM/embeddings ; data-collect ; MCP ; PostgreSQL/S3/Milvus/Kafka."
+      ],
+      "target_domains": [
+        "AI",
+        "Embeddings",
+        "MCP",
+        "Flows",
+        "Writer",
+        "Publisher",
+        "Files",
+        "IAM",
+        "Audit",
+        "Runtimes"
+      ],
+      "control_plane": [
+        "AI Rust gère les configurations versionnées et les mandats de ressources ; IAM décide partage et propriété. Les ressources référencent des éditions autorisées.",
+        "AI conserve une version de plan immuable ; Publisher reste seul propriétaire des publications de données déclenchées par un plan.",
+        "AI Rust orchestre des tours bornés, annulation et budgets ; messages et citations portent la version de contexte et les éditions effectivement lues.",
+        "Flows/AI/Embeddings utilisent des runs bornés. Writer prépare un FILESET et des EMBEDDINGS immuables ; Publisher publie sous WAP avant acquittement de la plage source.",
+        "EMBEDDINGS Iceberg conserve vecteurs, hash du contenu, édition source, découpage, modèle et dimension. L’index Milvus ou son remplaçant devient une projection reconstruisible par édition approuvée.",
+        "AI/Runtimes exécutent les outils sous mandat et budgets ; Files contrôle les pièces jointes. Un EXPORT est un effet à reçu, un artefact durable peut être un FILESET publié via Writer/Publisher."
+      ],
+      "data_plane": [
+        "Ingestion et embedding bornés sous Writer ; recherche sur index construit depuis une édition approuvée ; conversation avec tours et outils bornés."
+      ],
+      "rust_core": [
+        "ai-contexts, ai-conversations, ai-tools, corpus-runs et projections embeddings ; calcul Python utilisateur isolé derrière Runtimes."
+      ],
+      "security": [
+        "Faits IAM émis sous indicateur ; sujets historiques compatibles Keycloak à migrer.",
+        "Les documents externes et résultats d’outils sont des données non fiables ; jamais une autorité pour élargir le mandat.",
+        "Un index ne doit pas exposer textes ou nombres de candidats interdits."
+      ],
+      "operations": [
+        "Migrations séparées du démarrage web, hook de préparation et mode migrate ; Alembic hors enforcement migrations racine.",
+        "Boucles sources/documents, leases, outbox et replay à reprendre ; tests Docker non exécutés.",
+        "AGENTS signale un décalage du paquet cleyrop_common publié et des imports monorepo ; ne pas présumer le démarrage qualifié."
+      ],
+      "migration_steps": [
+        "Importer UUID, propriétaires et références, reconstruire les faits IAM puis comparer les accès avant bascule.",
+        "Reprendre versions et diffs ; conserver une distinction de contrat et de vocabulaire entre configuration publiée et édition de données approuvée.",
+        "Migrer historiques et identifiants ; qualifier la compatibilité des événements streaming et les reprises avant bascule des clients.",
+        "Importer les documents et leurs provenances comme éditions auditées ; reprendre les travaux en attente avec correspondance explicite entre ancien curseur et plage source.",
+        "Écrire une génération candidate, auditer dimensions et droits, publier puis construire l’index privé avant bascule de lecture ; ne pas assimiler l’alias d’index à la vérité publiée.",
+        "Migrer métadonnées et objets avec hashes ; qualifier isolation Python, droits d’outils, formats et suppression des artefacts avant transfert."
+      ],
+      "open_questions": [
+        "Compatibilité complète des outils Python, documents et formats à mesurer ; isolation non qualifiée ici.",
+        "La profondeur de ce lot final est ciblée et ne remplace pas un audit ligne par ligne de chaque outil.",
+        "Qualifier les dépendances des images Milvus et du bus pour ne conserver aucune JVM."
+      ],
+      "evidence": [
+        {
+          "path": "services/ai-gen-assistant/app/src/context/application/router/context_router.py",
+          "line": 103,
+          "why": "Création et modèle de configuration."
+        },
+        {
+          "path": "services/ai-gen-assistant/app/src/context/application/router/context_version_router.py",
+          "line": 148,
+          "why": "Comparaison des versions."
+        },
+        {
+          "path": "services/ai-gen-assistant/app/src/assistant/application/router/conversation_router.py",
+          "line": 207,
+          "why": "Création et streaming."
+        },
+        {
+          "path": "services/ai-gen-assistant/app/src/corpus/application/router/corpus_router.py",
+          "line": 111,
+          "why": "Surface de corpus et contrôle projet."
+        },
+        {
+          "path": "services/ai-gen-assistant/app/src/corpus/infra/adapter/storage/chunk_adapter.py",
+          "line": 308,
+          "why": "Ordre écriture/nettoyage et absence de transaction."
+        },
+        {
+          "path": "services/ai-gen-assistant/app/src/assistant/application/router/toolbox_router.py",
+          "line": 211,
+          "why": "Variables de toolbox utilisateur."
+        }
+      ]
+    },
+    {
+      "id": "ai-gen-proxy",
+      "title": "Proxy de modèles et contrôle des fournisseurs",
+      "purpose": "Acheminer chat et embeddings vers les fournisseurs configurés, administrer leurs clés et observer l’usage.",
+      "stack": "Python/FastAPI, HTTPX, PostgreSQL/Alembic, Kafka, Fernet et JWT.",
+      "source_dir": "services/ai-gen-proxy",
+      "read_scope": [
+        "Analyses existantes 11-ml-embeddings et 14-front-api reprises comme contexte ; vérifications ciblées des routes, outils et implémentations citées ci-dessous.",
+        "Instructions racine et AGENTS.md du composant lorsqu’il existe ; aucun binaire propriétaire inspecté.",
+        "Lecture statique ciblée pour finalisation ; les branches non exécutées et le déploiement restent non qualifiés."
+      ],
+      "capabilities": [
+        {
+          "id": "AIGP-01",
+          "title": "Administrer les connexions fournisseurs et leurs clés chiffrées",
+          "observed": "Le plan de contrôle gère création, lecture, liste, mise à jour, suppression et existence des clés fournisseurs. Les secrets sont chiffrés Fernet au repos. La découverte peut réutiliser une clé persistée quand le client fournit un placeholder ou omet le secret. Les routes de gestion valident un JWT et vivent dans une application/port distincts de ceux du proxy.",
+          "actors": "Administrateurs de modèles.",
+          "api": "/api_keys ; POST /api_keys/discover ; control_app.",
+          "state": "API keys, fournisseurs, endpoints et modèles PostgreSQL.",
+          "dependencies": "IAM, IdP, Fernet, API fournisseur.",
+          "target": "AI/Egress Rust stocke des références de secrets et autorise chaque endpoint ; séparation réseau contrôle/données conservée.",
+          "migration": "Migrer les enveloppes via un outil contrôlé puis révoquer les anciens secrets ; conserver les IDs et comparer les droits de gestion.",
+          "acceptance": "Une clé masquée se modifie sans perte ; le listener de données refuse toutes les routes de gestion ; une destination interdite ne reçoit jamais la clé.",
+          "evidence": [
+            {
+              "path": "services/ai-gen-proxy/app/src/main.py",
+              "line": 163,
+              "why": "Séparation des applications."
+            },
+            {
+              "path": "services/ai-gen-proxy/app/src/llm_metric/domain/service/discover_models_service.py",
+              "line": 45,
+              "why": "Réutilisation de connexion existante."
+            },
+            {
+              "path": "services/ai-gen-proxy/AGENTS.md",
+              "line": 63,
+              "why": "Chiffrement déclaré et contraintes de cache."
+            }
+          ]
+        },
+        {
+          "id": "AIGP-02",
+          "title": "Acheminer le chat compatible OpenAI, avec streaming et sélection automatique",
+          "observed": "Le proxy expose le chat par nom technique de clé et une route automatique. Il résout un modèle et sa connexion, déchiffre la clé, transmet la requête et filtre des headers de réponse. Les branches streaming et non-streaming ont leur gestion de délai et métriques. Le streaming demande include_usage et ferme le flux HTTP partagé. Le mode automatique ordonne des modèles par préférence ; son comportement fournisseur doit être qualifié par scénario.",
+          "actors": "Applications IA et agents.",
+          "api": "POST /llm/{api_key_tech_name}/v1/chat/completions ; POST /llm/v1/chat/completions ; GET /llm/models.",
+          "state": "Configuration de modèles ; flux HTTP et métrique de requête.",
+          "dependencies": "Fournisseurs compatibles, clients HTTP mutualisés, service de métriques.",
+          "target": "Gateway AI Rust conserve contrat HTTP/SSE, annulation, budgets et choix de modèles autorisés ; Egress borne destinations et tailles.",
+          "migration": "Rejouer fixtures streaming, erreurs, délais et sélection multi-fournisseur ; basculer par fournisseur.",
+          "acceptance": "Un client annulé libère le flux ; un timeout retourne une erreur définie ; aucun changement de fournisseur ne viole les politiques de données.",
+          "evidence": [
+            {
+              "path": "services/ai-gen-proxy/app/src/llm_metric/application/router/llm_router.py",
+              "line": 152,
+              "why": "Sélection automatique."
+            },
+            {
+              "path": "services/ai-gen-proxy/app/src/llm_metric/application/router/llm_router.py",
+              "line": 256,
+              "why": "Flux et collecte de métriques."
+            }
+          ]
+        },
+        {
+          "id": "AIGP-03",
+          "title": "Produire les embeddings via les modèles configurés",
+          "observed": "L’API liste les modèles d’embedding, expose les informations par clé et transmet une requête d’embeddings au fournisseur sélectionné. Le chemin emploie des retries et enregistre l’usage. Le proxy produit des vecteurs ; il ne publie pas une édition de corpus et ne constitue pas un moteur d’entraînement.",
+          "actors": "Ingestions documentaires et applications de recherche.",
+          "api": "GET /emb/models ; GET /emb/{api_key_tech_name}/info ; POST /emb/{api_key_tech_name}/v1/embeddings.",
+          "state": "Modèles et appels ; vecteurs retournés au consommateur.",
+          "dependencies": "API fournisseur, clé chiffrée, mesures d’usage.",
+          "target": "AI sert un contrat modèle/dimension/version ; Embeddings contrôle longueur, type numérique et provenance avant WAP.",
+          "migration": "Qualifier batch, dimensions, ordre et erreurs de chaque fournisseur ; figer le modèle utilisé dans les éditions.",
+          "acceptance": "Un batch garde son ordre et sa dimension ; un changement de modèle incompatible est refusé avant publication d’EMBEDDINGS.",
+          "evidence": [
+            {
+              "path": "services/ai-gen-proxy/app/src/llm_metric/application/router/embedding_router.py",
+              "line": 114,
+              "why": "Route de vecteurs."
+            },
+            {
+              "path": "services/ai-gen-proxy/app/src/llm_metric/application/router/embedding_router.py",
+              "line": 201,
+              "why": "Reprises fournisseur."
+            }
+          ]
+        },
+        {
+          "id": "AIGP-04",
+          "title": "Choisir et sonder les modèles par défaut",
+          "observed": "La configuration par défaut comprend des rôles de modèles. Pour INSTRUCT et CODER, le service résout les modèles puis lance des probes concurrents avec délai, enregistre les métriques et refuse de sauvegarder si un probe refuse ou lève une erreur. Après succès il upsert les choix puis émet un événement de changement. Les paramètres de génération, dont reasoning_effort, font partie du modèle de configuration.",
+          "actors": "Administrateurs et initialisation plateforme.",
+          "api": "GET/POST /api_keys/configuration ; ConfigureDefaultModelsService.configure.",
+          "state": "DefaultModelConfiguration, rôles, références et résultats de probes.",
+          "dependencies": "Provider gateway, métriques et événements de configuration.",
+          "target": "AI Rust versionne le choix par rôle et son attestation de compatibilité ; une probe ne vaut pas qualification complète du modèle.",
+          "migration": "Reprendre les choix et réglages ; exécuter les probes et tests de capacités avant promotion.",
+          "acceptance": "Un modèle introuvable ou une probe refusée laisse la configuration antérieure ; tous les replicas observent le changement accepté.",
+          "evidence": [
+            {
+              "path": "services/ai-gen-proxy/app/src/llm_metric/domain/service/configure_default_models_service.py",
+              "line": 42,
+              "why": "Probes, refus et sauvegarde."
+            },
+            {
+              "path": "services/ai-gen-proxy/app/src/llm_metric/domain/service/configure_default_models_service.py",
+              "line": 75,
+              "why": "Requête de sondage bornée."
+            }
+          ]
+        },
+        {
+          "id": "AIGP-05",
+          "title": "Mesurer l’usage, la latence et les erreurs des appels",
+          "observed": "Le proxy construit une métrique par appel à partir de l’usage fournisseur, du statut, de la durée et du temps au premier token lorsqu’il existe. Il publie les métriques via Kafka et les consomme pour les conserver. Le contrôle expose les modèles de métrique et un résumé de tokens avec filtres. Les écritures en arrière-plan de streaming doivent être distinguées d’une garantie comptable exhaustive.",
+          "actors": "Opérateurs et responsables de consommation.",
+          "api": "GET /metrics/models ; GET /metrics/tokens ; LLMMetricService.",
+          "state": "LLMMetric, usages de tokens, modèle et clé de provenance.",
+          "dependencies": "Kafka, PostgreSQL et payload d’usage fournisseur.",
+          "target": "Audit/AI Rust conserve un reçu d’usage corrélé à l’appel et des quotas explicites ; bus sans JVM.",
+          "migration": "Reprendre métriques et clés ; comparer comptages sur erreurs, annulations et flux tronqués avant bascule.",
+          "acceptance": "Un même appel rejoué pour transport ne double pas la facturation interne ; un usage absent est inconnu et non assimilé à zéro.",
+          "evidence": [
+            {
+              "path": "services/ai-gen-proxy/app/src/llm_metric/application/router/llm_router.py",
+              "line": 355,
+              "why": "Champs de métrique."
+            },
+            {
+              "path": "services/ai-gen-proxy/app/src/llm_metric/application/router/llm_metric_router.py",
+              "line": 38,
+              "why": "Résumé des tokens."
+            }
+          ]
+        }
+      ],
+      "entities": [
+        "API keys chiffrées, AIModel, configurations par rôle, métriques et usages."
+      ],
+      "dependencies": [
+        "Fournisseurs HTTP ; IAM/IdP ; PostgreSQL et Kafka."
+      ],
+      "target_domains": [
+        "AI",
+        "Egress",
+        "IAM",
+        "Audit",
+        "Embeddings"
+      ],
+      "control_plane": [
+        "AI/Egress Rust stocke des références de secrets et autorise chaque endpoint ; séparation réseau contrôle/données conservée.",
+        "Gateway AI Rust conserve contrat HTTP/SSE, annulation, budgets et choix de modèles autorisés ; Egress borne destinations et tailles.",
+        "AI sert un contrat modèle/dimension/version ; Embeddings contrôle longueur, type numérique et provenance avant WAP.",
+        "AI Rust versionne le choix par rôle et son attestation de compatibilité ; une probe ne vaut pas qualification complète du modèle.",
+        "Audit/AI Rust conserve un reçu d’usage corrélé à l’appel et des quotas explicites ; bus sans JVM."
+      ],
+      "data_plane": [
+        "Flux chat et embeddings bornés, sans accès direct au catalogue de publication."
+      ],
+      "rust_core": [
+        "ai-gateway, provider-registry, default-models et usage-ledger ; adaptation par fournisseur."
+      ],
+      "security": [
+        "Deux listeners ; contrôle exposé par APISIX et JWT obligatoire.",
+        "Secrets chiffrés, aucune valeur secrète incluse dans le dossier.",
+        "Pas de cache local de clés/modèles sans invalidation inter-réplicas selon AGENTS."
+      ],
+      "operations": [
+        "Clients HTTP partagés fermés par lifespan ; migrations et initialisation au démarrage web.",
+        "Les tests requièrent Docker ; non exécutés."
+      ],
+      "migration_steps": [
+        "Migrer les enveloppes via un outil contrôlé puis révoquer les anciens secrets ; conserver les IDs et comparer les droits de gestion.",
+        "Rejouer fixtures streaming, erreurs, délais et sélection multi-fournisseur ; basculer par fournisseur.",
+        "Qualifier batch, dimensions, ordre et erreurs de chaque fournisseur ; figer le modèle utilisé dans les éditions.",
+        "Reprendre les choix et réglages ; exécuter les probes et tests de capacités avant promotion.",
+        "Reprendre métriques et clés ; comparer comptages sur erreurs, annulations et flux tronqués avant bascule."
+      ],
+      "open_questions": [
+        "Politique d’egress et garanties exactes de retry/fallback à qualifier par fournisseur.",
+        "Le compteur d’usage ne prouve pas à lui seul un quota, un coût contractuel ni une remise exactement une fois."
+      ],
+      "evidence": [
+        {
+          "path": "services/ai-gen-proxy/app/src/main.py",
+          "line": 163,
+          "why": "Séparation des applications."
+        },
+        {
+          "path": "services/ai-gen-proxy/app/src/llm_metric/application/router/llm_router.py",
+          "line": 152,
+          "why": "Sélection automatique."
+        },
+        {
+          "path": "services/ai-gen-proxy/app/src/llm_metric/application/router/embedding_router.py",
+          "line": 114,
+          "why": "Route de vecteurs."
+        },
+        {
+          "path": "services/ai-gen-proxy/app/src/llm_metric/domain/service/configure_default_models_service.py",
+          "line": 42,
+          "why": "Probes, refus et sauvegarde."
+        },
+        {
+          "path": "services/ai-gen-proxy/app/src/llm_metric/application/router/llm_router.py",
+          "line": 355,
+          "why": "Champs de métrique."
+        }
+      ]
+    },
+    {
+      "id": "mcp-server-corpus",
+      "title": "Outils MCP de recherche de corpus",
+      "purpose": "Offrir découverte et recherche documentaire autorisées aux agents sans dupliquer le backend RAG.",
+      "stack": "Python/FastMCP, aiohttp, Pydantic et OpenTelemetry.",
+      "source_dir": "services/mcp-server-corpus",
+      "read_scope": [
+        "Analyses existantes 11-ml-embeddings et 14-front-api reprises comme contexte ; vérifications ciblées des routes, outils et implémentations citées ci-dessous.",
+        "Instructions racine et AGENTS.md du composant lorsqu’il existe ; aucun binaire propriétaire inspecté.",
+        "Lecture statique ciblée pour finalisation ; les branches non exécutées et le déploiement restent non qualifiés."
+      ],
+      "capabilities": [
+        {
+          "id": "MCPC-01",
+          "title": "Découvrir les corpus accessibles dans le périmètre de l’agent",
+          "observed": "list_corpora_tool appelle l’API de corpus pour l’utilisateur courant, puis filtre selon les noms techniques imposés au contexte MCP. Le résultat contient UUID, nom, description, nombre de documents et total ; des erreurs structurées distinguent refus d’accès et défaillance.",
+          "actors": "Agents MCP et utilisateurs RAG.",
+          "api": "MCP list_corpora_tool.",
+          "state": "Résultat de découverte éphémère, sans catalogue local autoritaire.",
+          "dependencies": "API publique ai-gen-assistant et mandat de lecture.",
+          "target": "MCP Rust expose uniquement les corpus autorisés et épinglés ; Catalog/Embeddings restent les autorités.",
+          "migration": "Conserver schéma et noms des outils ; remplacer le backend par un adaptateur aux éditions publiées.",
+          "acceptance": "Un contexte limité à A ne voit ni nom ni total de B ; IAM indisponible ne devient pas une liste complète.",
+          "evidence": [
+            {
+              "path": "services/mcp-server-corpus/src/tool/corpus_searcher.py",
+              "line": 226,
+              "why": "Découverte et filtrage du périmètre."
+            }
+          ]
+        },
+        {
+          "id": "MCPC-02",
+          "title": "Chercher sémantiquement dans un ou plusieurs corpus",
+          "observed": "L’outil accepte une question et des noms techniques. Le scope de contexte remplace l’argument du modèle. Il résout les noms en UUID parmi les corpus accessibles, refuse les inconnus puis appelle search_corpora. Sans sélection, il cherche dans les corpus accessibles. Le résultat contient documents et métadonnées ; les champs de texte sont nettoyés des caractères invisibles et espaces exotiques.",
+          "actors": "Agents et utilisateurs qui interrogent leurs connaissances.",
+          "api": "MCP corpus_search_tool ; client POST /corpora/search.",
+          "state": "Documents retournés, total et erreur ; aucune écriture de vecteurs ici.",
+          "dependencies": "Backend de recherche assistant, droits IAM et données de corpus.",
+          "target": "MCP restitue citations, hashes et édition servie ; Embeddings vérifie les droits avant texte et avant envoi au LLM.",
+          "migration": "Préserver nettoyage et erreurs ; ajouter provenance d’édition et limites de résultats sans inventer un checkpoint dans MCP.",
+          "acceptance": "La question ne peut élargir le scope fixé ; une citation reste résoluble sur l’édition lue et disparaît de la restitution après révocation.",
+          "evidence": [
+            {
+              "path": "services/mcp-server-corpus/src/tool/corpus_searcher.py",
+              "line": 286,
+              "why": "Résolution de noms et recherche."
+            },
+            {
+              "path": "services/mcp-server-corpus/src/tool/corpus_searcher.py",
+              "line": 188,
+              "why": "Normalisation du texte."
+            }
+          ]
+        },
+        {
+          "id": "MCPC-03",
+          "title": "Propager une identité ou un mandat de lecture délégué",
+          "observed": "L’identité vient du Bearer entrant. Le client sait aussi porter DelegatedRead, appelle son autorisation et obtient des headers frais pour le backend interne. Les erreurs MCPReadAuthenticationError exposent code et possibilité de retry. La session HTTP partagée désactive la persistance des cookies pour éviter qu’un cookie reçu pour un utilisateur soit renvoyé pour un autre.",
+          "actors": "Orchestrateur d’assistant, IAM et utilisateurs.",
+          "api": "get_user_access_token ; DelegatedRead ; CorpusApiClient.",
+          "state": "Credential par requête, session HTTP mutualisée sans cookies utilisateur.",
+          "dependencies": "cleyrop_common.mcp_read, API interne et API publique.",
+          "target": "IAM/MCP Rust émet un mandat court lié au sujet, tenant, ressources et action de lecture ; jamais de credential générique d’écriture.",
+          "migration": "Qualifier expiration, renouvellement et révocation déléguée ; conserver la différence entre mandat et Bearer direct.",
+          "acceptance": "Deux utilisateurs partageant le pool HTTP ne partagent aucune session backend ; un mandat expiré est refusé avant lecture.",
+          "evidence": [
+            {
+              "path": "services/mcp-server-corpus/src/utils/user_token.py",
+              "line": 17,
+              "why": "Lecture du Bearer et délégation."
+            },
+            {
+              "path": "services/mcp-server-corpus/src/corpus_api/corpus_api_client.py",
+              "line": 56,
+              "why": "Session commune et cookies."
+            }
+          ]
+        },
+        {
+          "id": "MCPC-04",
+          "title": "Servir MCP HTTP avec progression, erreurs et traces",
+          "observed": "Le serveur monte les deux outils sur un transport HTTP streamable, fournit /health et instrumente les requêtes ASGI et les appels aiohttp pour propager les traces. Les outils émettent des informations et une progression. Le lifespan ferme la session HTTP ; aucun stockage local durable de recherche n’est montré.",
+          "actors": "Clients MCP et opérateurs.",
+          "api": "{CONTEXT_PATH}/mcp ; GET /health ; événements progress/info/error.",
+          "state": "Sessions et traces de transport.",
+          "dependencies": "FastMCP, aiohttp et OpenTelemetry.",
+          "target": "MCP Rust conserve schémas, annulation, progression et corrélation ; la santé distingue process et dépendances.",
+          "migration": "Tests de protocole MCP avec clients existants, erreurs backend et arrêt en cours d’appel.",
+          "acceptance": "Une annulation libère les connexions ; une erreur backend conserve un code stable et les logs n’exposent pas le credential.",
+          "evidence": [
+            {
+              "path": "services/mcp-server-corpus/src/server.py",
+              "line": 84,
+              "why": "Fermeture de session."
+            },
+            {
+              "path": "services/mcp-server-corpus/src/server.py",
+              "line": 128,
+              "why": "Transport et chemin MCP."
+            }
+          ]
+        }
+      ],
+      "entities": [
+        "CorpusListResult et CorpusSearchResult ; mandat de lecture et scope par requête."
+      ],
+      "dependencies": [
+        "ai-gen-assistant public/interne ; cleyrop_common.mcp_read ; IAM via délégation."
+      ],
+      "target_domains": [
+        "MCP",
+        "AI",
+        "Embeddings",
+        "IAM",
+        "Audit"
+      ],
+      "control_plane": [
+        "MCP Rust expose uniquement les corpus autorisés et épinglés ; Catalog/Embeddings restent les autorités.",
+        "MCP restitue citations, hashes et édition servie ; Embeddings vérifie les droits avant texte et avant envoi au LLM.",
+        "IAM/MCP Rust émet un mandat court lié au sujet, tenant, ressources et action de lecture ; jamais de credential générique d’écriture.",
+        "MCP Rust conserve schémas, annulation, progression et corrélation ; la santé distingue process et dépendances."
+      ],
+      "data_plane": [
+        "Recherche en lecture seule et restitution de documents bornée."
+      ],
+      "rust_core": [
+        "mcp-corpus, delegated-read et adaptateur Embeddings."
+      ],
+      "security": [
+        "Le scope serveur prime l’argument du modèle ; aucune autorité tirée du texte retrouvé.",
+        "Session HTTP sans cookies ; refus d’auth structurés."
+      ],
+      "operations": [
+        "Service stateless pour les données ; pool HTTP et traces ; tests non exécutés."
+      ],
+      "migration_steps": [
+        "Conserver schéma et noms des outils ; remplacer le backend par un adaptateur aux éditions publiées.",
+        "Préserver nettoyage et erreurs ; ajouter provenance d’édition et limites de résultats sans inventer un checkpoint dans MCP.",
+        "Qualifier expiration, renouvellement et révocation déléguée ; conserver la différence entre mandat et Bearer direct.",
+        "Tests de protocole MCP avec clients existants, erreurs backend et arrêt en cours d’appel."
+      ],
+      "open_questions": [
+        "Le backend doit ajouter une édition explicite ; le résultat actuel seul ne prouve pas un pin stable."
+      ],
+      "evidence": [
+        {
+          "path": "services/mcp-server-corpus/src/tool/corpus_searcher.py",
+          "line": 226,
+          "why": "Découverte et filtrage du périmètre."
+        },
+        {
+          "path": "services/mcp-server-corpus/src/tool/corpus_searcher.py",
+          "line": 286,
+          "why": "Résolution de noms et recherche."
+        },
+        {
+          "path": "services/mcp-server-corpus/src/utils/user_token.py",
+          "line": 17,
+          "why": "Lecture du Bearer et délégation."
+        },
+        {
+          "path": "services/mcp-server-corpus/src/server.py",
+          "line": 84,
+          "why": "Fermeture de session."
+        }
+      ]
+    },
+    {
+      "id": "mcp-server-dataset",
+      "title": "Outils MCP d’analyse des datasets",
+      "purpose": "Découvrir schémas et métadonnées puis répondre en SQL contrôlé à des questions en langage naturel.",
+      "stack": "Python/FastMCP, clients HTTP, SQLGlot et orchestration LLM ; dépendance actuelle data-serve/Trino.",
+      "source_dir": "services/mcp-server-dataset",
+      "read_scope": [
+        "Analyses existantes 11-ml-embeddings et 14-front-api reprises comme contexte ; vérifications ciblées des routes, outils et implémentations citées ci-dessous.",
+        "Instructions racine et AGENTS.md du composant lorsqu’il existe ; aucun binaire propriétaire inspecté.",
+        "Lecture statique ciblée pour finalisation ; les branches non exécutées et le déploiement restent non qualifiés."
+      ],
+      "capabilities": [
+        {
+          "id": "MCPD-01",
+          "title": "Découvrir les datasets et sélectionner les structures pertinentes",
+          "observed": "Les outils listent les datasets, recherchent leurs structures et proposent métadonnées et schéma pour un dataset précis. La découverte lit l’API data-serve paginée. Les noms ou identifiants sont résolus dans le scope autorisé ; absence de données, credential absent et refus backend ont des formes d’erreur distinctes.",
+          "actors": "Agents d’analyse et utilisateurs.",
+          "api": "list_datasets_tool ; dataset_structure_research_tool ; get_dataset_metadata_tool ; get_dataset_schema_tool.",
+          "state": "Catalogue temporaire de schémas, exemples et métadonnées.",
+          "dependencies": "Data-serve ; scopes MCP et identité.",
+          "target": "MCP/Catalog Rust sert découverte et schémas avec édition et droits de découverte explicites.",
+          "migration": "Adapter chaque endpoint metadata/structured et préserver la pagination ; introduire pins d’édition dans le résultat.",
+          "acceptance": "Un dataset hors scope n’apparaît ni dans le choix ni dans les suggestions ; toutes les pages utilisent la même édition.",
+          "evidence": [
+            {
+              "path": "services/mcp-server-dataset/src/tools/dataset_structure_researcher.py",
+              "line": 688,
+              "why": "Découverte des datasets."
+            },
+            {
+              "path": "services/mcp-server-dataset/src/tools/dataset_structure_researcher.py",
+              "line": 1050,
+              "why": "Outil de schéma ciblé."
+            }
+          ]
+        },
+        {
+          "id": "MCPD-02",
+          "title": "Transformer une question en SQL de lecture vérifié",
+          "observed": "database_research_tool récupère des schémas et exemples puis appelle un générateur SQL. La chaîne travaille actuellement en dialecte Trino/Cleyrop, vérifie que la requête est en lecture seule et détecte les colonnes absentes avant EXPLAIN et exécution. Le SQL généré est donc une proposition soumise à plusieurs contrôles et non une autorité sur les droits.",
+          "actors": "Analystes et agents conversationnels.",
+          "api": "MCP database_research_tool ; data-serve /datasets/sql/query ; EXPLAIN.",
+          "state": "Question, schémas récupérés, SQL et résultat structuré.",
+          "dependencies": "LLM, SQLGlot/dialecte Cleyrop, Trino via data-serve.",
+          "target": "MCP/Query Rust remplace Trino ; le générateur reçoit le catalogue de capacités réel du moteur sans JVM et des entrées épinglées.",
+          "migration": "Établir un corpus NL/SQL et requalifier fonctions, types, agrégats et erreurs ; aucune parité Trino implicite.",
+          "acceptance": "Une requête d’écriture ou colonne hors schéma est refusée avant exécution ; une lecture rejoint exactement les éditions déclarées.",
+          "evidence": [
+            {
+              "path": "services/mcp-server-dataset/src/tools/database_researcher.py",
+              "line": 509,
+              "why": "Chaîne génération, contrôle de schéma et exécution."
+            },
+            {
+              "path": "services/mcp-server-dataset/src/tools/database_researcher.py",
+              "line": 1479,
+              "why": "Contrôle de lecture seule."
+            }
+          ]
+        },
+        {
+          "id": "MCPD-03",
+          "title": "Réparer les erreurs SQL avec un budget et une mémoire de session",
+          "observed": "Une erreur transitoire rejoue le même SQL sans nouveau LLM ; une erreur déterministe peut provoquer une régénération. Les essais rejetés sont transmis au générateur et conservés en mémoire de session liée au caller et à la conversation. La répétition sans progrès arrête la boucle. Un budget partagé borne les réparations de parsing et les nouvelles générations ; les échecs connus reviennent sous forme structurée.",
+          "actors": "Agents autonomes et opérateurs de coûts.",
+          "api": "_validate_and_execute_sql ; _run_with_transient_replay ; session_memory.",
+          "state": "Journal d’essais, classe d’erreur et mémoire de session ; pas de checkpoint de données.",
+          "dependencies": "Backend SQL, générateur LLM et configuration de budgets.",
+          "target": "MCP Rust garde un budget global temps/tokens/exécutions et une mémoire isolée par mandat ; Audit corrèle les tentatives.",
+          "migration": "Rejouer erreurs temporaires, syntaxiques et répétitives ; mesurer appels au LLM et arrêter les boucles improductives.",
+          "acceptance": "Une panne réseau ne déclenche pas une régénération ; deux échecs identiques arrêtent selon la règle ; une autre identité ne reçoit pas les essais de la session.",
+          "evidence": [
+            {
+              "path": "services/mcp-server-dataset/src/tools/database_researcher.py",
+              "line": 388,
+              "why": "Replay transitoire."
+            },
+            {
+              "path": "services/mcp-server-dataset/src/tools/database_researcher.py",
+              "line": 509,
+              "why": "Budgets partagés et mémoire des essais."
+            }
+          ]
+        },
+        {
+          "id": "MCPD-04",
+          "title": "Restituer les résultats SQL et expliquer les réponses vides",
+          "observed": "Les résultats ont une représentation structurée, Markdown et CSV, avec erreurs typées et rendu de null. Le chemin de recherche peut signaler un résultat vide, effectuer un comptage et rechercher des correspondances proches. Les endpoints de schéma et métadonnées ont une gestion d’erreur commune ; un échec partiel ne doit pas être pris pour un dataset absent.",
+          "actors": "Agents et interfaces de résultats.",
+          "api": "SqlQueryResult.to_markdown/to_csv ; _signal_empty_result ; get_dataset_structure/get_dataset_metadata.",
+          "state": "Lignes, colonnes, détails d’erreur, tentatives et suggestions.",
+          "dependencies": "Data-serve et outils de rapprochement textuel.",
+          "target": "Query/MCP Rust fournit réponses paginées et exports avec même pin d’édition ; EXPORT est un effet avec reçu quand conservé.",
+          "migration": "Comparer CSV, nulls, résultats vides et limites ; qualifier les probes de suggestions sans exposer de données hors droit.",
+          "acceptance": "Un agrégat nul n’est pas confondu avec zéro ligne ; pagination et export gardent les mêmes données et autorisations.",
+          "evidence": [
+            {
+              "path": "services/mcp-server-dataset/src/dataserve/data_server.py",
+              "line": 263,
+              "why": "Contrat de résultat et rendus."
+            },
+            {
+              "path": "services/mcp-server-dataset/src/tools/database_researcher.py",
+              "line": 823,
+              "why": "Signalement des réponses vides."
+            }
+          ]
+        },
+        {
+          "id": "MCPD-05",
+          "title": "Isoler le credential et le périmètre de lecture de chaque appel",
+          "observed": "Le credential entrant accepte le Bearer, sans fallback vers les anciens headers API-token. Une délégation exige fresh_headers et utilise un backend interne plutôt que le parcours public normal. Les outils vérifient le scope des datasets ; le serveur monte les outils de recherche SQL et de structure sur MCP HTTP et propage les traces.",
+          "actors": "Orchestrateur, IAM et clients MCP.",
+          "api": "UserCredential ; get_user_credential ; FastMCP server.",
+          "state": "Mandat/credential par requête ; contextes de transport et scope.",
+          "dependencies": "cleyrop_common.mcp_read, IAM et data-serve interne.",
+          "target": "MCP/IAM Rust limite chaque mandat à lecture des éditions nommées ; le moteur SQL n’obtient aucun droit générique table.modify.",
+          "migration": "Migrer Bearer et délégation avec tests croisés d’identité, expiration et scopes.",
+          "acceptance": "Un ancien header seul ne donne aucun droit ; une délégation révoquée bloque metadata, EXPLAIN et exécution.",
+          "evidence": [
+            {
+              "path": "services/mcp-server-dataset/src/utils/user_token.py",
+              "line": 28,
+              "why": "Headers frais et endpoint délégué."
+            },
+            {
+              "path": "services/mcp-server-dataset/src/utils/user_token.py",
+              "line": 58,
+              "why": "Bearers admis et absence de fallback."
+            }
+          ]
+        }
+      ],
+      "entities": [
+        "Schémas, métadonnées, questions, SQL, résultats et historiques d’essais."
+      ],
+      "dependencies": [
+        "Data-serve, modèle de génération, IAM et délégation MCP."
+      ],
+      "target_domains": [
+        "MCP",
+        "Query",
+        "Catalog",
+        "IAM",
+        "AI",
+        "Audit"
+      ],
+      "control_plane": [
+        "MCP/Catalog Rust sert découverte et schémas avec édition et droits de découverte explicites.",
+        "MCP/Query Rust remplace Trino ; le générateur reçoit le catalogue de capacités réel du moteur sans JVM et des entrées épinglées.",
+        "MCP Rust garde un budget global temps/tokens/exécutions et une mémoire isolée par mandat ; Audit corrèle les tentatives.",
+        "Query/MCP Rust fournit réponses paginées et exports avec même pin d’édition ; EXPORT est un effet avec reçu quand conservé.",
+        "MCP/IAM Rust limite chaque mandat à lecture des éditions nommées ; le moteur SQL n’obtient aucun droit générique table.modify."
+      ],
+      "data_plane": [
+        "Découverte et requêtes de lecture bornées ; exécution dans Query autorisé."
+      ],
+      "rust_core": [
+        "mcp-dataset, sql-planner-guard, attempt-budget et result-rendering."
+      ],
+      "security": [
+        "SQL de lecture et preflight de schéma ; contrôle serveur d’accès toujours nécessaire.",
+        "Credentials sans repr et scope fixé indépendamment des suggestions du LLM."
+      ],
+      "operations": [
+        "Budgets de génération/exécution et erreurs structurées ; mémoire locale de session non assimilée à journal durable.",
+        "Tests de dialecte, erreurs et délégation présents, non exécutés."
+      ],
+      "migration_steps": [
+        "Adapter chaque endpoint metadata/structured et préserver la pagination ; introduire pins d’édition dans le résultat.",
+        "Établir un corpus NL/SQL et requalifier fonctions, types, agrégats et erreurs ; aucune parité Trino implicite.",
+        "Rejouer erreurs temporaires, syntaxiques et répétitives ; mesurer appels au LLM et arrêter les boucles improductives.",
+        "Comparer CSV, nulls, résultats vides et limites ; qualifier les probes de suggestions sans exposer de données hors droit.",
+        "Migrer Bearer et délégation avec tests croisés d’identité, expiration et scopes."
+      ],
+      "open_questions": [
+        "Le dialecte et les fonctions Trino doivent être requalifiés sur le moteur sans JVM.",
+        "Le contrat actuel n’établit pas un pin d’édition Iceberg ni une reprise de résultat après panne de serveur."
+      ],
+      "evidence": [
+        {
+          "path": "services/mcp-server-dataset/src/tools/dataset_structure_researcher.py",
+          "line": 688,
+          "why": "Découverte des datasets."
+        },
+        {
+          "path": "services/mcp-server-dataset/src/tools/database_researcher.py",
+          "line": 509,
+          "why": "Chaîne génération, contrôle de schéma et exécution."
+        },
+        {
+          "path": "services/mcp-server-dataset/src/tools/database_researcher.py",
+          "line": 388,
+          "why": "Replay transitoire."
+        },
+        {
+          "path": "services/mcp-server-dataset/src/dataserve/data_server.py",
+          "line": 263,
+          "why": "Contrat de résultat et rendus."
+        },
+        {
+          "path": "services/mcp-server-dataset/src/utils/user_token.py",
+          "line": 28,
+          "why": "Headers frais et endpoint délégué."
+        }
+      ]
+    },
+    {
+      "id": "mcp-server-internet",
+      "title": "Outils MCP de recherche internet",
+      "purpose": "Chercher puis extraire des sources web pour les agents, avec protections de destination et garde de consommation.",
+      "stack": "Python/FastMCP, aiohttp, providers SearXNG/Staan et parsing de pages.",
+      "source_dir": "services/mcp-server-internet",
+      "read_scope": [
+        "Analyses existantes 11-ml-embeddings et 14-front-api reprises comme contexte ; vérifications ciblées des routes, outils et implémentations citées ci-dessous.",
+        "Instructions racine et AGENTS.md du composant lorsqu’il existe ; aucun binaire propriétaire inspecté.",
+        "Lecture statique ciblée pour finalisation ; les branches non exécutées et le déploiement restent non qualifiés."
+      ],
+      "capabilities": [
+        {
+          "id": "MCPI-01",
+          "title": "Rechercher sur le web avec un fournisseur configurable",
+          "observed": "L’outil web_researcher_and_scraper reçoit question, nombre de résultats, sites suggérés, catégories, période et langue. Une factory choisit SearXNG ou Staan selon configuration. Le résultat conserve URL, titre, description, contenu, rang, score et erreur. La description de l’outil annonce une borne de dix résultats ; sa compatibilité exacte reste à tester.",
+          "actors": "Agents ayant un mandat de recherche externe.",
+          "api": "MCP web_researcher_and_scraper.",
+          "state": "SearchRequest/SearchResult et résultat agrégé éphémère.",
+          "dependencies": "SearXNG ou Staan, configuration et réseau.",
+          "target": "MCP/Egress Rust autorise les fournisseurs, borne budget et sources et conserve des références citables.",
+          "migration": "Comparer les paramètres supportés par chaque fournisseur ; annoncer les écarts au lieu d’une recherche uniforme supposée.",
+          "acceptance": "Même requête conserve ses paramètres et limites ; un fournisseur indisponible retourne une erreur explicite sans inventer des sources.",
+          "evidence": [
+            {
+              "path": "services/mcp-server-internet/src/tools/web_researcher.py",
+              "line": 76,
+              "why": "Paramètres et résultat."
+            },
+            {
+              "path": "services/mcp-server-internet/src/search/search_provider_factory.py",
+              "line": 54,
+              "why": "Sélection de fournisseur."
+            }
+          ]
+        },
+        {
+          "id": "MCPI-02",
+          "title": "Extraire les pages et conserver les succès partiels",
+          "observed": "Le pipeline réutilise le texte fourni par le moteur quand il existe ; il scrape seulement les résultats qui en ont besoin, et certains restent à leur snippet. Les extractions sont rassemblées avec leurs erreurs individuelles pour conserver les succès partiels. Le scraper applique robots.txt à chaque redirection et extrait un texte nettoyé. Les sources retournées et modes d’extraction sont journalisés.",
+          "actors": "Agents de recherche et opérateurs.",
+          "api": "web_scraper ; WebResearcherResult ; SearchResult.needs_scraping.",
+          "state": "Contenu, statut, erreur et durée par page.",
+          "dependencies": "HTTP externe, parsing HTML et règles robots.",
+          "target": "Egress/MCP Rust fournit extraction bornée et provenance URL/horodatage/hash ; le contenu externe reste non fiable pour les actions de l’agent.",
+          "migration": "Rejouer pages sans texte, redirections et extraction partielle ; préserver distinction snippet/contenu complet.",
+          "acceptance": "Une page bloquée ne fait pas perdre les autres résultats ; la réponse indique les limites de chaque source.",
+          "evidence": [
+            {
+              "path": "services/mcp-server-internet/src/tools/web_researcher.py",
+              "line": 141,
+              "why": "Assemblage des pages avec erreurs."
+            },
+            {
+              "path": "services/mcp-server-internet/src/scraper/web_scraper.py",
+              "line": 108,
+              "why": "Extraction et robots."
+            }
+          ]
+        },
+        {
+          "id": "MCPI-03",
+          "title": "Empêcher les téléchargements vers des adresses non publiques",
+          "observed": "Le guard valide les URL et adresses IP. Un résolveur DNS contrôle les adresses obtenues et remet ces adresses au connecteur, limitant la fenêtre de re-résolution. Les redirections sont suivies manuellement, revalidées à chaque étape et limitées à cinq. Les IP littérales, destinations privées et cas multicast ont des règles explicites. Cette lecture établit des protections présentes, pas une preuve de résistance à tous les scénarios réseau.",
+          "actors": "Opérateurs de sécurité et utilisateurs de recherche externe.",
+          "api": "PublicAddressResolver ; ensure_public_url ; open_public_url.",
+          "state": "Décision de destination par connexion et compteur de redirections.",
+          "dependencies": "aiohttp, DNS, TLS et guard partagé.",
+          "target": "Egress Rust centralise la même politique avec quotas octets/temps et contrôle des proxys ; les outils n’obtiennent aucun accès au réseau interne.",
+          "migration": "Porter le corpus SSRF/DNS/redirection existant et qualifier dans le réseau cible.",
+          "acceptance": "Une redirection publique vers une adresse privée ou un résultat DNS mixte est refusé avant téléchargement ; cinq sauts respectent la borne.",
+          "evidence": [
+            {
+              "path": "services/mcp-server-internet/src/utils/address_guard.py",
+              "line": 104,
+              "why": "Contrôle des adresses DNS utilisées."
+            },
+            {
+              "path": "services/mcp-server-internet/src/utils/address_guard.py",
+              "line": 149,
+              "why": "Validation de chaque redirection."
+            }
+          ]
+        },
+        {
+          "id": "MCPI-04",
+          "title": "Borner les recherches payantes et exposer leur état",
+          "observed": "Le quota de recherche est un token bucket en mémoire par pod, avec débit horaire, capacité de burst et horloge monotone. Une exhaustion renvoie un délai de retry. Le code précise que plusieurs replicas multiplient le plafond et qu’un redémarrage réinitialise les compteurs ; ce n’est pas un budget mensuel durable. Le serveur expose /health et instrumentation de traces.",
+          "actors": "Opérateurs et responsables de consommation.",
+          "api": "SearchQuotaGuard ; InMemorySearchQuotaGuard.try_consume ; GET /health.",
+          "state": "Compteurs locaux et décision allow/deny avec retry_after.",
+          "dependencies": "Factory de fournisseur, horloge et OpenTelemetry.",
+          "target": "AI/Egress Rust ajoute une réservation de budget tenant persistante si un plafond global est requis ; garde local conservé pour les bursts.",
+          "migration": "Fixer politique de coût et cardinalité tenant ; comparer quotas à un et plusieurs replicas avant migration.",
+          "acceptance": "Une boucle d’agent est freinée ; un redémarrage n’efface pas le budget global cible et ne divulgue aucun secret de fournisseur.",
+          "evidence": [
+            {
+              "path": "services/mcp-server-internet/src/search/in_memory_search_quota_guard.py",
+              "line": 25,
+              "why": "Token bucket et limites par pod."
+            },
+            {
+              "path": "services/mcp-server-internet/src/server.py",
+              "line": 46,
+              "why": "Santé du serveur."
+            }
+          ]
+        }
+      ],
+      "entities": [
+        "Requête web, résultat de moteur, page extraite et décision de quota."
+      ],
+      "dependencies": [
+        "Fournisseurs externes, DNS/HTTP/TLS et configuration de quota."
+      ],
+      "target_domains": [
+        "MCP",
+        "Egress",
+        "AI",
+        "Audit"
+      ],
+      "control_plane": [
+        "MCP/Egress Rust autorise les fournisseurs, borne budget et sources et conserve des références citables.",
+        "Egress/MCP Rust fournit extraction bornée et provenance URL/horodatage/hash ; le contenu externe reste non fiable pour les actions de l’agent.",
+        "Egress Rust centralise la même politique avec quotas octets/temps et contrôle des proxys ; les outils n’obtiennent aucun accès au réseau interne.",
+        "AI/Egress Rust ajoute une réservation de budget tenant persistante si un plafond global est requis ; garde local conservé pour les bursts."
+      ],
+      "data_plane": [
+        "Recherche et extraction HTTP bornées, sans publication de dataset implicite."
+      ],
+      "rust_core": [
+        "mcp-web-research, provider-adapters, public-address-guard et quota-ledger."
+      ],
+      "security": [
+        "Adresses publiques, guard DNS et redirections explicites ; tests non exécutés.",
+        "Contenu des pages non fiable ; accès externe accordé par mandat et données de prompt minimisées."
+      ],
+      "operations": [
+        "Quota local par pod, réinitialisé au redémarrage ; traces et health."
+      ],
+      "migration_steps": [
+        "Comparer les paramètres supportés par chaque fournisseur ; annoncer les écarts au lieu d’une recherche uniforme supposée.",
+        "Rejouer pages sans texte, redirections et extraction partielle ; préserver distinction snippet/contenu complet.",
+        "Porter le corpus SSRF/DNS/redirection existant et qualifier dans le réseau cible.",
+        "Fixer politique de coût et cardinalité tenant ; comparer quotas à un et plusieurs replicas avant migration."
+      ],
+      "open_questions": [
+        "Authentification et autorisation d’exposition à confirmer au niveau gateway/deployment ; aucune garantie déduite du seul serveur MCP.",
+        "Les plafonds octets, durées et catégories exactes doivent être qualifiés par fournisseur."
+      ],
+      "evidence": [
+        {
+          "path": "services/mcp-server-internet/src/tools/web_researcher.py",
+          "line": 76,
+          "why": "Paramètres et résultat."
+        },
+        {
+          "path": "services/mcp-server-internet/src/tools/web_researcher.py",
+          "line": 141,
+          "why": "Assemblage des pages avec erreurs."
+        },
+        {
+          "path": "services/mcp-server-internet/src/utils/address_guard.py",
+          "line": 104,
+          "why": "Contrôle des adresses DNS utilisées."
+        },
+        {
+          "path": "services/mcp-server-internet/src/search/in_memory_search_quota_guard.py",
+          "line": 25,
+          "why": "Token bucket et limites par pod."
+        }
+      ]
+    },
+    {
+      "id": "datasphere-cleyrop",
+      "title": "Labels Datasphere, clearance et exports chiffrés",
+      "purpose": "Générer les labels, interroger un PDP de clearance et exporter les tables sous forme de fichiers chiffrés.",
+      "stack": "Python/FastAPI, SQLModel/Alembic, binaire .NET Linux x86-64 propriétaire, Spark/JVM et S3.",
+      "source_dir": "services/datasphere-cleyrop",
+      "read_scope": [
+        "Analyses existantes 11-ml-embeddings et 14-front-api reprises comme contexte ; vérifications ciblées des routes, outils et implémentations citées ci-dessous.",
+        "Instructions racine et AGENTS.md du composant lorsqu’il existe ; aucun binaire propriétaire inspecté.",
+        "Lecture statique ciblée pour finalisation ; les branches non exécutées et le déploiement restent non qualifiés."
+      ],
+      "capabilities": [
+        {
+          "id": "DSPC-01",
+          "title": "Construire et conserver un label de sensibilité",
+          "observed": "PUT /labels reçoit UUID dataset, policy, classification et category, retourne 202 et lance une BackgroundTask. Le handler appelle le binaire Datasphere pour générer un JSON, encode ce JSON en base64 puis upsert le label en base. Une erreur de tâche est journalisée ; le 202 ne constitue pas une preuve de génération terminée. Le binaire propriétaire n’a pas été inspecté.",
+          "actors": "Gestionnaires de labels et service data-model.",
+          "api": "PUT /labels ; BuildLabelCommandHandler ; DataspheresLabelServiceImpl.build_label.",
+          "state": "Label avec paramètres, JSON, base64 et dates PostgreSQL.",
+          "dependencies": "Binaire Datasphere .NET Linux x86-64, configuration/SPIF et base.",
+          "target": "IAM/Audit Rust contrôle la politique et un job durable génère un label versionné lié à une édition ; adaptateur propriétaire à remplacer ou qualifier explicitement.",
+          "migration": "Importer labels et politiques, comparer byte/hash et décisions ; remplacer BackgroundTask par travail reprenable avec statut.",
+          "acceptance": "Un 202 fournit un job consultable ; redémarrer après acceptation ne perd pas la génération ; paramètres identiques conservent le résultat attendu.",
+          "evidence": [
+            {
+              "path": "services/datasphere-cleyrop/app/src/datasphere/application/router/label_router.py",
+              "line": 43,
+              "why": "202 et tâche de fond."
+            },
+            {
+              "path": "services/datasphere-cleyrop/app/src/datasphere/domain/handler/build_label_command_handler.py",
+              "line": 27,
+              "why": "Création et upsert."
+            },
+            {
+              "path": "services/datasphere-cleyrop/app/src/datasphere/infra/service/label/datasphere_label_service_impl.py",
+              "line": 31,
+              "why": "Appel binaire et formats."
+            }
+          ]
+        },
+        {
+          "id": "DSPC-02",
+          "title": "Relire le label et demander les décisions de clearance",
+          "observed": "GET /labels trouve le label par UUID. POST /access/check reçoit des ressources et leurs sujets, valide les UUID, charge tous les labels et refuse les labels absents. Il construit pour chacun un metadata_binding base64 puis appelle le PDP /decide/by-id. L’adaptateur vérifie que la réponse est une liste de même cardinalité et la traduit en décisions par sujet ; réseau, TLS et retries sont configurables.",
+          "actors": "IAM, services consommateurs et utilisateurs soumis aux clearances.",
+          "api": "GET /labels?id=... ; POST /access/check.",
+          "state": "Labels stockés et décisions retournées, sans pouvoir de publication.",
+          "dependencies": "Clearance PDP HTTP/TLS et repository de labels.",
+          "target": "IAM Rust compose droits ordinaires et classification ; décisions versionnées avec politique, label et sujet, refus si indisponible selon contrat.",
+          "migration": "Rejouer matrice politique/classification/sujets ; comparer réponses et erreurs avant changement de PDP ou binaire.",
+          "acceptance": "UUID invalide et label absent ne donnent aucun ALLOW ; une réponse partielle du PDP est refusée, avec traçabilité de la version de politique.",
+          "evidence": [
+            {
+              "path": "services/datasphere-cleyrop/app/src/datasphere/domain/handler/check_access_command_handler.py",
+              "line": 32,
+              "why": "Construction des requêtes et validations."
+            },
+            {
+              "path": "services/datasphere-cleyrop/app/src/datasphere/infra/service/clearance/clearance_service_impl.py",
+              "line": 151,
+              "why": "Appel PDP et validation de réponse."
+            }
+          ]
+        },
+        {
+          "id": "DSPC-03",
+          "title": "Extraire une table et produire un export chiffré ZTDF",
+          "observed": "POST /labels/encrypt charge le label et télécharge la table par son tech_name via Spark. Le service écrit un seul fichier Parquet local en coalesçant, puis refuse un fichier vide ou supérieur à 2 Gio et le nettoie. Le binaire marque le fichier puis le chiffre en .ztdf ; le fichier est téléversé sur S3 et le répertoire temporaire nettoyé. Le code lit la table par nom sans pin d’édition explicite dans ce chemin.",
+          "actors": "Utilisateurs autorisés à exporter et opérateurs de données classifiées.",
+          "api": "POST /labels/encrypt ; SparkFileServiceImpl.download_file ; LabelService.encrypt.",
+          "state": "Parquet temporaire, label, artefact .ztdf et objet S3.",
+          "dependencies": "Spark/JVM, Iceberg accessible au catalogue Spark, S3 et binaire Datasphere.",
+          "target": "Query/Files Rust extrait une édition approuvée épinglée ; EXPORT reste un effet à reçu avec hash, politique et destinataire. Remplacer Spark et ses outils JVM.",
+          "migration": "Qualifier lecteur Arrow/Parquet sans JVM et compatibilité ZTDF ; borner les flux avant matérialisation et conserver preuves de label/édition.",
+          "acceptance": "Exporter une édition donnée malgré une publication concurrente ; rejouer retrouve le même reçu ; aucun artefact privé n’est exposé avant contrôle de sortie.",
+          "evidence": [
+            {
+              "path": "services/datasphere-cleyrop/app/src/datasphere/domain/handler/encrypt_command_handler.py",
+              "line": 90,
+              "why": "Limite de taille et mise en queue."
+            },
+            {
+              "path": "services/datasphere-cleyrop/app/src/datasphere/infra/service/file/spark_file_service_impl.py",
+              "line": 250,
+              "why": "Extraction Spark en un fichier."
+            },
+            {
+              "path": "services/datasphere-cleyrop/app/src/datasphere/infra/service/label/datasphere_label_service_impl.py",
+              "line": 63,
+              "why": "Marquage puis chiffrement."
+            }
+          ]
+        },
+        {
+          "id": "DSPC-04",
+          "title": "Ordonner les travaux de chiffrement et surveiller les dépendances",
+          "observed": "EncryptQueue est une asyncio.Queue en mémoire avec un worker démarré dans le lifespan. Le worker traite les jobs, journalise les exceptions puis marque la tâche terminée. Les instructions indiquent que les singletons Spark et queue sont créés au démarrage ; une panne d’initialisation Spark est seulement loggée et laisse l’encryption indisponible. Alembic est exécuté au démarrage ou via le mode migrate. Le 202 ne donne pas de reçu de livraison durable dans les routes lues.",
+          "actors": "SRE et opérateurs d’export.",
+          "api": "EncryptQueue.start/stop/enqueue/_worker ; lifespan et mode migrate.",
+          "state": "File de jobs locale au processus et fichiers temporaires.",
+          "dependencies": "PostgreSQL, Spark, binaire et S3.",
+          "target": "Flows/Files Rust possède une queue durable, leases, limites de stockage et reçus d’effets ; health reflète chaque dépendance requise.",
+          "migration": "Drainer les travaux connus, passer à une file persistée et tester reprises/cleanup avant retrait du runtime Spark.",
+          "acceptance": "Arrêt après extraction puis reprise n’abandonne pas de fichier sensible ; un Spark absent ou son remplaçant indisponible empêche une readiness d’export trompeuse.",
+          "evidence": [
+            {
+              "path": "services/datasphere-cleyrop/app/src/datasphere/domain/handler/encrypt_command_handler.py",
+              "line": 31,
+              "why": "Queue mémoire, worker et erreurs."
+            },
+            {
+              "path": "services/datasphere-cleyrop/AGENTS.md",
+              "line": 59,
+              "why": "Comportement de démarrage et dépendances."
+            }
+          ]
+        }
+      ],
+      "entities": [
+        "Label policy/classification/category, représentation JSON/base64 ; requête de clearance ; EncryptJob et fichier chiffré."
+      ],
+      "dependencies": [
+        "Binaire Datasphere non inspecté ; PDP clearance ; PostgreSQL ; Spark/Iceberg ; S3."
+      ],
+      "target_domains": [
+        "IAM",
+        "Audit",
+        "Files",
+        "Query",
+        "Egress",
+        "Flows"
+      ],
+      "control_plane": [
+        "IAM/Audit Rust contrôle la politique et un job durable génère un label versionné lié à une édition ; adaptateur propriétaire à remplacer ou qualifier explicitement.",
+        "IAM Rust compose droits ordinaires et classification ; décisions versionnées avec politique, label et sujet, refus si indisponible selon contrat.",
+        "Query/Files Rust extrait une édition approuvée épinglée ; EXPORT reste un effet à reçu avec hash, politique et destinataire. Remplacer Spark et ses outils JVM.",
+        "Flows/Files Rust possède une queue durable, leases, limites de stockage et reçus d’effets ; health reflète chaque dépendance requise."
+      ],
+      "data_plane": [
+        "Lecture d’une édition autorisée puis production d’un export chiffré borné, avec reçu PostgreSQL ; aucune écriture directe Iceberg."
+      ],
+      "rust_core": [
+        "label-registry, clearance-adapter, classified-export et durable-export-jobs."
+      ],
+      "security": [
+        "Le label est un input de décision, pas une autorisation autonome d’export.",
+        "La protection route/gateway et le mandat sur tech_name doivent être vérifiés de bout en bout ; non prouvés par les handlers seuls."
+      ],
+      "operations": [
+        "Binaire testé seulement sur Linux ; tests d’intégration PDP exclus par défaut selon AGENTS, aucun lancé.",
+        "File mémoire et BackgroundTasks ; migrations hors enforcement Alembic racine."
+      ],
+      "migration_steps": [
+        "Importer labels et politiques, comparer byte/hash et décisions ; remplacer BackgroundTask par travail reprenable avec statut.",
+        "Rejouer matrice politique/classification/sujets ; comparer réponses et erreurs avant changement de PDP ou binaire.",
+        "Qualifier lecteur Arrow/Parquet sans JVM et compatibilité ZTDF ; borner les flux avant matérialisation et conserver preuves de label/édition.",
+        "Drainer les travaux connus, passer à une file persistée et tester reprises/cleanup avant retrait du runtime Spark."
+      ],
+      "open_questions": [
+        "Le contrat propriétaire ZTDF et le remplacement du runtime .NET doivent être décidés ; encapsulation temporaire non assimilée à core Rust.",
+        "Le lien entre UUID label et tech_name de table doit être vérifié au contrôle d’entrée.",
+        "Distinguer succès d’acceptation, de chiffrement, d’upload et remise au destinataire."
+      ],
+      "evidence": [
+        {
+          "path": "services/datasphere-cleyrop/app/src/datasphere/application/router/label_router.py",
+          "line": 43,
+          "why": "202 et tâche de fond."
+        },
+        {
+          "path": "services/datasphere-cleyrop/app/src/datasphere/domain/handler/check_access_command_handler.py",
+          "line": 32,
+          "why": "Construction des requêtes et validations."
+        },
+        {
+          "path": "services/datasphere-cleyrop/app/src/datasphere/domain/handler/encrypt_command_handler.py",
+          "line": 90,
+          "why": "Limite de taille et mise en queue."
+        },
+        {
+          "path": "services/datasphere-cleyrop/app/src/datasphere/domain/handler/encrypt_command_handler.py",
+          "line": 31,
+          "why": "Queue mémoire, worker et erreurs."
+        }
+      ]
+    },
+    {
+      "id": "datasphere-front",
+      "title": "Interface de composition des labels SPIF",
+      "purpose": "Éditer et prévisualiser les classifications et catégories de sécurité associées à un dataset.",
+      "stack": "TypeScript/React/Vite, Chakra UI, Axios, XML DOMParser et keycloak-js.",
+      "source_dir": "services/datasphere-front",
+      "read_scope": [
+        "Analyses existantes 11-ml-embeddings et 14-front-api reprises comme contexte ; vérifications ciblées des routes, outils et implémentations citées ci-dessous.",
+        "Instructions racine et AGENTS.md du composant lorsqu’il existe ; aucun binaire propriétaire inspecté.",
+        "Lecture statique ciblée pour finalisation ; les branches non exécutées et le déploiement restent non qualifiés."
+      ],
+      "capabilities": [
+        {
+          "id": "DSPF-01",
+          "title": "Charger la configuration SPIF et le dataset à labelliser",
+          "observed": "L’application extrait un UUID de dataset de l’URL /datasets/{id}, charge son nom et les politiques. Le chargement de configuration passe par un proxy de data-model /spif-proxy/files ; il parse un XML de configuration pour récupérer les URLs SPIF puis charge et parse chaque politique. Les erreurs de chargement empêchent l’affichage du formulaire.",
+          "actors": "Gestionnaires de labels.",
+          "api": "Route navigateur /datasets/{id} ; fetchConfig ; data-model /spif-proxy/files et /datasets/{id}.",
+          "state": "Dataset et politiques chargés dans l’état React.",
+          "dependencies": "Data-model, proxy de fichiers XML et parseur SPIF.",
+          "target": "Frontends TypeScript conserve ce parcours ; IAM/Catalog fournit une politique versionnée et une édition dataset explicite.",
+          "migration": "Préserver formats XML et erreurs, migrer URLs backend et inclure version de politique dans la sauvegarde.",
+          "acceptance": "Une politique XML invalide donne une erreur visible ; le nom du dataset et la politique proviennent du contexte autorisé.",
+          "evidence": [
+            {
+              "path": "services/datasphere-front/app/src/App.tsx",
+              "line": 9,
+              "why": "Contexte dataset et chargement."
+            },
+            {
+              "path": "services/datasphere-front/app/src/lib/fetch-config.ts",
+              "line": 29,
+              "why": "Chargement XML via proxy."
+            }
+          ]
+        },
+        {
+          "id": "DSPF-02",
+          "title": "Composer une classification, catégories et marques de confidentialité",
+          "observed": "Le formulaire choisit une politique et réinitialise les sélections au changement. Il restaure la policy enregistrée du dataset en retrouvant classification et catégories visibles. Les sélecteurs traitent classification, contexte, ensembles de catégories, texte libre, releasability et privacy marks. Les catégories cachées ou obsolètes influent sur les options affichées.",
+          "actors": "Auteurs de labels SPIF.",
+          "api": "SpifSelector ; ClassificationSelector ; ContextSelector ; CategorySelector ; ReleasabilitySelector ; PrivacyMarkSelector.",
+          "state": "LabelSelections : classificationLacv, categorySelections, freeTextSelections et privacyMarkSelections.",
+          "dependencies": "Modèle SPIF et policy actuelle du dataset.",
+          "target": "Frontend TS conserve la composition ; la décision serveur se fonde sur la même version de politique et des identifiants stables.",
+          "migration": "Créer fixtures de politiques réelles anonymisées et comparer restauration des labels et changements de politique.",
+          "acceptance": "Une sélection enregistrée est restituée à l’identique ; un changement de politique retire les sélections incompatibles sans sauvegarde implicite.",
+          "evidence": [
+            {
+              "path": "services/datasphere-front/app/src/components/SpifSelector.tsx",
+              "line": 33,
+              "why": "Restauration depuis le label courant."
+            },
+            {
+              "path": "services/datasphere-front/app/src/components/SpifSelector.tsx",
+              "line": 88,
+              "why": "Réinitialisation et sélecteurs."
+            }
+          ]
+        },
+        {
+          "id": "DSPF-03",
+          "title": "Appliquer les règles SPIF et prévisualiser le label",
+          "observed": "spif-rules calcule exclusions, classifications admises, catégories requises et sélections effectives ; il détecte les conflits de contexte puis valide l’ensemble. Le formulaire calcule les issues et ne génère le label que sans erreur. Le preview affiche notamment les privacy marks et sérialise les groupes de catégories dans la syntaxe attendue par le backend. Cette validation navigateur n’est pas une autorisation serveur.",
+          "actors": "Auteurs de labels et opérateurs de politiques.",
+          "api": "buildEffectiveSelections ; validateSelections ; generateLabel ; LabelPreview.",
+          "state": "Sélections calculées, issues error/warning et LabelOutput.",
+          "dependencies": "Parseur SPIF, règles locales et backend de label.",
+          "target": "Frontends partage un contrat de validation versionné avec IAM ; le serveur Rust revalide chaque commande et trace le résultat.",
+          "migration": "Comparer règles client et serveur sur incompatibilités, catégories implicites et cardinalités ; n’accepter aucune divergence silencieuse.",
+          "acceptance": "Un conflit bloque l’aperçu sauvegardable ; contourner le JavaScript ne permet pas de persister un label invalide.",
+          "evidence": [
+            {
+              "path": "services/datasphere-front/app/src/lib/spif-rules.ts",
+              "line": 229,
+              "why": "Validation des sélections."
+            },
+            {
+              "path": "services/datasphere-front/app/src/components/SpifSelector.tsx",
+              "line": 121,
+              "why": "Blocage de génération en cas d’erreur."
+            },
+            {
+              "path": "services/datasphere-front/app/src/components/LabelPreview.tsx",
+              "line": 20,
+              "why": "Sérialisation des catégories."
+            }
+          ]
+        },
+        {
+          "id": "DSPF-04",
+          "title": "Enregistrer la policy avec identité renouvelée et retour utilisateur",
+          "observed": "Le bouton de sauvegarde est désactivé sans UUID valide, politique ou classification. Il envoie un PUT de policy au data-model puis affiche succès ou erreur. Axios extrait response.data et un interceptor vérifie/renouvelle le token Keycloak avant d’ajouter le Bearer ; l’option withCredentials est configurée. Le message de succès correspond à la requête de sauvegarde, pas à la preuve qu’un export chiffré a été produit.",
+          "actors": "Utilisateurs authentifiés et opérateurs.",
+          "api": "PUT /datasets/{datasetId}/label/policy ; saveDatasetPolicy ; interceptor Axios.",
+          "state": "État isSaving, policy envoyée et retour toast ; token de session.",
+          "dependencies": "data-model, keycloak-js et configuration runtime.",
+          "target": "Frontend TS remplace l’adaptateur Keycloak par OIDC sans JVM et affiche le statut durable de génération de label.",
+          "migration": "Préserver renouvellement, gestion d’erreur et accessibilité ; relier le toast à un reçu de commande plutôt qu’à une publication supposée.",
+          "acceptance": "Un token expiré est renouvelé ou l’action refusée ; double-clic ne crée pas deux jobs ; succès de label et succès d’export restent distincts.",
+          "evidence": [
+            {
+              "path": "services/datasphere-front/app/src/types/dataset.ts",
+              "line": 23,
+              "why": "Contrat de sauvegarde."
+            },
+            {
+              "path": "services/datasphere-front/app/src/config/axios.ts",
+              "line": 10,
+              "why": "Renouvellement et Bearer."
+            },
+            {
+              "path": "services/datasphere-front/app/src/components/LabelPreview.tsx",
+              "line": 146,
+              "why": "Conditions du bouton."
+            }
+          ]
+        }
+      ],
+      "entities": [
+        "Politiques SPIF, sélections, erreurs de validation, dataset et policy sauvegardée."
+      ],
+      "dependencies": [
+        "Data-model et son proxy SPIF ; OIDC actuel Keycloak."
+      ],
+      "target_domains": [
+        "Frontends",
+        "IAM",
+        "Catalog",
+        "Audit"
+      ],
+      "control_plane": [
+        "Frontends TypeScript conserve ce parcours ; IAM/Catalog fournit une politique versionnée et une édition dataset explicite.",
+        "Frontend TS conserve la composition ; la décision serveur se fonde sur la même version de politique et des identifiants stables.",
+        "Frontends partage un contrat de validation versionné avec IAM ; le serveur Rust revalide chaque commande et trace le résultat.",
+        "Frontend TS remplace l’adaptateur Keycloak par OIDC sans JVM et affiche le statut durable de génération de label."
+      ],
+      "data_plane": [
+        "Aucun moteur de données dans le navigateur ; lecture des politiques et commandes de sauvegarde autorisées."
+      ],
+      "rust_core": [
+        "Aucun frontend Rust requis ; cœur serveur label/validation en Rust, contrat TS généré et adaptateur OIDC."
+      ],
+      "security": [
+        "Le navigateur ne tranche ni clearance ni droit d’export ; serveur autoritaire.",
+        "Validation et chargement XML ne doivent pas autoriser une URL interne arbitraire via le proxy."
+      ],
+      "operations": [
+        "Application Vite/bun ; état local React et configuration runtime ; aucun test UI exécuté."
+      ],
+      "migration_steps": [
+        "Préserver formats XML et erreurs, migrer URLs backend et inclure version de politique dans la sauvegarde.",
+        "Créer fixtures de politiques réelles anonymisées et comparer restauration des labels et changements de politique.",
+        "Comparer règles client et serveur sur incompatibilités, catégories implicites et cardinalités ; n’accepter aucune divergence silencieuse.",
+        "Préserver renouvellement, gestion d’erreur et accessibilité ; relier le toast à un reçu de commande plutôt qu’à une publication supposée."
+      ],
+      "open_questions": [
+        "L’UI présente des privacy marks, mais la policy envoyée contient policy/classification/category : caractériser leur représentation attendue dans le contrat serveur.",
+        "Version de politique et édition dataset non explicites dans le parcours lu ; à ajouter."
+      ],
+      "evidence": [
+        {
+          "path": "services/datasphere-front/app/src/App.tsx",
+          "line": 9,
+          "why": "Contexte dataset et chargement."
+        },
+        {
+          "path": "services/datasphere-front/app/src/components/SpifSelector.tsx",
+          "line": 33,
+          "why": "Restauration depuis le label courant."
+        },
+        {
+          "path": "services/datasphere-front/app/src/lib/spif-rules.ts",
+          "line": 229,
+          "why": "Validation des sélections."
+        },
+        {
+          "path": "services/datasphere-front/app/src/types/dataset.ts",
+          "line": 23,
+          "why": "Contrat de sauvegarde."
+        }
+      ]
+    }
+  ]
+}

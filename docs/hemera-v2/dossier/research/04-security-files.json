@@ -1,0 +1,1259 @@
+{
+  "mission": "04-security-files",
+  "scope": "Lecture ciblée de iam, keycloak, files, whitelister et migration-orchestrator, complétée par les rapports initiaux identité-gouvernance et Files.",
+  "source_revision": "ba0f34e732e582fc362933b8e55544af04208cb8",
+  "validation": {
+    "method": "Lecture statique des sources et rapports existants ; aucune source modifiée et aucun runtime ou test exécuté.",
+    "coverage": "33 capacités concrètes, regroupées par parcours. Les cibles sont des propositions de contrats, les acceptances des scénarios à exécuter. Les API non livrées sont explicitement identifiées."
+  },
+  "services": [
+    {
+      "id": "iam",
+      "title": "Identités métier, autorisations et administration",
+      "purpose": "Gérer les personnes, groupes, projets, comptes techniques et décisions d'accès, puis projeter ces droits dans OpenFGA et APISIX. Les utilisateurs disposent de leur profil, sessions et partages ; les administrateurs pilotent les identités et la sécurité.",
+      "stack": "Python, FastAPI et SQLAlchemy asynchrone ; PostgreSQL, OpenFGA, APISIX, Keycloak et Kafka dans les intégrations actuelles.",
+      "source_dir": "services/iam",
+      "read_scope": [
+        "AGENTS.md du composant ; rapport identité-gouvernance existant.",
+        "Routes utilisateurs, organisations, équipes, membres, projets, partages, brokers, sessions, tokens et administration.",
+        "Handlers de partage et transfert, services de tokens et comptes techniques, délégation, APISIX et outbox. Lecture ciblée, pas audit intégral de chaque branche."
+      ],
+      "capabilities": [
+        {
+          "id": "IAM-01",
+          "title": "Administrer les personnes et organiser leur départ",
+          "observed": "Les routes couvrent profil courant, langue, annuaire, création, mise à jour, désactivation et suppression. Le drapeau local is_platform_admin est l'autorité métier pour les administrateurs de plateforme ; set_platform_admin écrit aussi projection de droit, audit et événement. Retirer le dernier administrateur actif est refusé. L'offboarding désigne des héritiers par famille de ressources puis désactive ou supprime la personne, avec un événement iam.user.offboarded ordonné avant le fait utilisateur courant dans la même transaction. Une simple suppression d'utilisateur n'a pas ces sémantiques de réaffectation.",
+          "actors": "Utilisateur pour son profil ; administrateur pour le cycle de vie et le départ.",
+          "api": "GET/PUT /api/v1/users/me ; PUT /api/v1/users/me/lang ; CRUD /api/v1/users ; POST /api/v1/admin/users/{user_id}/offboard ; UserService.set_platform_admin.",
+          "state": "User, statut actif/supprimé, identifiant métier et sujet Keycloak, drapeau administrateur, audit et événements outbox.",
+          "dependencies": "Keycloak pour identité de connexion ; services propriétaires pour réaffectation ; OpenFGA et Kafka pour projections.",
+          "target": "IAM Rust conserve une identité métier stable et un mapping explicite issuer/sub. Le départ devient une commande idempotente avec héritiers validés et suivi des accusés des services propriétaires. Le dernier administrateur reste protégé sous concurrence.",
+          "migration": "Importer IDs, sujets, statuts et correspondances sans fusion par seul courriel. Porter les codes d'erreur et publier les mêmes faits via un transport sans JVM. Faire converger les réaffectations avant retrait des anciens consommateurs.",
+          "acceptance": "Deux retraits concurrents ne peuvent supprimer le dernier administrateur. Rejouer une commande d'offboarding ne transfère pas deux fois les ressources et conserve le même événement métier.",
+          "evidence": [
+            {
+              "path": "services/iam/src/iam_service/services/user_service.py",
+              "line": 3587,
+              "why": "Écriture centralisée du statut administrateur et garde du dernier actif."
+            },
+            {
+              "path": "services/iam/src/iam_service/api/v1/admin/admin_offboarding.py",
+              "line": 75,
+              "why": "Contrat de départ avec réaffectations et ordre des événements."
+            },
+            {
+              "path": "services/iam/src/iam_service/api/v1/users.py",
+              "line": 322,
+              "why": "Édition de langue du profil courant."
+            }
+          ]
+        },
+        {
+          "id": "IAM-02",
+          "title": "Structurer organisations, équipes, projets et memberships",
+          "observed": "Les API gèrent organisations, équipes et appartenances avec rôles, ainsi que projets, membres et espaces personnels. Les projets gardent un ID interne et des alias hérités. Le transfert de propriétaire prend le verrou du projet, modifie memberships, audit et outbox dans la transaction, puis utilise une écriture OpenFGA contrôlée sur les alias. Le propriétaire sortant devient manager par défaut ; le départ peut retirer son membership. PostgreSQL et OpenFGA n'ont pas de transaction distribuée commune.",
+          "actors": "Propriétaires, responsables de projets et équipes, administrateurs.",
+          "api": "CRUD /api/v1/organizations, /api/v1/teams, /api/v1/projects ; /api/v1/memberships ; ProjectService.transfer_owner ; OrganizationService.transfer_ownership.",
+          "state": "Organization, Team, Membership, Project et ProjectMember ; correspondances legacy_id ; relations OpenFGA.",
+          "dependencies": "OpenFGA, Keycloak pour les sujets, miroirs utilisateurs/projets des autres services.",
+          "target": "IAM Rust porte les invariants de hiérarchie, les espaces personnels et transferts. Une intention durable identifie les mutations externes et permet de réconcilier les tuples sans transformer un échec de lecture en graphe vide.",
+          "migration": "Importer la hiérarchie et tous les alias avant de changer le routage. Comparer les relations effectives et les listings pour des profils réels ; garder un seul auteur des memberships par cohorte.",
+          "acceptance": "Deux transferts concurrents se sérialisent. Une panne du graphe ne laisse pas un ancien propriétaire rétabli par le prochain reconciler. L'espace personnel ne devient pas partageable par accident.",
+          "evidence": [
+            {
+              "path": "services/iam/src/iam_service/services/project_service.py",
+              "line": 1361,
+              "why": "Verrouillage, propriétaire sortant et limite transactionnelle."
+            },
+            {
+              "path": "services/iam/src/iam_service/services/organization_service.py",
+              "line": 633,
+              "why": "Transfert au niveau organisation."
+            },
+            {
+              "path": "services/iam/src/iam_service/api/v1/memberships.py",
+              "line": 166,
+              "why": "Contrat des rôles de membership."
+            }
+          ]
+        },
+        {
+          "id": "IAM-03",
+          "title": "Décider les droits de lecture et d'action à partir de faits contrôlés",
+          "observed": "Les brokers internes authentifient le client appelant avec JWT vérifié, émetteur, audience configurée et azp attendu. Ils résolvent un utilisateur actif puis demandent une décision OpenFGA avec cohérence renforcée. Le broker dataset accepte de 1 à 100 contrôles et au plus 12 projets liés par contrôle. Il distingue consultation, téléchargement, accès projet et token. Un compte technique ne télécharge jamais un dataset RESTRICTED ; un rôle AGENT stocké ne contourne pas cette règle. Une décision indisponible provoque 503, sans tableau partiellement autorisé.",
+          "actors": "Clients de service de confiance agissant pour une personne ou un compte technique.",
+          "api": "DatasetAuthorizationRequest ; POST /data-serve/authorize dans le routeur dataset_authorization ; decision_broker.verify_broker_identity et evaluate_subject_checks ; autres brokers typés files, ingestion, development, application, model et runner.",
+          "state": "Utilisateur actif et comptes techniques PostgreSQL ; relations OpenFGA ; faits contextuels de requête non persistés.",
+          "dependencies": "OpenFGA ; identité OIDC ; faits résolus par le service propriétaire, sans rôles arbitraires fournis par le client.",
+          "target": "IAM Rust expose un contrat de décision typé liant sujet, acteur, tenant, audience, opération, ressource ou édition et version de politique. Query et Files restent les points de médiation des lignes, colonnes et octets ; un droit Lakekeeper table.modify ne devient pas un droit générique de worker.",
+          "migration": "Porter les matrices de décision et les routes sans assouplir les refus. Comparer les décisions ancienne/nouvelle en mode observation avant bascule, avec invalidation bornée et cas de panne.",
+          "acceptance": "Un mauvais azp, un utilisateur inactif et un export RESTRICTED par compte technique sont refusés. Une panne sur la dernière décision d'un lot n'autorise pas les premières par une réponse partielle.",
+          "evidence": [
+            {
+              "path": "services/iam/src/iam_service/api/v1/decision_broker.py",
+              "line": 18,
+              "why": "Identité des brokers et vérification JWT obligatoire."
+            },
+            {
+              "path": "services/iam/src/iam_service/api/v1/dataset_authorization.py",
+              "line": 32,
+              "why": "Champs et limites du contrat."
+            },
+            {
+              "path": "services/iam/src/iam_service/api/v1/dataset_authorization.py",
+              "line": 123,
+              "why": "Règles humaines/techniques, états actifs et refus en cas de panne."
+            }
+          ]
+        },
+        {
+          "id": "IAM-04",
+          "title": "Partager une ressource et remplacer réellement le rôle accordé",
+          "observed": "Les routes partagent applications, fichiers et dossiers avec un utilisateur ou une équipe, révoquent le partage, listent les permissions et les ressources partagées avec soi. SharingService traite aussi les projets. Un partage fixe un rôle ; il ne cumule pas un nouveau rôle avec un rôle plus fort déjà détenu. Le service recense les rôles, accorde le rôle voulu puis retire ceux remplacés sur les alias. Une personne sans sujet d'identité exploitable est refusée avant le premier tuple. Les restrictions de propriétaire et de représentation des memberships restent distinctes d'un partage simple.",
+          "actors": "Propriétaire ou gestionnaire de partages ; bénéficiaire utilisateur ou équipe.",
+          "api": "POST/DELETE /api/v1/sharing/{applications|files|folders}/{id}/share ; GET permissions ; GET /api/v1/sharing/shared-with-me ; SharingService.share_resource.",
+          "state": "Tuples utilisateur ou équipe, aliases de ressource, memberships projet et audit.",
+          "dependencies": "OpenFGA et résolution des sujets ; miroir des memberships projet.",
+          "target": "IAM Rust garde une commande set-role explicite et une commande revoke. Les résultats portent l'état effectif et la version de décision. Catalog collections et EXPOSURE réutilisent ces identités sans conférer implicitement des droits sur les données.",
+          "migration": "Recenser droits directs, hérités et alias. Rejouer promotions et rétrogradations sur une copie du graphe, puis migrer les écritures avec reprise des opérations incomplètes.",
+          "acceptance": "Passer de admin à viewer retire le droit admin sur tous les alias. Une indisponibilité du recensement ne peut répondre succès. Un partage de collection ne permet pas de lire un dataset interdit.",
+          "evidence": [
+            {
+              "path": "services/iam/src/iam_service/services/sharing_service.py",
+              "line": 261,
+              "why": "Sémantique set-role, recensement, grant puis revoke."
+            },
+            {
+              "path": "services/iam/src/iam_service/api/v1/sharing.py",
+              "line": 326,
+              "why": "Liste des ressources partagées au sujet."
+            }
+          ]
+        },
+        {
+          "id": "IAM-05",
+          "title": "Administrer comptes techniques, tokens d'exposition et délégations MCP",
+          "observed": "IAM découvre, enregistre, met à jour, synchronise et retire des comptes techniques avec portée de projet ou organisation. Les tokens d'exposition ont propriétaire, périmètre, routes et date d'expiration. Créer un token déjà expiré conserve la ligne mais ne provisionne pas de consommateur actif dans APISIX ; modifier sa date conserve sa clé, et passer dans le passé déclenche la révocation. Le reconciler de délégation configure l'échange standard uniquement pour les clients prévus ; la délégation de l'assistant reste dans la session utilisateur. Les outils dataset/corpus passent par read-identity avec leurs comptes dédiés.",
+          "actors": "Administrateurs, propriétaires de projets, intégrations et assistant délégué.",
+          "api": "ServiceAccountService.register/update/unregister/sync ; ExpositionTokenService.create_token/patch_token ; exposition_tokens router ; POST /mcp/read-identity dans le routeur dédié ; reconcile_keycloak_delegation.",
+          "state": "ServiceAccount, User technique, ExpositionApiToken, consommateurs/routes APISIX et configuration de clients OIDC.",
+          "dependencies": "Keycloak, APISIX, Kubernetes Secrets et broker IAM de résolution d'acteur.",
+          "target": "IAM Rust distingue personne, acteur et identité de service. Les capacités courtes sont liées au run et à une opération précise. Les tokens d'accès aux API restent des credentials ; EXPOSURE devient séparément un consommateur déclaré d'éditions.",
+          "migration": "Importer portées et propriétaires, renouveler les secrets au changement d'IdP et mesurer la révocation. Ne pas présumer portables les sessions ni refresh tokens. Préserver les intégrations par une façade d'authentification bornée.",
+          "acceptance": "Un token créé expiré ne donne jamais accès. Fermer la session utilisateur invalide la délégation associée. Un compte limité à un projet ne gagne aucun accès par substitution de X-User-Id.",
+          "evidence": [
+            {
+              "path": "services/iam/src/iam_service/services/service_account_service.py",
+              "line": 206,
+              "why": "Enregistrement et portée des comptes techniques."
+            },
+            {
+              "path": "services/iam/src/iam_service/services/exposition_token_service.py",
+              "line": 400,
+              "why": "Traitement des credentials déjà expirés et provisioning APISIX."
+            },
+            {
+              "path": "services/iam/src/iam_service/services/keycloak_delegation.py",
+              "line": 2,
+              "why": "Contrat de délégation et distinction des outils dataset/corpus."
+            }
+          ]
+        },
+        {
+          "id": "IAM-06",
+          "title": "Gérer sessions, fédérations et politiques de connexion",
+          "observed": "Une personne liste ses sessions et révoque une session ou les autres sessions ; le sujet vient de l'identité authentifiée. Les API d'administration lisent, modifient, réinitialisent et auditent politiques de mots de passe et sessions. La fédération est stockée dans la représentation d'IdP Keycloak, avec extensions de configuration ; le mode de sécurité global est en base IAM. Passer en SSO_ONLY exige un fournisseur actif. Supprimer ou désactiver le dernier fournisseur rétablit le mode qui permet les credentials, pour éviter un blocage du login.",
+          "actors": "Utilisateurs pour leurs sessions ; administrateurs pour fédérations et politiques.",
+          "api": "GET/DELETE /api/v1/users/me/sessions ; DELETE /api/v1/users/me/sessions/{session_id} ; /api/v1/admin/identity-providers ; admin_security_policies router.",
+          "state": "Sessions et représentations de fournisseurs dans Keycloak ; system_config et audits de politique dans PostgreSQL.",
+          "dependencies": "API Admin Keycloak, system_config, audit et frontend de connexion.",
+          "target": "IAM Rust conserve les décisions métier et délègue l'authentification à un fournisseur sans JVM qualifié. Les politiques et fédérations utilisent un modèle versionné avec audit ; la suppression du dernier moyen de connexion est refusée ou compensée explicitement.",
+          "migration": "Inventorier fédérations, paramètres de mots de passe, MFA et lifespans sans exporter de secrets dans le dossier. Tester le transfert des credentials ; réenrôler les moyens non portables et imposer une réauthentification lors de la coupure.",
+          "acceptance": "Un utilisateur ne peut révoquer la session d'un autre. Retirer le dernier IdP ne laisse pas une page SSO sans voie de connexion. Une révocation arrête aussi les accès délégués dans la fenêtre contractuelle.",
+          "evidence": [
+            {
+              "path": "services/iam/src/iam_service/api/v1/user_sessions.py",
+              "line": 283,
+              "why": "Révocation des sessions du sujet courant."
+            },
+            {
+              "path": "services/iam/src/iam_service/api/v1/admin/admin_identity_providers.py",
+              "line": 23,
+              "why": "Autorité de stockage et garde anti-blocage."
+            },
+            {
+              "path": "services/iam/src/iam_service/services/security_policy_service.py",
+              "line": 322,
+              "why": "Écriture des politiques de session et audit."
+            }
+          ]
+        },
+        {
+          "id": "IAM-07",
+          "title": "Réconcilier le routage et les barrières d'accès de la gateway",
+          "observed": "IAM possède la table de routes APISIX de la plateforme. Au démarrage, ensure_seed_data rapproche le seed des lignes stockées, puis les synchronisations rendent routes, upstreams et plugins. Le service propose synchronisation et diff. Les types oidc et oidc_openfga séparent authentification et décision ; une route oidc_openfga sans configuration de droit est refusée. Des règles protègent les routes gérées par les instances et empêchent les rétrogradations d'authentification non permises. Retirer des lignes du seed entraîne un nettoyage ciblé des routes obsolètes.",
+          "actors": "Exploitation, administrateurs et services créateurs de routes d'instances.",
+          "api": "authz/seed_routes.py ; ApisixService.ensure_seed_data/sync_all/diff ; admin_routes et instance_routes.",
+          "state": "ApisixRoute, Upstream, PluginConfig et Consumer PostgreSQL ; rendu externe dans APISIX.",
+          "dependencies": "APISIX Admin, OIDC, OpenFGA et services amont.",
+          "target": "IAM Rust compile une politique de routage versionnée avec inventaire des exceptions publiques. Les identités et décisions sont propagées aux services sans permettre à un header utilisateur non vérifié de remplacer le sujet.",
+          "migration": "Exporter le seed et comparer le rendu réel, y compris routes plates, WebSocket et endpoints publics. Basculer les routes par famille ; conserver un diff et une procédure de retour qui ne réactive pas une route retirée.",
+          "acceptance": "Une route privée ajoutée sans politique est refusée avant déploiement. Une route retirée du seed disparaît sans supprimer les routes d'instances encore actives. Une tentative de passage à auth_type none est bloquée.",
+          "evidence": [
+            {
+              "path": "services/iam/src/iam_service/services/apisix_service.py",
+              "line": 1655,
+              "why": "Rapprochement du seed et nettoyage associé."
+            },
+            {
+              "path": "services/iam/src/iam_service/services/apisix_service.py",
+              "line": 1291,
+              "why": "Validation de la configuration de droit."
+            },
+            {
+              "path": "services/iam/src/iam_service/api/v1/admin/admin_routes.py",
+              "line": 62,
+              "why": "Protection des objets gérés par les instances."
+            }
+          ]
+        },
+        {
+          "id": "IAM-08",
+          "title": "Auditer, réconcilier les droits et ouvrir un accès de secours borné",
+          "observed": "Les mutations produisent audits et faits relayés par une outbox. Le reconciler compare projections et relations, avec un traitement particulier des administrateurs de plateforme. Le break-glass s'active depuis une identité déjà administrateur actif en base locale, sans créer de sujet inconnu pendant la panne. Il a une portée et une expiration ; son rendu assouplit certaines décisions gateway tout en conservant l'authentification. Les écritures IAM et routes avec contrôle system:global restent protégées. La sortie manuelle ou l'expiration déclenche une réconciliation lorsque le service requis est disponible.",
+          "actors": "Administrateurs de plateforme, exploitation et auditeurs.",
+          "api": "/api/v1/admin/audit ; admin_breakglass router ; BreakGlassService.set_break_glass/expire_if_due ; OpenFGAReconciler ; EventOutboxDispatcher.",
+          "state": "AuditLog, AuthzSystemState, EventOutbox et projections OpenFGA.",
+          "dependencies": "PostgreSQL, OpenFGA, APISIX et transport actuel Kafka.",
+          "target": "IAM et Audit Rust gardent l'intention, le motif, la portée, l'échéance et les preuves d'application. La lecture d'une politique dégradée reste explicite. Le transport sans JVM conserve ordre par ressource et reprise, sans transformer l'audit IAM en preuve de publication de données.",
+          "migration": "Importer historique utile et état de secours, puis qualifier panne et restauration. Remplacer Kafka avec maintien des clés et identifiants d'événement. Garder les mécanismes de rattrapage jusqu'à convergence des projections.",
+          "acceptance": "Une activation expirée n'assouplit plus aucune route même si la boucle de nettoyage tarde. Une personne inactive ne peut activer le secours. Après panne puis reprise, l'audit et le graphe concordent avec les mutations durables.",
+          "evidence": [
+            {
+              "path": "services/iam/src/iam_service/api/v1/admin/admin_breakglass.py",
+              "line": 54,
+              "why": "Autorité locale et refus de provisionner un sujet inconnu."
+            },
+            {
+              "path": "services/iam/src/iam_service/services/breakglass_service.py",
+              "line": 367,
+              "why": "Expiration de l'activation."
+            },
+            {
+              "path": "services/iam/src/iam_service/services/event_outbox_dispatcher.py",
+              "line": 312,
+              "why": "Prise en charge durable des événements à relayer."
+            }
+          ]
+        }
+      ],
+      "entities": [
+        "User garde identité métier, sujet de connexion, état et statut administrateur ; le sujet JWT ne doit pas être confondu avec la clé interne.",
+        "Organisations, équipes, memberships, projets et espaces personnels portent la hiérarchie et les rôles.",
+        "ServiceAccount et ExpositionApiToken décrivent des identités et credentials d'intégration, pas des éditions de données.",
+        "Routes APISIX, audits, état break-glass et outbox ont une autorité PostgreSQL ; les tuples sont des projections et relations de décision."
+      ],
+      "dependencies": [
+        "Keycloak assure actuellement connexion, clients, sessions et fédérations.",
+        "OpenFGA évalue les relations ; APISIX applique le routage et les contrôles gateway.",
+        "Kafka distribue les faits aux miroirs ; Kubernetes reçoit certains secrets et objets d'intégration."
+      ],
+      "target_domains": [
+        "IAM",
+        "Audit",
+        "Catalog",
+        "Query",
+        "Files",
+        "MCP",
+        "Applications"
+      ],
+      "control_plane": [
+        "Identités, relations, délégations, politiques, sessions métier, audit des mutations et réconciliation versionnée.",
+        "Décisions sur ressources et éditions avec sujet et acteur distincts ; autorité des commandes en PostgreSQL."
+      ],
+      "data_plane": [
+        "IAM ne transporte pas les lignes ni les blobs. Query, Files et Writer consomment des décisions liées à un périmètre précis.",
+        "Le Publisher contrôle séparément la publication ; les workers ne reçoivent pas de permission REST générique table.modify."
+      ],
+      "rust_core": [
+        "Modules proposés identity, membership, policy, delegation, route-policy et reconciliation, avec adaptateurs OIDC/OpenFGA/APISIX.",
+        "Outbox Rust transactionnelle et interfaces de provisioning idempotentes pour les dépendances externes."
+      ],
+      "security": [
+        "Préserver toutes les restrictions propres aux comptes techniques, la garde du dernier administrateur et les décisions indisponibles.",
+        "Mesurer révocation et cache jusqu'aux flux ouverts ; ne pas supposer que la durée d'un JWT suffit à prouver une révocation."
+      ],
+      "operations": [
+        "Sauvegarder PostgreSQL et les représentations d'identité nécessaires à la reprise ; restaurer puis réconcilier avec OpenFGA et gateway.",
+        "Superviser le retard d'outbox, les décisions dégradées, les divergences et l'échéance de secours. La cible retire Keycloak et Kafka, y compris leurs tâches d'exploitation JVM."
+      ],
+      "migration_steps": [
+        "Figer les contrats HTTP et les matrices de décision à partir des tests existants.",
+        "Importer les IDs et mappings issuer/sub ; comparer sans écrire les droits rendus par Rust.",
+        "Basculer les mutations par famille vers un auteur unique ; qualifier départ, révocation, panne et restauration.",
+        "Retirer les composants JVM lorsque les parcours de connexion et délégation ont leur preuve de remplacement."
+      ],
+      "open_questions": [
+        "Le fournisseur OIDC sans JVM reste à qualifier sur les fédérations et moyens MFA réellement utilisés. Le rapport original cite un candidat, sans preuve d'intégration.",
+        "Cette lecture ciblée ne couvre pas chaque branche des nombreux contrôleurs administratifs. Les contrats détaillés des ressources spécialisées doivent conserver leurs tests existants.",
+        "Aucun test, appel à un IdP ou scénario de panne n'a été exécuté pour ce lot."
+      ],
+      "evidence": [
+        {
+          "path": "services/iam/src/iam_service/main.py",
+          "line": 2542,
+          "why": "Assemblage des familles de routes."
+        },
+        {
+          "path": "services/iam/src/iam_service/services/apisix_service.py",
+          "line": 1942,
+          "why": "Démarrage de la configuration gateway."
+        }
+      ]
+    },
+    {
+      "id": "keycloak",
+      "title": "Authentification OIDC et configuration du realm",
+      "purpose": "Fournir connexion, tokens, sessions et page de login, puis réconcilier la configuration d'authentification livrée avec la plateforme.",
+      "stack": "Keycloak 26.7.4 dans une image JVM, PostgreSQL, opérateur Keycloak Kubernetes, thème et plugin JAR ; Helm, scripts shell/jq et keycloak-config-cli pour la configuration.",
+      "source_dir": "services/keycloak",
+      "read_scope": [
+        "Rapport identité-gouvernance existant ; Dockerfile ; clients OIDC ; définition du realm et flows.",
+        "CR Keycloak, Job realm-sync, CronJob de drift et scripts d'invariants. Aucun realm de client interrogé."
+      ],
+      "capabilities": [
+        {
+          "id": "KC-01",
+          "title": "Connecter les interfaces Web par authorization code et PKCE",
+          "observed": "Le chart déclare le client public de frontend avec standardFlowEnabled, désactive implicitFlow et exige PKCE S256 côté serveur. Les origines et redirections viennent du rendu de la configuration. Le password grant est un opt-in de test partagé ; il n'est pas implicitement activé par le mode développement. Les scopes incluent identité et audience nécessaire au contrôle de la gateway.",
+          "actors": "Utilisateurs des interfaces Web.",
+          "api": "Template realm_clients/_api_client_front.tpl ; endpoints OIDC du realm fournis par Keycloak.",
+          "state": "Realm, client frontend, scopes, audiences et sessions Keycloak.",
+          "dependencies": "Frontend, IAM et gateway APISIX.",
+          "target": "Conserver authorization code avec PKCE, validation d'audience et logout dans un fournisseur sans JVM. IAM Rust garde les identités métier, et les interfaces TypeScript consomment le protocole OIDC sans dépendre de claims propriétaires non documentés.",
+          "migration": "Inventorier redirections et claims contractuels, configurer le nouvel issuer puis effectuer une période bornée de double validation. Réauthentifier les utilisateurs à la coupure ; ne pas importer aveuglément des sessions.",
+          "acceptance": "Le nouveau login refuse une redirection non déclarée et un code sans vérificateur PKCE. Les appels API ont la bonne audience et les mêmes profils métier après connexion.",
+          "evidence": [
+            {
+              "path": "services/keycloak/chart/templates/realm_clients/_api_client_front.tpl",
+              "line": 50,
+              "why": "Flux navigateur déclaré."
+            },
+            {
+              "path": "services/keycloak/chart/templates/realm_clients/_api_client_front.tpl",
+              "line": 105,
+              "why": "PKCE obligatoire côté IdP."
+            }
+          ]
+        },
+        {
+          "id": "KC-02",
+          "title": "Authentifier CLI et SDK par device authorization",
+          "observed": "Le client public cleyrop-cli utilise le device grant, sans redirection ni origine Web et sans standard ou implicit flow. Il délivre des refresh tokens selon les politiques du realm et propose offline_access en scope optionnel. Le PKCE du device grant est piloté par un paramètre dédié ; le template documente que le SDK livré n'envoie pas encore de challenge. Le password grant reste lié à l'opt-in de test.",
+          "actors": "Utilisateurs CLI, SDK Python et outils interactifs.",
+          "api": "Template realm_clients/_cli.tpl ; device authorization et token endpoints du fournisseur.",
+          "state": "Client CLI, demande device, session utilisateur et refresh tokens.",
+          "dependencies": "SDK, IdP et API de la plateforme.",
+          "target": "Qualifier device grant, polling, expiration et stockage des credentials avec le fournisseur sans JVM. Préserver le lien entre SDK et session utilisateur, en ajoutant PKCE seulement avec une version de client compatible.",
+          "migration": "Tester l'ancien et le nouveau SDK contre le fournisseur choisi. Versionner le changement PKCE et invalider les anciens refresh tokens lors du retrait d'issuer.",
+          "acceptance": "Une CLI peut terminer le login sur un autre appareil, puis renouveler l'accès. Une demande device expirée échoue et la révocation de session rend le renouvellement impossible.",
+          "evidence": [
+            {
+              "path": "services/keycloak/chart/templates/realm_clients/_cli.tpl",
+              "line": 13,
+              "why": "Absence de flux navigateur."
+            },
+            {
+              "path": "services/keycloak/chart/templates/realm_clients/_cli.tpl",
+              "line": 50,
+              "why": "Bascule PKCE et device grant."
+            }
+          ]
+        },
+        {
+          "id": "KC-03",
+          "title": "Fournir des clients confidentiels et des audiences de service",
+          "observed": "Le client API est confidentiel, active les service accounts et déclare scopes et protocol mappers. Le chart définit aussi les clients nécessaires aux intégrations retenues. Les invariants ajoutent l'audience gateway aux clients non déclarés qui doivent appeler les API et le scope profile aux comptes techniques. La configuration de délégation MCP appartient au reconciler IAM, ce qui est une dépendance à migrer en plus des templates du chart.",
+          "actors": "Services, intégrations et réconciliateurs IAM.",
+          "api": "Templates _realm_clients.tpl, realm_clients/_api_client.tpl et _realm_client_scopes.tpl ; invariants.sh pour clients non déclarés.",
+          "state": "Clients, secrets référencés, scopes, mappers et comptes techniques du realm.",
+          "dependencies": "IAM, APISIX et Kubernetes Secrets.",
+          "target": "IAM Rust provisionne des identités de service à portée explicite auprès d'un IdP sans JVM. Un token technique doit conserver une audience limitée et l'acteur lorsqu'il agit par délégation.",
+          "migration": "Recenser les clients créés par chart et ceux créés par IAM, puis renouveler secrets et audiences. Remplacer les constructions d'URL Keycloak dans chaque client avant retrait.",
+          "acceptance": "Une intégration continue de recevoir un token attendu par sa seule API. Un token sans audience gateway est refusé et une intégration ne peut échanger pour une audience non autorisée.",
+          "evidence": [
+            {
+              "path": "services/keycloak/chart/templates/realm_clients/_api_client.tpl",
+              "line": 60,
+              "why": "Compte technique du client confidentiel."
+            },
+            {
+              "path": "services/keycloak/chart/files/realm-sync/invariants.sh",
+              "line": 228,
+              "why": "Audience et scope des clients non déclarés par le chart."
+            }
+          ]
+        },
+        {
+          "id": "KC-04",
+          "title": "Appliquer politiques de session, MFA et protections du login",
+          "observed": "La définition du realm déclare politique de mot de passe, lifespans de tokens et sessions, rotation des refresh tokens, protections brute force et headers navigateur. Le flow Jupyterhub peut être conditionné par un rôle. Les invariants rendent le sous-flow MFA du navigateur obligatoire lorsque demandé, et ne relâchent pas un realm déjà renforcé. La définition enregistre les événements de connexion, échec, logout, mot de passe et MFA pour l'exploitation.",
+          "actors": "Utilisateurs et responsables sécurité.",
+          "api": "_realm_definition.tpl ; _realm_auth_flows.tpl ; _realm_events.tpl ; invariants.sh section MFA.",
+          "state": "Politiques et flows du realm, credentials MFA, sessions et événements Keycloak.",
+          "dependencies": "IAM pour les écrans d'administration ; Jupyterhub ; IdP.",
+          "target": "Traduire chaque politique dans un modèle de configuration IAM versionné, puis qualifier son effet avec le fournisseur sans JVM. Les facteurs et passkeys dont l'export n'est pas compatible nécessitent un réenrôlement explicite.",
+          "migration": "Comparer les politiques réellement actives, y compris celles que le chart ne possède pas. Tester MFA, expiration, logout et anti-brute-force ; ne pas annoncer une portabilité automatique des credentials.",
+          "acceptance": "Un compte soumis à MFA ne peut terminer le login avec le seul mot de passe. Un déploiement ne relâche pas la politique appliquée. Les bornes de session arrêtent les délégations associées.",
+          "evidence": [
+            {
+              "path": "services/keycloak/chart/templates/_realm_definition.tpl",
+              "line": 90,
+              "why": "Politiques et paramètres déclarés du realm."
+            },
+            {
+              "path": "services/keycloak/chart/files/realm-sync/invariants.sh",
+              "line": 268,
+              "why": "Renforcement MFA à sens unique."
+            },
+            {
+              "path": "services/keycloak/chart/templates/_realm_auth_flows.tpl",
+              "line": 9,
+              "why": "Flow de login conditionné par rôle."
+            }
+          ]
+        },
+        {
+          "id": "KC-05",
+          "title": "Réconcilier le realm à chaque déploiement et détecter la dérive",
+          "observed": "Le Job post-install/post-upgrade exécute wait, import, invariants puis realm-diff dans un ordre imposé par les init containers. Un échec bloque le Job et le déploiement. L'import met à jour les objets déclarés sans supprimer ceux laissés hors configuration. Les invariants traitent notamment profil admin-only, bootstrap, marqueurs de bienvenue, clients à retirer par nom et vérification des credentials. Le CronJob de drift utilise un client en lecture seule ; il ne couvre pas les mappings de rôles des comptes techniques ni le realm master.",
+          "actors": "Exploitation et automatisation de déploiement.",
+          "api": "Job realm-sync ; CronJob realm-drift ; scripts wait.sh, invariants.sh et realm-diff.sh.",
+          "state": "Définition Helm, objets effectifs du realm et résultats de Job ; configuration hors propriété du chart préservée.",
+          "dependencies": "Kubernetes, Helm, API Admin Keycloak et keycloak-config-cli JVM.",
+          "target": "Un reconciler Rust et des jobs bornés remplacent keycloak-config-cli, l'opérateur et les scripts dépendant de Keycloak. Chaque propriété gérée a une comparaison avant/après et une preuve de convergence ; les extensions clientes restent hors propriété explicite.",
+          "migration": "Séparer objets possédés, objets seulement lus et exceptions clientes. Porter invariants et drift avant la bascule d'IdP ; supprimer ensuite toutes les images JVM de sync et d'exploitation.",
+          "acceptance": "Un écart dans une propriété gérée fait échouer la vérification. Un fournisseur fédéré hors propriété du chart reste intact. Deux applications successives de la même configuration produisent le même état.",
+          "evidence": [
+            {
+              "path": "services/keycloak/chart/templates/realm-sync.yaml",
+              "line": 12,
+              "why": "Ordonnancement et blocage sur échec."
+            },
+            {
+              "path": "services/keycloak/chart/templates/realm-sync.yaml",
+              "line": 101,
+              "why": "Protection no-delete des types gérés."
+            },
+            {
+              "path": "services/keycloak/chart/templates/realm-drift.yaml",
+              "line": 6,
+              "why": "Limites du contrôle périodique en lecture seule."
+            }
+          ]
+        },
+        {
+          "id": "KC-06",
+          "title": "Personnaliser le login, les emails et les premiers accès",
+          "observed": "L'image assemble un thème et un plugin JAR. Le realm choisit thème de login et d'email, langues, locale et configuration SMTP via une référence de coffre. Le listener welcome-email est branché aux événements. Lors de la première adoption par le sync, les utilisateurs existants reçoivent un marqueur qui évite un envoi de bienvenue collectif ; les nouvelles identités suivent ensuite le listener. Les invariants protègent aussi les attributs de politique et de bienvenue dans le profil utilisateur.",
+          "actors": "Utilisateurs, administrateurs de branding et exploitation.",
+          "api": "Dockerfile de l'image ; _realm_definition.tpl ; invariants.sh section welcome-email.",
+          "state": "Thèmes, locale, configuration SMTP, attributs de profil et marqueurs de bienvenue.",
+          "dependencies": "Thème et plugin partagés, SMTP, IAM et futur Notifications.",
+          "target": "Conserver les écrans en TypeScript ou dans un thème supporté par l'IdP sans JVM. Notifications Rust porte l'envoi métier de bienvenue avec déduplication ; le mécanisme de sécurité du mot de passe reste au fournisseur d'identité.",
+          "migration": "Inventorier traductions et parcours email sans recopier les paramètres SMTP. Importer les marqueurs de bienvenue et qualifier liens, expiration et changements de langue.",
+          "acceptance": "Migrer des comptes existants n'envoie pas de bienvenue en masse. Un nouveau compte reçoit au plus un message métier et le lien de sécurité est valide uniquement dans le contexte attendu.",
+          "evidence": [
+            {
+              "path": "services/keycloak/app/Dockerfile",
+              "line": 3,
+              "why": "Assemblage des extensions JAR."
+            },
+            {
+              "path": "services/keycloak/chart/templates/_realm_definition.tpl",
+              "line": 81,
+              "why": "Listener branché et thèmes du realm."
+            },
+            {
+              "path": "services/keycloak/chart/files/realm-sync/invariants.sh",
+              "line": 151,
+              "why": "Marquage initial des comptes déjà présents."
+            }
+          ]
+        }
+      ],
+      "entities": [
+        "Le realm contient clients, scopes, rôles, flows, sessions et politiques ; IAM garde les identités et droits métier.",
+        "Le chart gère seulement les objets explicitement déclarés et certains invariants ; les fournisseurs fédérés et objets propres à une installation ne sont pas tous possédés par le chart."
+      ],
+      "dependencies": [
+        "PostgreSQL pour Keycloak ; opérateur Kubernetes via la CR k8s.keycloak.org/v2alpha1.",
+        "JAR de thème et plugin ; keycloak-config-cli pour import ; IAM pour clients dynamiques et délégations."
+      ],
+      "target_domains": [
+        "IAM",
+        "Notifications",
+        "Frontends",
+        "Audit"
+      ],
+      "control_plane": [
+        "Configuration OIDC, identités de service, fédérations et politiques versionnées par IAM Rust.",
+        "Réconciliation explicite et inventaire des propriétés gérées sans suppression générale du realm."
+      ],
+      "data_plane": [
+        "Émission et validation de tokens par un fournisseur sans JVM ; aucun accès direct aux tables ou blobs conféré par le seul login."
+      ],
+      "rust_core": [
+        "Adaptateur IdP, réconciliateur de clients/politiques et mapping issuer/sub dans IAM.",
+        "Événements de bienvenue idempotents confiés à Notifications. Le serveur OIDC peut être un tiers sans JVM qualifié."
+      ],
+      "security": [
+        "Ne pas relâcher PKCE, MFA, restriction des audiences ou lifespans pour faciliter la migration.",
+        "Ne pas fusionner les personnes par courriel ni supposer portables les sessions, refresh tokens et facteurs MFA."
+      ],
+      "operations": [
+        "Le chart installe une CR Keycloak adossée à PostgreSQL et un Job de convergence bloquant.",
+        "La sortie zéro JVM couvre serveur, opérateur, JAR, image de sync et outils de runbook. Sauvegarde, restauration et fonctionnement sans Internet restent à qualifier pour le remplaçant."
+      ],
+      "migration_steps": [
+        "Inventorier clients, fédérations, facteurs et claims utilisés.",
+        "Qualifier un IdP sans JVM et le reconciler sur un environnement isolé.",
+        "Importer IDs et credentials compatibles, imposer réauthentification ou réenrôlement pour le reste.",
+        "Basculer les audiences et clients, mesurer révocation, puis retirer l'ensemble des dépendances Keycloak."
+      ],
+      "open_questions": [
+        "Aucun fournisseur sans JVM n'a été testé dans cette mission.",
+        "Le chart ne suffit pas à établir les fédérations, facteurs et politiques effectifs de chaque cluster.",
+        "Les plugins et thèmes partagés sont cités comme dépendances ; ce lot ne relit pas intégralement leur code."
+      ],
+      "evidence": [
+        {
+          "path": "services/keycloak/chart/templates/keycloak.yaml",
+          "line": 1,
+          "why": "Déploiement par l'opérateur Keycloak."
+        },
+        {
+          "path": "services/keycloak/app/Dockerfile",
+          "line": 1,
+          "why": "Version et runtime de l'image actuelle."
+        }
+      ]
+    },
+    {
+      "id": "files",
+      "title": "Fichiers, dossiers et traitements documentaires",
+      "purpose": "Fournir un espace de fichiers personnels ou de projet, navigation, recherche, copies, téléchargement, corbeille et traitements asynchrones. Ce service n'est pas aujourd'hui une autorité d'édition FILESET.",
+      "stack": "Python, FastAPI, SQLAlchemy asynchrone ; PostgreSQL pour hiérarchie et index, S3/MinIO pour objets, ARQ et Redis/Valkey pour jobs ; Kafka pour faits et antivirus/extraction spécialisés.",
+      "source_dir": "services/files",
+      "read_scope": [
+        "AGENTS.md ; rapport Files existant ; routes files, folders, projects, search, trash, jobs et config_assets.",
+        "ContentStore, parties ciblées des services de fichiers, chunks, assets, extraction, worker et intention de suppression."
+      ],
+      "capabilities": [
+        {
+          "id": "FS-01",
+          "title": "Recevoir un fichier et contrôler sa destination avant stockage",
+          "observed": "POST upload valide la destination via IAM lorsque la gateway ne peut pas la déduire du chemin. Pour un dossier neuf, le handler peut réessayer le même contrôle pendant la propagation de son tuple, sans substituer un droit de projet. ContentStore borne la taille, détecte le MIME dans les octets, applique la politique et calcule SHA-256 avant l'écriture S3. L'objet utilise une clé UUID/nom ; le hash stocké ne constitue pas une déduplication globale. La ligne initiale peut attendre son scan antivirus.",
+          "actors": "Utilisateur ou intégration qui ajoute un fichier.",
+          "api": "POST /api/v1/files/upload ; _authorize_upload_target ; ContentStore.ingest_streaming.",
+          "state": "File PostgreSQL, clé de blob, taille, MIME détecté, SHA-256 et état de scan.",
+          "dependencies": "IAM broker, gateway, stockage S3 et worker antivirus.",
+          "target": "Files Rust crée une session d'upload et écrit dans un espace privé durable. Le reçu de réception ne vaut pas publication. Writer prépare l'index FILESET ; Publisher approuve l'édition Iceberg après audit, avec origin.* au candidat.",
+          "migration": "Préserver IDs, noms, limites et erreurs. Auditer les objets existants puis adopter uniquement une version immuable avec hash contrôlé ; reconstruire une édition publiée sans ériger la navigation PostgreSQL en checkpoint.",
+          "acceptance": "Un MIME falsifié ou un fichier trop grand n'atteint pas le stockage. Un dossier refusé ne devient pas autorisé par son projet. Aucun octet reçu n'est lisible avant son édition approuvée.",
+          "evidence": [
+            {
+              "path": "services/files/src/file_management/api/v1/files.py",
+              "line": 63,
+              "why": "Contrôle de la destination et propagation des droits."
+            },
+            {
+              "path": "services/files/src/file_management/storage/content_store.py",
+              "line": 170,
+              "why": "Validation complète avant écriture des octets."
+            }
+          ]
+        },
+        {
+          "id": "FS-02",
+          "title": "Assembler les uploads par morceaux et nettoyer les abandons",
+          "observed": "L'upload par chunks utilise propriétaire, projet, nom et upload_id pour isoler le fichier temporaire. Le nom est ramené à son basename ; l'écriture prend flock et revérifie la taille sous verrou. Le service calcule ensuite le checksum du fichier assemblé et poursuit le parcours d'upload. Le worker nettoie les uploads périmés. Ce mécanisme dépend du fichier local et ne démontre pas une reprise depuis un worker arbitraire.",
+          "actors": "Clients qui transfèrent des fichiers volumineux.",
+          "api": "POST /api/v1/files/upload/chunk ; ChunkedUploadService.upload_chunk ; cleanup_stale_uploads.",
+          "state": "Fichiers temporaires locaux et métadonnées de requête ; objet final et ligne File après assemblage.",
+          "dependencies": "Disque temporaire du service, stockage S3 et ARQ.",
+          "target": "Sessions Rust durables avec identifiant de transfert, plages ou parties, taille attendue, checksum et état de finalisation. Les workers reprennent depuis le stockage durable ; la fermeture du transfert produit un candidat FILESET puis une publication WAP.",
+          "migration": "Garder la route compatible mais router chaque session vers le protocole durable. Terminer ou invalider explicitement les sessions locales ouvertes avant de retirer les anciens pods.",
+          "acceptance": "Interrompre une réception puis reprendre sur un autre worker restitue exactement le même fichier. Le rejeu d'une partie ne la double pas. Un nettoyage n'efface pas un upload actif.",
+          "evidence": [
+            {
+              "path": "services/files/src/file_management/services/chunked_upload_service.py",
+              "line": 85,
+              "why": "Isolation des chemins et noms."
+            },
+            {
+              "path": "services/files/src/file_management/services/chunked_upload_service.py",
+              "line": 105,
+              "why": "Verrou et contrôle de taille."
+            },
+            {
+              "path": "services/files/src/file_management/workers/tasks.py",
+              "line": 1127,
+              "why": "Nettoyage des transferts abandonnés."
+            }
+          ]
+        },
+        {
+          "id": "FS-03",
+          "title": "Naviguer, déplacer et copier les fichiers et dossiers",
+          "observed": "Le service expose contenu personnel, contenu de projet, résolution de chemin, dossiers simples ou par lot, renommage, déplacement et copie. La hiérarchie réside en PostgreSQL ; les clés S3 sont plates. Les destinations fournies dans le corps demandent une autorisation IAM. Les copies de dossiers peuvent produire un job ; son statut est réservé à l'utilisateur qui l'a demandé. Un non-propriétaire voit 404. Si un statut Redis manque après acquittement de l'intention durable, l'API retourne 503 plutôt qu'un pending permanent.",
+          "actors": "Contributeurs de projets et propriétaires d'espace personnel.",
+          "api": "/api/v1/my-files ; /api/v1/projects/{project_id}/contents et /resolve ; /api/v1/folders ; /api/v1/files/{file_id}/move ou /copy ; GET /api/v1/jobs/{job_id}.",
+          "state": "File, Folder, Project, hiérarchie, intention durable de copie et statut temporaire de job.",
+          "dependencies": "IAM, PostgreSQL, S3, ARQ et statut Redis/Valkey.",
+          "target": "Files Rust garde des noms logiques et dossiers comme projection de navigation. Déplacer ou copier prépare une nouvelle édition FILESET ou une commande de présentation explicitement séparée. Un job expose un état durable et l'édition résultante.",
+          "migration": "Importer toute la hiérarchie et les aliases projet. Préserver conflits de noms et droits de destination. Reconstituer les jobs encore ouverts avant bascule et éviter une copie physique inutile lorsque les blobs immuables peuvent être référencés.",
+          "acceptance": "Copier vers un dossier interdit échoue même si la source est lisible. Une coupure après création de l'intention reprend sans doubler les entrées. Un autre utilisateur ne peut sonder le statut du job.",
+          "evidence": [
+            {
+              "path": "services/files/src/file_management/api/v1/folders.py",
+              "line": 264,
+              "why": "Contrat de copie et destination."
+            },
+            {
+              "path": "services/files/src/file_management/api/v1/jobs.py",
+              "line": 33,
+              "why": "Propriété du job et traitement d'un statut absent."
+            },
+            {
+              "path": "services/files/src/file_management/api/v1/projects.py",
+              "line": 97,
+              "why": "Résolution du chemin de navigation."
+            }
+          ]
+        },
+        {
+          "id": "FS-04",
+          "title": "Télécharger, prévisualiser et produire des archives",
+          "observed": "Le téléchargement lit les octets S3 via le service. La garde de scan refuse INFECTED, PENDING et ERROR avec des réponses distinctes ; PENDING signale une attente temporaire. L'aperçu textuel a ses limites de type et de taille, mais ne bloque explicitement que INFECTED dans le code lu. Les dossiers et sélections se téléchargent en ZIP. Le pipeline ZIP borne les fichiers temporaires en vol, contrôle les dérives de taille et nettoie les ressources à l'arrêt du consommateur. Aucun presign n'est établi par les routes examinées.",
+          "actors": "Lecteurs autorisés et clients de téléchargement.",
+          "api": "GET /api/v1/files/{file_id}/download et /preview ; GET /api/v1/folders/{folder_id}/download ; POST /api/v1/projects/{project_id}/download.",
+          "state": "Blob, état de scan, réponse stream et fichiers temporaires ZIP.",
+          "dependencies": "IAM/gateway, S3 et pipeline ZIP.",
+          "target": "Un lecteur Rust résout une version de blob dans une édition approuvée puis applique IAM sur tous les chemins. Un EXPORT durable est un effet avec reçu et reprise. Un téléchargement interactif reste un stream médié avec contrôle des limites et révocation.",
+          "migration": "Aligner les gardes preview, ZIP et download avant ouverture des corpus. Conserver CSV/texte et ZIP compatibles là où utilisés, puis ajouter l'identifiant d'édition dans le contrat de lecture.",
+          "acceptance": "Un fichier en attente ou en erreur de scan n'est accessible ni par preview ni par ZIP. Annuler un stream libère les fichiers temporaires. Une lecture épinglée ne change pas de blob pendant le transfert.",
+          "evidence": [
+            {
+              "path": "services/files/src/file_management/services/file_service.py",
+              "line": 287,
+              "why": "États bloquant le téléchargement."
+            },
+            {
+              "path": "services/files/src/file_management/services/file_service.py",
+              "line": 1091,
+              "why": "Garde spécifique et limites de preview."
+            },
+            {
+              "path": "services/files/src/file_management/services/zip_pipeline.py",
+              "line": 9,
+              "why": "Borne de ressources du pipeline ZIP."
+            }
+          ]
+        },
+        {
+          "id": "FS-05",
+          "title": "Scanner, compresser et extraire du texte dans les workers",
+          "observed": "ARQ exécute scan_file_for_virus, compress_file, extract_file_text et copie des objets d'un dossier. Les retries du scan sont bornés et les erreurs terminales sont persistées ; une tâche périodique reprend des scans PENDING restés sans résultat. L'extraction traite textes et PDF avec une limite de taille de fichier et de longueur de texte. La compression écrit une nouvelle clé puis fait pointer la ligne vers celle-ci avant de retirer l'ancien objet. Ces opérations enrichissent l'état de fichier actuel, sans créer une édition gouvernée.",
+          "actors": "Utilisateurs en attente de disponibilité ; exploitation des traitements.",
+          "api": "WorkerSettings.functions ; tâches scan_file_for_virus, compress_file, extract_file_text ; POST /api/v1/projects/{project_id}/extract-text selon le routeur projet.",
+          "state": "États antivirus, extraction textuelle, clé de blob compressé, jobs ARQ et intentions durables.",
+          "dependencies": "ARQ, antivirus, extraction PDF, stockage et base métier.",
+          "target": "Workers fongibles exécutant des runs bornés, avec résultat d'audit lié à une version immuable. Les transformations qui changent les octets créent un candidat et passent WAP ; l'audit post-candidat est lié durablement sans réécriture du summary par fast-forward.",
+          "migration": "Conserver les résultats de scan avec leur hash/version. Identifier les transformations de compression déjà réalisées, réauditer les objets sans preuve suffisante et déplacer les tâches vers la file sans JVM retenue.",
+          "acceptance": "Une panne d'antivirus finit en état explicite et ne publie pas le fichier. Une compression interrompue ne laisse aucune édition pointant vers des octets manquants. Un rejeu ne change pas une preuve d'audit déjà liée.",
+          "evidence": [
+            {
+              "path": "services/files/src/file_management/workers/worker.py",
+              "line": 83,
+              "why": "Liste des tâches, bornes et reprise."
+            },
+            {
+              "path": "services/files/src/file_management/services/text_extraction_service.py",
+              "line": 12,
+              "why": "Limites de l'extraction."
+            },
+            {
+              "path": "services/files/src/file_management/workers/tasks.py",
+              "line": 423,
+              "why": "Parcours de compression asynchrone."
+            }
+          ]
+        },
+        {
+          "id": "FS-06",
+          "title": "Rechercher noms et contenu sans élargir le périmètre",
+          "observed": "La recherche distingue le chemin personnel du chemin de projet. /my-files/search fixe le propriétaire à l'appelant et ne reçoit pas de projectId permettant d'élargir la portée. /projects/{id}/search utilise le projet résolu et aucun filtre propriétaire, sous le contrôle can_view de la gateway. Le contrat accepte recherche fulltext ou nom, type fichier/dossier, filtre dossier et pagination de 1 à 100 résultats par type. Fichiers et dossiers sont interrogés séquentiellement sur la session SQL partagée.",
+          "actors": "Utilisateurs recherchant leurs documents ou ceux d'un projet.",
+          "api": "GET /api/v1/my-files/search ; GET /api/v1/projects/{project_id}/search.",
+          "state": "Index PostgreSQL et texte extrait ; filtres sur projet, propriétaire et dossier.",
+          "dependencies": "PostgreSQL, extraction et gateway IAM.",
+          "target": "Files et Catalog Rust indexent seulement les documents appartenant à des éditions approuvées. L'index est reconstructible ; snippets, compteurs et résultats appliquent la même politique que le téléchargement. Semantics/Embeddings reste une extension distincte de la recherche fulltext actuelle.",
+          "migration": "Préserver chemins et filtres, puis reconstruire l'index depuis les éditions migrées. Ne pas reprendre le texte extrait d'un fichier supprimé ou d'un scan non accepté sans audit.",
+          "acceptance": "Une recherche personnelle ne retourne pas les fichiers d'un autre utilisateur. Un projet interdit ne révèle ni texte ni compteur. Reconstruire l'index conserve les résultats autorisés de la même édition.",
+          "evidence": [
+            {
+              "path": "services/files/src/file_management/api/v1/search.py",
+              "line": 132,
+              "why": "Portée personnelle fixée au sujet."
+            },
+            {
+              "path": "services/files/src/file_management/api/v1/search.py",
+              "line": 165,
+              "why": "Portée projet et gardes gateway."
+            }
+          ]
+        },
+        {
+          "id": "FS-07",
+          "title": "Restaurer la corbeille et différer la suppression physique",
+          "observed": "Les routes distinguent suppression logique, corbeille de projet, restauration de fichier ou dossier, suppression permanente et vidage. La destination de restauration est contrôlée. Pour supprimer définitivement un fichier, le service verrouille le namespace et la ressource, écrit le fait inverse d'autorisation, enregistre une intention durable de suppression S3 puis supprime la ligne. Les octets ne sont retirés qu'après commit, pour éviter une ligne conservée qui pointe vers un objet effacé.",
+          "actors": "Propriétaires, gestionnaires du projet et politique de conservation.",
+          "api": "/api/v1/trash/files/{file_id}/restore ; /api/v1/trash/folders/{folder_id}/restore ; DELETE /api/v1/trash/files/{file_id} ; POST /api/v1/projects/{project_id}/trash/empty.",
+          "state": "Tombstones logiques, parents de restauration, audit et intention durable de suppression des clés.",
+          "dependencies": "Outbox, IAM, stockage et futurs Maintenance/Audit.",
+          "target": "Maintenance Rust distingue retrait du service, conservation et purge physique. Les racines de GC viennent des éditions conservées, tags, runs et obligations de restauration. Les projections et refcounts restent reconstructibles ; un plan audité vérifie à nouveau les références avant effacement.",
+          "migration": "Importer les éléments de corbeille et leurs délais, relier blobs aux éditions conservées et traiter les intentions anciennes. Inclure textes extraits et dérivés dans le plan de purge.",
+          "acceptance": "Un rollback de transaction ne supprime aucun blob encore référencé. Une restauration respecte les droits du nouveau dossier. Une purge refuse un blob encore utilisé par une édition retenue, même si l'index de navigation est en retard.",
+          "evidence": [
+            {
+              "path": "services/files/src/file_management/services/file_service.py",
+              "line": 1000,
+              "why": "Intention de suppression après commit et inverse authz."
+            },
+            {
+              "path": "services/files/src/file_management/api/v1/trash.py",
+              "line": 62,
+              "why": "Restauration et destination."
+            },
+            {
+              "path": "services/files/src/file_management/api/v1/trash.py",
+              "line": 139,
+              "why": "Vidage de la corbeille."
+            }
+          ]
+        },
+        {
+          "id": "FS-08",
+          "title": "Servir les assets publics de branding dans un stockage distinct",
+          "observed": "Les assets de configuration vivent dans une table dédiée, séparée des fichiers privés. Les routes d'administration requièrent une identité et la gateway impose le rôle global ; seule /public/config/assets/{key} sert sans authentification. Le service limite clés, MIME réel et taille, calcule un ETag et gère le cache conditionnel. Une mise à jour prend un verrou par clé, écrit un nouvel objet, commit la ligne puis nettoie l'ancien. Ces uploads d'administrateur n'ont pas de scan antivirus.",
+          "actors": "Administrateurs de branding et visiteurs de la page de connexion.",
+          "api": "GET /api/v1/config/assets ; PUT/DELETE /api/v1/config/assets/{key} ; GET /api/v1/config/assets/{key}/info ; GET /api/v1/public/config/assets/{key}.",
+          "state": "ConfigAsset, version de clé S3, hash/ETag et auteur de mise à jour.",
+          "dependencies": "Gateway IAM, S3 et caches HTTP.",
+          "target": "Files Rust conserve ce stockage public explicitement séparé, avec types et tailles admis. Ce parcours de configuration ne doit pas rendre public un FILESET métier ni contourner les politiques d'édition.",
+          "migration": "Importer les assets et leur hash, conserver URLs et cache HTTP, puis changer l'implémentation derrière la même frontière gateway.",
+          "acceptance": "Un utilisateur ordinaire ne peut modifier un asset. Un MIME simulé est refusé avant S3. Deux uploads ou un upload concurrent à un delete ne laissent pas la ligne pointer sur un objet effacé.",
+          "evidence": [
+            {
+              "path": "services/files/src/file_management/api/v1/config_assets.py",
+              "line": 145,
+              "why": "Route publique et réponse HTTP."
+            },
+            {
+              "path": "services/files/src/file_management/services/config_asset_service.py",
+              "line": 120,
+              "why": "Verrou, clé neuve et ordre commit/nettoyage."
+            }
+          ]
+        }
+      ],
+      "entities": [
+        "File et Folder portent identité, hiérarchie et état logique en PostgreSQL. Les octets sont des objets S3 à clés plates.",
+        "Le SHA-256 actuel décrit le contenu ; il ne fournit ni édition publiée ni déduplication globale prouvée.",
+        "ConfigAsset est séparé des fichiers privés ; les jobs et intentions de suppression ont leurs propres états."
+      ],
+      "dependencies": [
+        "IAM et APISIX contrôlent ressources de chemin et destinations de corps.",
+        "PostgreSQL, S3/MinIO, ARQ avec Redis/Valkey, antivirus et extraction PDF.",
+        "Kafka relaie les faits actuels ; sa substitution fait partie de la cible sans JVM."
+      ],
+      "target_domains": [
+        "Files",
+        "Writer",
+        "Publisher",
+        "Audit",
+        "Maintenance",
+        "IAM",
+        "Catalog",
+        "Semantics",
+        "Embeddings"
+      ],
+      "control_plane": [
+        "Sessions d'upload, droits, dossiers, jobs, conservation et reçus d'effets restent des commandes/projections PostgreSQL.",
+        "Une édition FILESET est un index Iceberg publié autoritaire, avec identité et version immuable de chaque blob."
+      ],
+      "data_plane": [
+        "Réception durable privée, calcul de hash, scan et extraction dans des runs bornés.",
+        "Lecture médiée de blobs appartenant à l'édition autorisée ; pas de droit général au bucket ni aux fichiers staging."
+      ],
+      "rust_core": [
+        "Sessions et navigation Files, ContentStore Rust, lecteur d'édition, outbox et adaptateurs d'objets.",
+        "Writer et Publisher communs pour FILESET ; Maintenance pour GC et purge, indépendants du retard de navigation."
+      ],
+      "security": [
+        "Uniformiser les gardes antivirus et publication sur download, preview, ZIP, extraction et indexation.",
+        "Préserver le contrôle de destination sans remplacer un refus de dossier par un droit plus large. Les assets publics restent séparés."
+      ],
+      "operations": [
+        "Surveiller scans PENDING, erreurs terminales, backlog ARQ/outbox, espace temporaire et intentions de suppression.",
+        "Le protocole chunks actuel n'est pas qualifié pour reprise sur un autre pod. La restauration cible combine index Iceberg, blobs et commandes PG, sans considérer un index de recherche comme autorité."
+      ],
+      "migration_steps": [
+        "Inventorier IDs, dossiers, blobs, corbeille et jobs ouverts.",
+        "Contrôler hash, immutabilité et audit avant adoption dans des éditions FILESET.",
+        "Basculer les sessions et lecteurs puis les traitements vers Rust, un corpus à la fois avec un seul Publisher.",
+        "Qualifier panne après publication avant ack, lecture de staging, reprise de chunks et GC sous retard de projection."
+      ],
+      "open_questions": [
+        "La différence de garde antivirus entre preview et download est observée statiquement ; son impact en déploiement n'a pas été testé.",
+        "L'adoption sans copie exige maîtrise de la version physique et de la conservation du blob.",
+        "Aucun scénario de charge, reprise, scan ou restauration n'a été exécuté dans ce lot."
+      ],
+      "evidence": [
+        {
+          "path": "services/files/src/file_management/main.py",
+          "line": 629,
+          "why": "Assemblage des API Files."
+        },
+        {
+          "path": "services/files/src/file_management/workers/worker.py",
+          "line": 80,
+          "why": "Tâches et maintenance du worker."
+        }
+      ]
+    },
+    {
+      "id": "whitelister",
+      "title": "Règles réseau entrantes et découverte des IP de sortie",
+      "purpose": "Permettre à l'exploitation de gérer les CIDR admis par l'ingress et d'identifier les adresses vues par les services externes. La découverte d'IP de sortie n'est pas une politique d'autorisation des destinations sortantes.",
+      "stack": "Python, FastAPI, SQLAlchemy asynchrone et PostgreSQL ; client Kubernetes, ConfigMaps et agent de découverte ; JWT/JWKS et limitation de débit.",
+      "source_dir": "services/whitelister",
+      "read_scope": [
+        "Routes, schémas CIDR et egress ; services whitelist, Kubernetes, egress et audit ; middleware et boucle de démarrage.",
+        "Agent de découverte et contrats chart repérés ; aucune opération Kubernetes exécutée."
+      ],
+      "capabilities": [
+        {
+          "id": "WL-01",
+          "title": "Créer et éditer une liste de CIDR admis",
+          "observed": "L'API normalise les CIDR, crée une règle ou un lot d'au plus cent, puis expose liste paginée et détail. Les règles manuelles ont init=false ; protected peut être déclaré à la création. Le lot écrit ses règles dans une transaction et refuse une collision d'unicité. PUT et PATCH modifient CIDR ou description ; une règle protégée ne peut être modifiée. Les écritures déclenchent ensuite la synchronisation Kubernetes.",
+          "actors": "Administrateurs réseau.",
+          "api": "POST/GET /api/v1/whitelist ; POST /api/v1/whitelist/bulk ; GET/PUT/PATCH /api/v1/whitelist/{rule_id}.",
+          "state": "WhitelistRule avec CIDR normalisés, description, protected, init et dates en PostgreSQL.",
+          "dependencies": "PostgreSQL et contrôleur de ConfigMap ingress.",
+          "target": "Un module de politique réseau Rust conserve les règles désirées, leur version et leur provenance. Le contrôleur Kubernetes applique une génération distincte, de sorte que l'API distingue accepté et appliqué.",
+          "migration": "Importer les règles manuelles et celles de configuration sans changer leur protection. Conserver normalisation, limites de lot et erreurs, puis basculer l'unique contrôleur de ConfigMap.",
+          "acceptance": "Un lot contenant un doublon n'écrit aucune règle. Une règle protected ne peut changer par PATCH. La réponse indique la génération effective lorsque la projection réseau est en retard.",
+          "evidence": [
+            {
+              "path": "services/whitelister/src/whitelister/schemas/whitelist.py",
+              "line": 13,
+              "why": "Normalisation du contrat."
+            },
+            {
+              "path": "services/whitelister/src/whitelister/services/whitelist_service.py",
+              "line": 157,
+              "why": "Transaction de lot et collision."
+            },
+            {
+              "path": "services/whitelister/src/whitelister/services/whitelist_service.py",
+              "line": 305,
+              "why": "Protection et mise à jour."
+            }
+          ]
+        },
+        {
+          "id": "WL-02",
+          "title": "Refuser le retrait de sa propre plage et des règles protégées",
+          "observed": "La suppression distingue introuvable, protégé et auto-exclusion. Une règle protégée donne un refus. Si l'adresse cliente se trouve dans l'un des CIDR de la règle, la suppression est aussi refusée et auditée. L'adresse vient de l'extraction du contexte réseau/proxy. Le code ignore une adresse impossible à parser dans ce contrôle ; le résultat dépend donc aussi de la confiance accordée aux headers proxy.",
+          "actors": "Administrateurs modifiant la liste d'accès réseau.",
+          "api": "DELETE /api/v1/whitelist/{rule_id} ; WhitelistService.delete_rule.",
+          "state": "Règle et audit de tentative bloquée ; aucune suppression pour les deux refus métier.",
+          "dependencies": "Extraction de l'IP par le proxy et journal d'audit.",
+          "target": "Le contrôleur Rust valide l'identité réseau de l'opérateur et la projection simulée avant retrait. Une procédure de secours bornée peut traiter un changement volontaire sans supprimer les garanties de l'API ordinaire.",
+          "migration": "Reprendre le contrat de refus et qualifier le calcul d'adresse derrière l'ingress réel. Ajouter un plan de changement qui évalue l'accès d'administration restant.",
+          "acceptance": "Un opérateur ne peut retirer la plage qui contient son adresse vérifiée. Un header de provenance forgé ne contourne pas ce contrôle. La tentative refusée reste visible dans l'audit.",
+          "evidence": [
+            {
+              "path": "services/whitelister/src/whitelister/services/whitelist_service.py",
+              "line": 226,
+              "why": "Protections et résultats de suppression."
+            },
+            {
+              "path": "services/whitelister/src/whitelister/api/routes.py",
+              "line": 346,
+              "why": "Correspondance des refus vers les réponses HTTP."
+            }
+          ]
+        },
+        {
+          "id": "WL-03",
+          "title": "Projeter les règles vers l'ingress et réinitialiser la configuration de démarrage",
+          "observed": "Le service lit toutes les règles, joint les CIDR puis met à jour une clé d'une ConfigMap Kubernetes. La synchronisation réessaie trois fois avec attente croissante ; après le dernier échec, elle journalise et ne remonte pas l'exception. Une création peut donc être enregistrée en base sans preuve que l'ingress l'a appliquée. POST sync relance cette projection. Au démarrage, les règles init sont supprimées et recréées depuis la configuration, y compris si elles étaient protégées.",
+          "actors": "Exploitation et automatisation du déploiement.",
+          "api": "POST /api/v1/whitelist/sync ; sync_to_kubernetes ; reset_init_rules ; KubernetesService.update_configmap.",
+          "state": "État désiré PostgreSQL et ConfigMap appliquée ; règles de démarrage distinctes des règles manuelles.",
+          "dependencies": "API Kubernetes et ingress NGINX consommateur de la ConfigMap.",
+          "target": "Un reconciler Rust garde génération désirée, génération observée et erreur durable. L'initialisation calcule un diff et ne traverse pas un état intermédiaire non voulu. Le statut appliqué exige la lecture de la projection effective.",
+          "migration": "Capturer la ConfigMap et comparer les CIDR normalisés à la base avant transfert. Désactiver l'ancien sync lorsque le nouveau contrôleur devient auteur. Préserver les règles manuelles lors d'un changement de configuration.",
+          "acceptance": "Une panne Kubernetes laisse l'opération pending ou failed, sans succès d'application trompeur. Un redémarrage avec la même configuration ne retire pas temporairement les règles attendues.",
+          "evidence": [
+            {
+              "path": "services/whitelister/src/whitelister/services/whitelist_service.py",
+              "line": 57,
+              "why": "Retries et erreur finale absorbée."
+            },
+            {
+              "path": "services/whitelister/src/whitelister/services/whitelist_service.py",
+              "line": 87,
+              "why": "Cycle de réinitialisation des règles init."
+            },
+            {
+              "path": "services/whitelister/src/whitelister/services/kubernetes_service.py",
+              "line": 28,
+              "why": "Écriture de la clé de ConfigMap."
+            }
+          ]
+        },
+        {
+          "id": "WL-04",
+          "title": "Découvrir les IP de sortie et maintenir leur règle",
+          "observed": "Des agents par nœud interrogent un service d'écho et publient leurs observations horodatées en ConfigMap. Le service agrège les IP, ajoute les overrides valides et signale les observations périmées, mais les conserve dans l'ensemble. GET egress-ips déduplique les IP et renvoie origine, nœud, date et warnings. Une boucle peut maintenir une règle protégée pour ces IP. Le rendu CIDR ajoute /32 à chaque IP ; la prise en charge IPv6 nécessite donc une vérification spécifique.",
+          "actors": "Exploitation et administrateurs d'intégrations externes.",
+          "api": "GET /api/v1/egress-ips ; egress_agent ; EgressService.get_all_egress_ips/upsert_egress_rule.",
+          "state": "Observations de nœuds en ConfigMap, overrides et règle protégée PostgreSQL.",
+          "dependencies": "Agents Kubernetes, service d'écho, ConfigMap et boucle de synchronisation.",
+          "target": "Egress Rust sépare observation réseau et politique des destinations autorisées. Le discovery garde fraîcheur, famille IP et preuve d'observation ; les connecteurs consomment une politique de sortie avec DNS/TLS et borne de périmètre, pas une simple liste d'IP vues.",
+          "migration": "Porter l'agent sans JVM ou le garder encapsulé, puis publier un contrat IPv4/IPv6 et une politique explicite de péremption. Maintenir les overrides nécessaires pendant le changement de topologie.",
+          "acceptance": "Une observation périmée est marquée et son effet suit une politique explicite. Une IPv6 produit un préfixe adapté. Une panne du service d'écho ne transforme pas une ancienne IP en observation fraîche.",
+          "evidence": [
+            {
+              "path": "services/whitelister/src/whitelister/egress_agent.py",
+              "line": 28,
+              "why": "Découverte et validation des réponses d'écho."
+            },
+            {
+              "path": "services/whitelister/src/whitelister/services/egress_service.py",
+              "line": 87,
+              "why": "Agrégation, overrides et données périmées."
+            },
+            {
+              "path": "services/whitelister/src/whitelister/services/egress_service.py",
+              "line": 145,
+              "why": "Règle protégée et construction de CIDR."
+            }
+          ]
+        },
+        {
+          "id": "WL-05",
+          "title": "Authentifier les administrateurs réseau et limiter les requêtes",
+          "observed": "Quand l'authentification est activée, le middleware exige un bearer vérifié par JWKS, signature, dates, issuer et audience ou azp configurés. Le contrôle de groupes accepte un nom de groupe ou un chemin complet. Les routes exclues et preflights suivent un parcours séparé. Lorsque l'authentification est désactivée, un token peut être vérifié seulement pour attribution d'audit ; l'absence de token n'est alors pas un refus. Les écritures ont une limite de débit et la découverte d'egress une borne spécifique.",
+          "actors": "Administrateurs réseau authentifiés.",
+          "api": "JWTAuthMiddleware.dispatch ; verify_access_token ; décorateurs limiter des routes.",
+          "state": "Utilisateur vérifié dans request.state ; cache de groupes requis et validation JWKS.",
+          "dependencies": "OIDC/JWKS, proxy et futur broker IAM.",
+          "target": "IAM Rust fournit une permission d'administration réseau explicite. Le service vérifie issuer, audience, sujet actif et décision ; le mode sans authentification reste une configuration isolée et déclarée, jamais une dégradation automatique.",
+          "migration": "Remplacer les groupes Keycloak par des relations métier sans perdre l'accès de secours prévu. Mettre à jour l'issuer/JWKS avec les autres services et qualifier les chemins de santé exclus.",
+          "acceptance": "Un JWT avec mauvaise signature, issuer ou audience est refusé. Un membre d'un groupe de nom voisin n'obtient pas le droit. Une panne du fournisseur ne désactive pas l'authentification.",
+          "evidence": [
+            {
+              "path": "services/whitelister/src/whitelister/middleware.py",
+              "line": 155,
+              "why": "Contrat de vérification, groupes et mode désactivé."
+            },
+            {
+              "path": "services/whitelister/src/whitelister/api/routes.py",
+              "line": 437,
+              "why": "Borne spécifique de découverte."
+            }
+          ]
+        },
+        {
+          "id": "WL-06",
+          "title": "Consulter les audits et distinguer santé de base et état réseau",
+          "observed": "Les opérations et refus alimentent un journal avec action, IP cliente, utilisateur et règle. Les routes listent avec filtres et pagination puis rendent un détail. Le helper général d'audit journalise et absorbe les erreurs d'écriture ; une action peut donc réussir sans audit durable confirmé. Le health contrôle une requête PostgreSQL, pas l'état effectif de l'ingress. Les métriques Prometheus sont exposées séparément.",
+          "actors": "Exploitation, support et auditeurs.",
+          "api": "GET /api/v1/audit ; GET /api/v1/audit/{log_id} ; GET /api/v1/health ; /metrics.",
+          "state": "AuditLog PostgreSQL et métriques de processus ; pas de génération réseau acquittée dans le contrat lu.",
+          "dependencies": "PostgreSQL, métriques Prometheus et contrôleur Kubernetes.",
+          "target": "Audit Rust conserve intention et résultat dans une transaction durable ; le contrôleur rapporte séparément application Kubernetes. La santé distingue API, base, retard de projection et découverte réseau.",
+          "migration": "Importer l'audit existant avec sa complétude déclarée. Ajouter identifiants de changement et reçus d'application avant de couper l'ancien service.",
+          "acceptance": "Une panne de journal n'est pas présentée comme une action intégralement auditée. Une base disponible et un ingress non synchronisé produisent deux états distincts. Un filtre ne révèle pas de secrets réseau ou credentials.",
+          "evidence": [
+            {
+              "path": "services/whitelister/src/whitelister/services/whitelist_service.py",
+              "line": 31,
+              "why": "Écriture d'audit sans remontée d'erreur."
+            },
+            {
+              "path": "services/whitelister/src/whitelister/api/routes.py",
+              "line": 499,
+              "why": "Filtres et pagination."
+            },
+            {
+              "path": "services/whitelister/src/whitelister/api/routes.py",
+              "line": 486,
+              "why": "Santé limitée à la connexion base."
+            }
+          ]
+        }
+      ],
+      "entities": [
+        "WhitelistRule porte CIDR, description et flags protected/init. AuditLog enregistre action et attribution.",
+        "Les observations EgressEntry sont horodatées par nœud, distinctes des règles de destinations sortantes."
+      ],
+      "dependencies": [
+        "PostgreSQL et Kubernetes Core API pour les ConfigMaps.",
+        "Ingress NGINX, agents par nœud, service d'écho et issuer/JWKS configuré."
+      ],
+      "target_domains": [
+        "Egress",
+        "IAM",
+        "Audit",
+        "Maintenance"
+      ],
+      "control_plane": [
+        "Gestion des règles désirées, approbation, générations, état de projection et audit durable.",
+        "Politique d'autorisation des destinations pour connecteurs à concevoir séparément de la découverte d'IP."
+      ],
+      "data_plane": [
+        "Le service actuel ne relaie pas le trafic applicatif. L'ingress applique les CIDR ; les agents observent la sortie réseau."
+      ],
+      "rust_core": [
+        "Normaliseur CIDR, planificateur de diff, reconciler Kubernetes et modèle d'observation réseau.",
+        "Adaptateur IAM et journal transactionnel pour les changements."
+      ],
+      "security": [
+        "La confiance dans l'IP cliente dépend du proxy ; conserver une attribution vérifiée.",
+        "La découverte ne constitue pas une barrière anti-exfiltration. La cible doit contrôler les destinations et les capacités de chaque run."
+      ],
+      "operations": [
+        "Surveiller divergence base/ConfigMap, âge des observations et erreurs d'audit.",
+        "Le startup remplace actuellement les règles init ; tester les changements de configuration et les échecs Kubernetes avant remplacement."
+      ],
+      "migration_steps": [
+        "Comparer règles en base et projection ingress.",
+        "Déployer un reconciler Rust en observation puis transférer l'écriture de ConfigMap.",
+        "Porter authz, audit et discovery en gardant une procédure de secours bornée."
+      ],
+      "open_questions": [
+        "Le traitement IPv6 et la conservation des observations périmées doivent être contractualisés.",
+        "Le lot n'a pas exécuté de mutation réseau ni de test d'auto-exclusion.",
+        "Le succès du sync actuel n'est pas une preuve que tous les contrôleurs ingress ont chargé la règle."
+      ],
+      "evidence": [
+        {
+          "path": "services/whitelister/src/whitelister/main.py",
+          "line": 43,
+          "why": "Boucle de synchronisation des IP de sortie."
+        },
+        {
+          "path": "services/whitelister/src/whitelister/main.py",
+          "line": 70,
+          "why": "Initialisation et tâches de fond."
+        }
+      ]
+    },
+    {
+      "id": "migration-orchestrator",
+      "title": "Format et validation des migrations transverses",
+      "purpose": "Définir et vérifier un corpus de migrations de cluster hors schémas propres aux services. Le dépôt contient des outils de validation utilisables ; il ne livre pas encore de service d'exécution.",
+      "stack": "Python, Pydantic, PyYAML et CLI cleyrop-migrate-lint. Aucun exécuteur, API HTTP, schéma de runs, Dockerfile ou chart dans l'état documenté et le périmètre de fichiers lu.",
+      "source_dir": "services/migration-orchestrator",
+      "read_scope": [
+        "README, pyproject, corpus/schema.py, loader.py, targeting.py et lint/manifest.py lus.",
+        "Absence de migration livrée indiquée par le composant ; aucune commande d'application exécutée."
+      ],
+      "capabilities": [
+        {
+          "id": "MO-01",
+          "title": "Valider la structure d'un manifeste de migration",
+          "observed": "Le modèle impose apiVersion cleyrop.tech/v1, kind Migration, un nom non vide, une version entière positive et au moins une étape. Chaque étape possède nom, executor sql/kubectl/shell, precheck et verify non vides ; apply est optionnel. Les noms d'étape doivent être uniques et les champs supplémentaires sont refusés. Cette validation décrit un contrat ; elle n'exécute ni SQL ni commande système.",
+          "actors": "Auteurs de migrations et relecteurs.",
+          "api": "corpus.schema.Migration ; Step ; Targets ; Migration.model_validate.",
+          "state": "Manifestes YAML et objets Pydantic en mémoire ; aucun run persistant.",
+          "dependencies": "Pydantic et format YAML du corpus.",
+          "target": "Migration Rust porte le même contrat versionné avec actions typées, droits et empreinte du manifeste. Le runner futur distingue observation, application et vérification, sans remplacer les migrations de schéma possédées par chaque service.",
+          "migration": "Porter les fixtures valides et invalides vers le validateur Rust. Conserver les champs historiques ou définir une conversion explicite ; refuser les commandes non couvertes par le contrat.",
+          "acceptance": "Un manifeste sans verify, avec étape dupliquée ou champ inconnu est refusé avant toute action. Une validation réussie ne crée aucun effet externe.",
+          "evidence": [
+            {
+              "path": "services/migration-orchestrator/src/migration_orchestrator/corpus/schema.py",
+              "line": 57,
+              "why": "Contrat des étapes et blocs requis."
+            },
+            {
+              "path": "services/migration-orchestrator/src/migration_orchestrator/corpus/schema.py",
+              "line": 112,
+              "why": "Version, types et unicité des étapes."
+            }
+          ]
+        },
+        {
+          "id": "MO-02",
+          "title": "Charger un corpus dans un ordre déterministe et refuser les doublons",
+          "observed": "Le chargeur parcourt les sous-répertoires dans l'ordre lexicographique, ignore fichiers racine et dossiers commençant par point ou underscore, et exige manifest.yaml dans les autres dossiers. Il utilise un chargement YAML sûr, exige un mapping racine puis valide le modèle. Les erreurs conservent le chemin source. load garde le répertoire d'origine de chaque migration et refuse deux migrations portant le même nom, même dans deux dossiers distincts.",
+          "actors": "Auteurs du corpus et opérateurs.",
+          "api": "corpus.loader.discover ; load_manifest ; load ; CorpusError ; LoadedMigration.",
+          "state": "Liste ordonnée de manifestes validés et chemins de ressources relatives.",
+          "dependencies": "Système de fichiers du corpus et validateur de schéma.",
+          "target": "Le chargeur Rust fige un corpus et son digest avant exécution. Le runner persiste nom, version, hash, ordre et références de fichiers nécessaires pour qu'une reprise ne lise pas un corpus modifié silencieusement.",
+          "migration": "Conserver l'ordre des préfixes et les erreurs localisées. Ajouter une politique de chemin pour les ressources de commande avant de permettre un exécuteur sql_file.",
+          "acceptance": "Un dossier sans manifeste ou un nom dupliqué bloque le chargement. Une reprise avec le même nom/version mais un contenu différent est refusée tant qu'un changement de plan n'est pas approuvé.",
+          "evidence": [
+            {
+              "path": "services/migration-orchestrator/src/migration_orchestrator/corpus/loader.py",
+              "line": 64,
+              "why": "Découverte déterministe et dossiers ignorés."
+            },
+            {
+              "path": "services/migration-orchestrator/src/migration_orchestrator/corpus/loader.py",
+              "line": 131,
+              "why": "Rejet des noms de migration dupliqués."
+            }
+          ]
+        },
+        {
+          "id": "MO-03",
+          "title": "Déterminer si une migration cible le cluster",
+          "observed": "targets.clusters comporte include et exclude. La valeur all dans include cible tous les clusters ; exclude prend toujours le dessus. Une liste include vide ne cible rien. Le matching est une comparaison des noms fournis, sans découverte de labels Kubernetes. La fonction retourne uniquement un booléen ; aucun saut ou run n'est encore persisté.",
+          "actors": "Exploitation multi-clusters.",
+          "api": "corpus.targeting.applies_to ; corpus.schema.Targets.",
+          "state": "Nom de cluster et listes de ciblage du manifeste.",
+          "dependencies": "Nom de cluster fourni par la configuration de l'outil.",
+          "target": "Migration Rust fige la décision de ciblage avec identité stable du cluster, version de plan et motif appliqué/ignoré. Une migration ne doit pas toucher un cluster hors scope même si son nom ou sa configuration dérive en cours de run.",
+          "migration": "Reprendre les tests de la matrice include/all/exclude. Définir comment les noms historiques correspondent à une identité de cluster avant adoption du runner.",
+          "acceptance": "Un cluster présent à la fois dans include et exclude est ignoré. include vide ne lance rien. La preuve de ciblage reste attachée au run repris.",
+          "evidence": [
+            {
+              "path": "services/migration-orchestrator/src/migration_orchestrator/corpus/targeting.py",
+              "line": 27,
+              "why": "Priorité de exclude et sémantique de all."
+            }
+          ]
+        },
+        {
+          "id": "MO-04",
+          "title": "Détecter les incohérences entre exécuteur et blocs d'action",
+          "observed": "Le linter complète le schéma par des contrôles sémantiques. Il vérifie que precheck, apply et verify ne contiennent que les clés admises et que chaque bloc contient une entrée adaptée à executor. sql_file est admis à la place de sql uniquement pour apply. target_db vide est refusé pour SQL ; target_db est interdit aux autres types. Un ciblage dont include et exclude sont tous deux vides est signalé. Les contrôles portent la structure, pas la sûreté ni l'idempotence du SQL ou du shell.",
+          "actors": "Auteurs et reviewers de manifests.",
+          "api": "lint.manifest._lint_migration ; _lint_step ; _lint_block ; LintIssue.",
+          "state": "Liste de problèmes localisés par manifeste et étape.",
+          "dependencies": "Schéma partagé et chargeur YAML.",
+          "target": "Un validateur Rust conserve ces règles puis ajoute politique d'exécution, analyse des chemins, périmètre des credentials et préconditions de schéma. Le résultat lint reste distinct d'une preuve de migration réussie.",
+          "migration": "Porter les diagnostics et leurs fixtures. Fermer l'écart du linter global qui charge chaque manifeste individuellement et ne passe pas par la vérification des noms dupliqués de load.",
+          "acceptance": "Un bloc kubectl sous executor sql est refusé. sql_file dans verify est refusé. Deux noms identiques sont aussi détectés par la commande lint finale, au même titre que par le chargeur.",
+          "evidence": [
+            {
+              "path": "services/migration-orchestrator/src/migration_orchestrator/lint/manifest.py",
+              "line": 79,
+              "why": "Cohérence target_db et blocs."
+            },
+            {
+              "path": "services/migration-orchestrator/src/migration_orchestrator/lint/manifest.py",
+              "line": 138,
+              "why": "Clés autorisées et correspondance avec executor."
+            },
+            {
+              "path": "services/migration-orchestrator/src/migration_orchestrator/lint/manifest.py",
+              "line": 36,
+              "why": "Parcours individuel qui ne vérifie pas les noms au niveau corpus."
+            }
+          ]
+        },
+        {
+          "id": "MO-05",
+          "title": "Fournir une commande de validation avec codes de sortie exploitables",
+          "observed": "Le paquet expose cleyrop-migrate-lint et un point d'entrée python -m migration_orchestrator.lint. La commande reçoit un répertoire, collecte les problèmes, les écrit sur stderr avec chemin et étape puis retourne 1. Si aucun problème n'est trouvé, elle annonce le nombre de migrations et retourne 0 ; un corpus vide peut donc réussir. Aucun cleyrop-migrate apply, API, worker d'exécution ou table de runs n'est livré dans le code lu. Le README précise aussi l'absence d'intégration CI/hook à cette étape.",
+          "actors": "Développeurs, CI et futurs opérateurs de migration.",
+          "api": "cleyrop-migrate-lint <corpus_path> ; python -m migration_orchestrator.lint <corpus_path> ; lint.manifest.main.",
+          "state": "Sortie de commande et diagnostics ; pas d'historique d'exécution durable.",
+          "dependencies": "Packaging Python actuel ; futur runner Rust et API Kubernetes/SQL.",
+          "target": "La CLI Rust sépare lint, plan, apply, inspect et retry. Un runner futur prend un verrou et une époque, exécute des runs bornés, conserve preuves precheck/apply/verify et rend un reçu durable. L'autorité des commandes de migration reste PostgreSQL ; elle ne remplace pas les checkpoints publiés des datasets.",
+          "migration": "Livrer d'abord le validateur compatible et son branchement CI. Construire ensuite un runner avec tests de crash et restauration avant toute première migration transverse réelle ; ne pas présenter les commandes futures comme existantes.",
+          "acceptance": "Une validation invalide retourne non-zéro avec un chemin exploitable. Un corpus vide est rendu explicitement. Le futur apply interrompu entre action et verify reprend par precheck sans doubler l'effet.",
+          "evidence": [
+            {
+              "path": "services/migration-orchestrator/src/migration_orchestrator/lint/manifest.py",
+              "line": 183,
+              "why": "Contrat CLI et codes de sortie."
+            },
+            {
+              "path": "services/migration-orchestrator/src/migration_orchestrator/lint/__main__.py",
+              "line": 6,
+              "why": "Point d'entrée module."
+            }
+          ]
+        }
+      ],
+      "entities": [
+        "Migration possède nom/version/ciblage et liste d'étapes ordonnées ; Step décrit precheck/apply/verify.",
+        "LoadedMigration conserve le dossier source ; CorpusError et LintIssue localisent une erreur. Aucun objet Run durable n'est constaté."
+      ],
+      "dependencies": [
+        "Pydantic et PyYAML pour les outils présents.",
+        "Les exécuteurs SQL/Kubernetes/shell sont seulement des valeurs du schéma et une cible de conception, pas des adaptateurs exécutables livrés."
+      ],
+      "target_domains": [
+        "Migration",
+        "Audit",
+        "Maintenance",
+        "IAM"
+      ],
+      "control_plane": [
+        "Corpus immuable identifié par hash, plans ciblés, approbations concrètes, états durables et preuves d'application.",
+        "Les migrations de schéma locales restent détenues par leur service et suivent Expand/Migrate/Contract."
+      ],
+      "data_plane": [
+        "Aucun plan d'exécution livré aujourd'hui. La cible lance des jobs bornés avec credentials propres au cluster et à l'action, puis vérifie le résultat."
+      ],
+      "rust_core": [
+        "Validateur et chargeur compatibles ; planificateur de ciblage ; runner et magasin de reçus à construire.",
+        "Adaptateurs SQL et Kubernetes étroitement typés ; shell uniquement dans un périmètre déclaré et auditable."
+      ],
+      "security": [
+        "Un manifeste validé n'est pas une autorisation d'exécuter son contenu.",
+        "Le runner doit borner namespace, base et permissions, conserver l'acteur et ne pas inclure de credentials dans ses manifestes ou rapports."
+      ],
+      "operations": [
+        "Le composant actuel est une bibliothèque/CLI de validation, sans service à déployer ni corpus de migration rempli.",
+        "L'exploitation cible exige exclusion concurrente, reprise, délais, observabilité et restauration avant adoption d'une première action réelle."
+      ],
+      "migration_steps": [
+        "Porter les contrats et fixtures de validation sans créer de faux parcours d'application.",
+        "Brancher lint sur la CI et vérifier noms uniques au niveau corpus.",
+        "Construire stockage de runs, verrou/époque et exécuteurs ; qualifier une migration canari réexécutable.",
+        "Ajouter déploiement et intégration des mises à niveau seulement après preuve de reprise."
+      ],
+      "open_questions": [
+        "Le runner, ses credentials, la table de runs et l'API ne sont pas implémentés dans le périmètre constaté.",
+        "La politique de résolution de sql_file et d'immuabilité du corpus doit précéder son exécution.",
+        "Le commentaire du linter suggère un include vide explicite pour une migration garée, mais le code signale tout ciblage où include et exclude sont vides ; ce comportement doit être clarifié.",
+        "Aucun lint ni test du composant n'a été exécuté dans ce lot."
+      ],
+      "evidence": [
+        {
+          "path": "services/migration-orchestrator/README.md",
+          "line": 21,
+          "why": "État actuel, outils présents et absence du runner/deploiement."
+        },
+        {
+          "path": "services/migration-orchestrator/pyproject.toml",
+          "line": 16,
+          "why": "Unique commande livrée cleyrop-migrate-lint."
+        }
+      ]
+    }
+  ]
+}

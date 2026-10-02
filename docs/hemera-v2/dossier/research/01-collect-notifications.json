@@ -1,0 +1,1917 @@
+{
+  "mission": "01-collect-notifications",
+  "scope": "Audit fonctionnel et technique de services/data-collect et services/notification-center, fondé sur le code local et ses instructions ; proposition de migration Hemera sans JVM.",
+  "source_revision": "ba0f34e732e582fc362933b8e55544af04208cb8",
+  "verification": {
+    "method": "Lecture statique des controllers, DTO, modèles, handlers, implémentations, consumers, contrats, migrations, configurations et charts. Aucune modification des dépôts sources.",
+    "execution": "Aucun service, connecteur, test Gradle, test Docker ou scénario de panne exécuté. Les rubriques acceptance décrivent des critères futurs, jamais des résultats acquis.",
+    "confidence": "Les observations sont limitées au code lu. Les anomalies de mapping, concurrence, reprise ou comportement de déploiement non reproduites restent des scénarios à confirmer.",
+    "target_status": "Architecture et découpage Rust proposés selon le brief ; aucun substitut technique n'est déclaré qualifié."
+  },
+  "services": [
+    {
+      "id": "data-collect",
+      "title": "Connexions, dépôts et collectes de datasets",
+      "purpose": "Le service administre les sources et dépôts, aide à choisir et vérifier une lecture, collecte les octets dans le stockage d'import, planifie les reprises et échange les états avec data-dev, data-model et process-data. Il sert aussi les fichiers destinés aux corpus IA et le catalogue de sources du SDK Python.",
+      "stack": "Kotlin 2.4.10 et Spring Boot 4.1.1 observés dans le catalogue Gradle ; modules domaine et adaptateurs Spring ; PostgreSQL/JPA/Flyway, Quartz JDBC, Kafka/Protobuf, SSH, client S3, JDBC et Parquet/Hadoop sur JVM.",
+      "source_dir": "services/data-collect",
+      "read_scope": [
+        "AGENTS.md du service et règle Helm commune.",
+        "Tous les contrôleurs REST : datasource, fichiers, ingestion IA, permission, historique, KPI, config dataset, propriétaires, SFTP et administration.",
+        "Registres et variantes de DTO de connexion/configuration/format ; agrégats datasource, dataset, permission, fichiers et schedules.",
+        "Handlers de création, modification, suppression, partage, preview, contrôle de schéma, import, refresh, finalisation, dépôt et transfert de propriété.",
+        "Factory et managers JDBC/API/S3/SFTP/local, stratégies API de pagination/découverte/authentification, stockage S3, cache de listing, chiffrement et reprise.",
+        "Consumers data-model/process-data/Depot/IAM, droits résiduels, scheduler et démarrage ; chart Deployment, NetworkPolicy et HPA.",
+        "Inventaire des tests de contrats concernés ; aucun build, test applicatif, cluster ou connecteur distant exécuté."
+      ],
+      "capabilities": [
+        {
+          "id": "DC-01",
+          "title": "Enregistrer et faire évoluer une datasource",
+          "observed": "Une datasource porte un UUID, un nom, une description, un propriétaire, une sensibilité, un connecteur, un état et un historique. Le DTO de création permet un propriétaire explicite et applique ses propres valeurs par défaut. Le manager du connecteur construit les descripteurs initiaux. La modification conserve les secrets laissés vides et interdit de changer de type de connecteur. La suppression retire les liens projet et les configurations de collecte, demande la suppression des imports, puis émet les événements de suppression. La création publie un fait de propriété et attend sa visibilité dans IAM. Les erreurs métier ne suivent pas toutes la même convention HTTP, certains handlers renvoient null puis 400.",
+          "actors": "Gestionnaires de sources, propriétaires, administrateurs et créations automatiques depuis un dépôt.",
+          "api": "POST /datasources ; GET /datasources/{id} ; PUT /datasources/{id} ; DELETE /datasources/{id}.",
+          "state": "DataSource, Connector, ResourceDescriptor, DataSourceHistory et UsageRecord en PostgreSQL. SUCCESS, WARNING et FAILURE décrivent la source.",
+          "dependencies": "ConnectorFactory ; stockage objet des imports ; événements DatasourceCreateEvent, DatasourceUpdateEvent, DatasourceDeleteEvent ; IAM pour la visibilité du propriétaire.",
+          "target": "Connectors devient propriétaire des définitions de connexion en Rust. Datasets référence leur UUID et une révision immuable de configuration. Toute opération possède un identifiant idempotent, un acteur et un tenant.",
+          "migration": "Importer les UUID et les références existantes. Séparer la désactivation de source de la suppression physique des données. Fournir un adaptateur de routes et expliciter les erreurs de création et de modification.",
+          "acceptance": "Créer une source, modifier sa description sans renvoyer son secret, puis relire ses capacités. Une modification de type est refusée. Supprimer une source liée produit un état de retrait traçable sans supprimer une édition publiée.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/controller/DataSourceController.kt",
+              "line": 190,
+              "why": "Création, visibilité IAM et routes de modification/suppression."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/datasource/aggregate/DataSource.kt",
+              "line": 101,
+              "why": "Immutabilité du type et calcul des changements."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/datasource/command/DeleteDataSourceCommandHandler.kt",
+              "line": 42,
+              "why": "Effets de la suppression sur liens, collectes et imports."
+            }
+          ]
+        },
+        {
+          "id": "DC-02",
+          "title": "Chercher des sources accessibles et les exposer à la bibliothèque Python",
+          "observed": "La liste combine recherche textuelle, tri, pagination, projet, types de connecteurs, sensibilités et statuts des demandes. Elle récupère les UUID candidats puis interroge IAM avant la pagination visible. Le mode notRequested suit un parcours distinct où visibleIds reste null. Les UUID de projet entrants sont traduits vers les anciennes clés de stockage. La bibliothèque Python dispose d'une route propre qui ne retient que les sources acceptées dans le projet et applique la même visibilité IAM. Une ancienne variante sélectionnée par User-Agent pylib subsiste et est dépréciée.",
+          "actors": "Utilisateurs de catalogue, membres de projets, notebooks et bibliothèque Python.",
+          "api": "GET /datasources ; GET /lib/datasources?projectId=... ; ancienne variante GET /datasources sélectionnée par User-Agent.",
+          "state": "Permissions projet, miroirs de projets, correspondances IAM/legacy et pagination calculée sur les candidats autorisés.",
+          "dependencies": "IamDatasourceVisibilityClient et ProjectIdMap ; contrats consommés par les frontends et les bibliothèques.",
+          "target": "Catalog et Connectors servent une recherche filtrée par IAM avec pagination stable. Le SDK Python consomme les mêmes identifiants canoniques et ne reçoit aucune capacité de connexion permanente.",
+          "migration": "Conserver les filtres et formes de réponse du SDK pendant la transition. Retirer la sélection par User-Agent après migration des clients. Définir le contrat exact de notRequested avant sa reprise.",
+          "acceptance": "Un membre voit seulement les sources autorisées sur chaque page et dans le SDK. Les totaux reflètent ce filtrage. Un même projet envoyé sous son ancien ou son nouvel UUID ne crée pas deux partitions de droits.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/controller/DataSourceController.kt",
+              "line": 90,
+              "why": "Filtres et vérification des candidats par IAM."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/controller/DataSourceForLibController.kt",
+              "line": 45,
+              "why": "Route SDK, sources acceptées et dépréciation."
+            }
+          ]
+        },
+        {
+          "id": "DC-03",
+          "title": "Demander et décider un accès projet à une source",
+          "observed": "Un membre demande l'activation d'une source dans un projet avec un commentaire. Le handler réutilise une demande déjà acceptée ou en attente ; une demande refusée permet une nouvelle demande. Il stocke le demandeur et le projet, émet un événement de permission, notifie la demande et abonne le demandeur aux réponses INAPP. Le décideur ne peut fixer que ACCEPTED ou REFUSED et ajoute justification, date et validateur. L'acceptation publie un fait de lien, le refus un fait de révocation. Une route liste les demandes filtrées et paginées.",
+          "actors": "Membres de projet, responsables de sources et administrateurs selon les routes IAM.",
+          "api": "POST /datasources/{id}/projects/{projectId} ; POST /datasources/permissions/{permissionId}/{permission} ; GET /datasources/permissions.",
+          "state": "DataSourceProjectPermission : REQUESTED, ACCEPTED ou REFUSED ; auteur, commentaire, validateur, justification et horodatages.",
+          "dependencies": "Notifications de demande/réponse ; abonnement automatique ; IAM reçoit les faits de lien via outbox.",
+          "target": "IAM tranche les droits, Connectors garde le workflow de demande et Audit son historique. Le lien approuvé donne un droit d'usage, sans exposer les credentials au projet.",
+          "migration": "Reprendre les demandes actives et les décisions passées en conservant les identifiants. Dédupliquer par source/projet/demande et reconstruire les faits IAM avant bascule.",
+          "acceptance": "Deux envois d'une demande active retournent le même dossier. Un refus motivé laisse une trace et permet une nouvelle demande. Une acceptation devient visible dans le SDK puis une révocation retire l'accès.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/datasource/command/CreateDataSourceLinkToProjectCommandHandler.kt",
+              "line": 43,
+              "why": "Création, notifications et abonnements de réponse."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/datasource/command/AcceptDataSourceLinkToProjectCommandHandler.kt",
+              "line": 43,
+              "why": "Décision et faits IAM."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/controller/DataSourcePermissionController.kt",
+              "line": 65,
+              "why": "Routes et traduction des UUID projet."
+            }
+          ]
+        },
+        {
+          "id": "DC-04",
+          "title": "Auditer les changements et compter les sources et propriétaires",
+          "observed": "L'historique présente les créations et modifications, de la plus récente à la plus ancienne. Les changements conservent les valeurs avant/après des champs non secrets ; un changement de secret conserve seulement le nom du champ concerné. La recherche peut porter sur les champs modifiés et leurs valeurs. Les routes KPI de source et de dépôt renvoient des comptages. Le contrôle de propriétaire consulte séparément les sources et les datasets publics pour préparer les transferts de propriété.",
+          "actors": "Propriétaires, administrateurs, parcours de départ utilisateur et support.",
+          "api": "GET /datasources/{id}/history ; GET /kpi/datasources ; GET /sftp-accesses/kpi ; GET /users/{userId}/check-owner.",
+          "state": "DataSourceHistory et DataSourceFieldChange ; journaux UsageRecord ; relations de propriété.",
+          "dependencies": "Repositories de sources, collectes et dépôts ; miroirs des auteurs.",
+          "target": "Audit conserve des événements signés logiquement par acteur, commande et révision. Catalog fournit les compteurs avec une définition de périmètre tenant. IAM utilise un inventaire de propriété pour les départs.",
+          "migration": "Convertir les historiques existants sans réintroduire les anciennes valeurs secrètes. Versionner les noms de champs recherchables et conserver les références d'auteur même après désactivation.",
+          "acceptance": "Une rotation de credential apparaît dans l'historique sans valeur avant/après. Une recherche sur connector.host retrouve les modifications attendues. Les compteurs restent limités au tenant demandé.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/datasource/aggregate/DataSource.kt",
+              "line": 135,
+              "why": "Diff des champs ordinaires et SecretChange sans contenu."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/controller/DataSourceHistoryController.kt",
+              "line": 21,
+              "why": "Filtres de l'historique."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/dataset/controller/UserController.kt",
+              "line": 21,
+              "why": "Contrôle des propriétés de source et dataset public."
+            }
+          ]
+        },
+        {
+          "id": "DC-05",
+          "title": "Tester une connexion et réutiliser un secret masqué",
+          "observed": "Le test d'une nouvelle connexion reçoit un ConnectorDTO. Le test d'une source persistée utilise une route portant l'UUID ; le paramètre historique datasourceId sur la route générale est refusé en 422. Pour une source existante, les secrets vides sont remplacés par les secrets stockés, puis le manager vérifie la connexion. Le résultat expose un booléen et une catégorie d'erreur, sans renvoyer le message brut d'exception. Les DTO sortants passent par maskSecrets. Les secrets vides lors d'une modification ont aussi une sémantique de conservation.",
+          "actors": "Créateurs et gestionnaires de connexions.",
+          "api": "POST /datasources/check ; POST /datasources/{id}/check ; Connector.toDTO ; Connector.withStoredSecrets.",
+          "state": "Configuration soumise et éventuelle configuration persistée ; absence de mutation de la définition requise pour un simple test.",
+          "dependencies": "Managers JDBC, SFTP, S3 et HTTP ; catalogue ConnectionErrorType ; credentials déchiffrés côté service.",
+          "target": "Connectors exécute un test borné avec la révision et la référence de secret autorisées. Egress décide les destinations et Audit consigne la catégorie d'échec sans credential.",
+          "migration": "Conserver le contrat de masquage et le comportement des champs vides. Remplacer ce mécanisme ambigu à terme par une commande explicite preserve/replace/clear.",
+          "acceptance": "Un test sur une source masquée réussit avec son secret stocké ; un nouvel endpoint arbitraire ne peut pas réutiliser un secret non autorisé. Un refus distant retourne une catégorie stable sans texte confidentiel.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/controller/DataSourceController.kt",
+              "line": 155,
+              "why": "Deux routes de test et rejet du paramètre historique."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/datasource/query/DatasourceCheckQueryHandler.kt",
+              "line": 38,
+              "why": "Fusion des secrets et catégories d'erreur."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/controller/dto/connector/ConnectorDTO.kt",
+              "line": 107,
+              "why": "Masquage systématique des DTO sortants."
+            }
+          ]
+        },
+        {
+          "id": "DC-06",
+          "title": "Chiffrer et faire tourner les credentials de connexion",
+          "observed": "Les nouveaux credentials utilisent une enveloppe AES-GCM versionnée avec identifiant de génération, nonce aléatoire et données associées. Le décodeur sait encore lire l'ancien format CBC. Une génération précédente peut coexister avec l'actuelle ; la sélection de clé legacy devient explicite en présence des deux. La rotation vérifie même une enveloppe déjà courante. Le ré-encrypteur parcourt les champs de secrets et les entrées API headers/params/body dans le JSON persistant. Une donnée illisible lève une erreur contextualisée par chemin, sans la convertir en chaîne vide.",
+          "actors": "Opérateurs de secrets et migration de connexions.",
+          "api": "AttributeEncryptor.encoder/decoder/rotate ; DatasourceCredentialReEncryptor.reEncrypt ; runner de ré-encryption.",
+          "state": "Payload JSON datasource chiffré, générations actuelle et précédente ; l'enveloppe porte la version et la clé logique.",
+          "dependencies": "Secrets de déploiement ; partage historique de la clé avec data-dev signalé dans AGENTS.md.",
+          "target": "Connectors et IAM utilisent des références de secrets. Un module Rust de compatibilité déchiffre les enveloppes existantes, puis les migre vers un stockage de secrets avec génération, droits et journaux de rotation.",
+          "migration": "Lire le guide de rotation avant toute opération. Migrer par lots vérifiables et ré-exécutables, conserver l'ancienne génération jusqu'à preuve que tous les lecteurs ont basculé, puis révoquer.",
+          "acceptance": "Une enveloppe de chaque génération connue reste lisible pendant la transition. Une altération est rejetée. Relancer un lot ne modifie pas une enveloppe déjà validée et aucun journal ne contient le secret.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/utils/AttributeEncryptor.kt",
+              "line": 65,
+              "why": "Formats de lecture et rotation authentifiée."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/utils/AttributeEncryptor.kt",
+              "line": 128,
+              "why": "Nonce, chiffrement GCM et données associées."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/utils/DatasourceCredentialReEncryptor.kt",
+              "line": 41,
+              "why": "Réécriture du payload et champs couverts."
+            }
+          ]
+        },
+        {
+          "id": "DC-07",
+          "title": "Découvrir et extraire les tables SQL",
+          "observed": "Le manager JDBC découvre schémas, tables et vues, normalise les types de table et conserve les UUID de descripteurs lors d'une redécouverte. Il applique des règles propres à PostgreSQL, MySQL, SQL Server, Oracle et Snowflake, y compris certaines vues matérialisées ou tables externes. Le preview lit un nombre limité de lignes. L'import lit un flux JDBC, écrit un fichier Parquet local compressé puis l'envoie au bucket d'import. Les comptes de lignes et colonnes sont recalculés séparément. BIGQUERY est déclaré mais sa sélection de driver est vide dans le code audité ; son fonctionnement ne peut pas être affirmé.",
+          "actors": "Analystes qui importent des tables, gestionnaires de connexions SQL et workers de collecte.",
+          "api": "GET /datasources/{id}/resources ; GET /datasources/{id}/datasets/query ; JdbcConnectorManager.list/read/import.",
+          "state": "TableDescriptor avec table, schéma, type et identifiant stable ; schémas inférés ; Parquet temporaire et objet d'import.",
+          "dependencies": "Drivers JDBC et bibliothèques Parquet/Hadoop JVM ; bases externes ; stockage compatible S3.",
+          "target": "Connectors fournit des lecteurs Rust ou des tiers Go/C++ encapsulés et qualifiés par moteur. Writer transforme des lots bornés en fichiers immuables, sans droit REST Iceberg générique. Publisher publie les éditions TABLE/INCREMENTAL.",
+          "migration": "Construire une matrice de qualification par moteur, type de colonne, pagination et stratégie snapshot. Remplacer les drivers JVM un par un ; ne pas déclarer BIGQUERY pris en charge sans un adaptateur exécutable.",
+          "acceptance": "Pour chaque moteur retenu, importer une table avec décimaux, valeurs nulles, fuseaux et noms de colonnes particuliers. Comparer lignes, types et valeurs à une extraction de référence et vérifier une reprise sans doublon.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/manager/connector/JdbcConnectorManager.kt",
+              "line": 103,
+              "why": "Découverte et conservation des descripteurs."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/manager/connector/JdbcConnectorManager.kt",
+              "line": 630,
+              "why": "Flux JDBC, Parquet local puis S3."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/manager/connector/JdbcConnectorManager.kt",
+              "line": 736,
+              "why": "Drivers associés aux types dont BIGQUERY vide."
+            }
+          ]
+        },
+        {
+          "id": "DC-08",
+          "title": "Valider une requête SQL personnalisée sur une table",
+          "observed": "Une configuration SQL peut fournir customQuery. Le validateur parse exactement une instruction SELECT simple. Il refuse les JOIN, les CTE et les sous-requêtes et exige que la table, et le schéma quand il est connu, correspondent au descripteur sélectionné. Le preview et la création appellent cette validation. Les colonnes peuvent être inférées à partir des métadonnées du résultat, puis l'import utilise la requête. Ce contrat n'est donc pas un moteur SQL général ni une garantie de lecture sans effet propre au compte distant.",
+          "actors": "Analystes et auteurs de configurations de collecte SQL.",
+          "api": "Champ customQuery des configurations SQL ; routes datasets/preview et datasets/headers ; CustomQueryValidator.validate.",
+          "state": "Requête rattachée au dataset et schéma calculé sur son résultat, avec descripteur de la table source.",
+          "dependencies": "JSQLParser, métadonnées JDBC et compte distant.",
+          "target": "Connectors possède un sous-langage de lecture explicite et validé. Les transformations SQL générales appartiennent à Flows/Query. Le compte externe est en lecture seule et Egress borne la durée et les volumes.",
+          "migration": "Versionner la grammaire et reprendre les requêtes acceptées sans élargir silencieusement leurs droits. Prévoir une migration explicite vers Flows pour les demandes de jointure.",
+          "acceptance": "Une projection filtrée de la table sélectionnée est acceptée. Une seconde instruction, un JOIN, une CTE ou une table différente est refusé avant toute exécution distante.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/CustomQueryValidatorImpl.kt",
+              "line": 21,
+              "why": "Validation syntaxique et table cible."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/dataset/query/PreviewDatasetConfigQueryHandler.kt",
+              "line": 115,
+              "why": "Utilisation du validateur dans le preview."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/dataset/command/CreateCollectFromDatasourceCommandHandler.kt",
+              "line": 287,
+              "why": "Inférence du schéma de customQuery."
+            }
+          ]
+        },
+        {
+          "id": "DC-09",
+          "title": "Appeler des API avec authentification et reprises HTTP",
+          "observed": "Le connecteur API combine URL de base, endpoint, paramètres, en-têtes et méthode. L'authentification peut être absente, Basic ou fondée sur un endpoint de jeton. Ce dernier accepte GET/POST et injecte le token dans un header ou un paramètre selon un motif ; le cache tient compte d'une durée de vie fournie. Le transport distingue refus d'identité, refus d'accès, absence d'endpoint, timeout et autres statuts. Il réessaie selon un budget de temps et une politique de backoff, interprète Retry-After et peut invalider un token sur 401. Les téléchargements consomment un flux et suppriment un fichier partiel lors d'un échec.",
+          "actors": "Gestionnaires de connexions HTTP et collectes de données SaaS.",
+          "api": "APIConnectorManager ; ApiAuthenticator ; HttpGateway.exchange/download ; routes de test et preview.",
+          "state": "Définition de connexion, configuration par dataset, cache de jetons et fichier temporaire pour les octets.",
+          "dependencies": "API distante, endpoint de token et client HTTP mutualisé.",
+          "target": "Connectors implémente les mêmes modes avec références de secrets, requêtes bornées et catégories d'erreur stables. Egress autorise URL, redirections et hôtes de token avant chaque connexion.",
+          "migration": "Conserver les options effectivement utilisées et établir des tests de contrat par méthode et fournisseur. Séparer les paramètres secrets des paramètres de données pour le masquage et l'audit.",
+          "acceptance": "Une réponse 401 provoque au plus le renouvellement prévu, un 429 respecte son délai dans le budget, et un flux interrompu ne laisse aucun fichier réutilisable comme un résultat complet.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/manager/connector/api/auth/ApiAuthenticator.kt",
+              "line": 55,
+              "why": "Modes d'authentification."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/manager/connector/api/auth/ApiAuthenticator.kt",
+              "line": 159,
+              "why": "Endpoint token et durée de vie."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/manager/connector/api/http/RestClientHttpGateway.kt",
+              "line": 61,
+              "why": "Flux et enveloppe de reprise."
+            }
+          ]
+        },
+        {
+          "id": "DC-10",
+          "title": "Parcourir les pages API sans perdre le contrat de source",
+          "observed": "Le résolveur propose absence de pagination, numéros de page, offset, curseur, lien de corps, Link HTTP et OData. SAP OData v2 possède sa stratégie propre ; les autres usages OData passent par l'autre implémentation. L'URL effective provient de la configuration du dataset, du template versionné ou de la source. Le résolveur de liens accepte aussi des liens absolus. Il faut donc distinguer les protections de certaines découvertes fournisseur du contrôle général des destinations, qui n'est pas complet dans le code lu.",
+          "actors": "Collectes HTTP volumineuses, créateurs de connecteurs et opérateurs de reprise.",
+          "api": "PaginationConfig ; PaginationStrategyResolver.resolve ; stratégies PageBased, OffsetBased, CursorBased, LinkBased, HeaderLinkBased, OData et ODataV2.",
+          "state": "Paramètres de pagination dans ConfigConnector ; pages assemblées en fichier local de collecte.",
+          "dependencies": "API fournisseur, headers de réponse et curseurs distants.",
+          "target": "Connectors décrit un checkpoint source/epoch/range lié au run. Chaque run borne pages, octets et temps. Publisher publie l'édition et son checkpoint avant l'acquittement ; un curseur de commande PostgreSQL ne devient jamais le checkpoint publié autoritaire.",
+          "migration": "Rejouer les configurations de pagination existantes avec fixtures déterministes. Ajouter la détection de boucle, une limite de pages et une politique explicite des liens absolus et changements d'origine.",
+          "acceptance": "Un lien suivant cyclique interrompt la collecte avec une erreur exploitable. Une reprise après publication reconnaît le checkpoint publié ; une interruption avant publication ne fait pas avancer la source.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/manager/connector/api/pagination/PaginationStrategyResolver.kt",
+              "line": 40,
+              "why": "Types de pagination et URL effective."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/manager/connector/api/pagination/util/UriResolver.kt",
+              "line": 18,
+              "why": "Acceptation des liens absolus."
+            }
+          ]
+        },
+        {
+          "id": "DC-11",
+          "title": "Découvrir des API métier et figer leur version",
+          "observed": "Salesforce, Business Central, Dynamics, SAP et SharePoint ont des versions connues et des templates dédiés. Les routes servent versions, parents, entités et colonnes. Les parents représentent notamment des sociétés ou services selon le fournisseur. La création et certains previews figent la version de lecture. Une incompatibilité fournisseur/configuration typée lève une erreur. Le catalogue seul ne prouve pas l'activation : CreateDataSourceCommandHandler interdit MS_DYNAMICS et SAP_S4HANA. Jira utilise le chemin API générique avec Basic à partir de ses champs ; CLEYROP accepte un token historique ou client_credentials.",
+          "actors": "Créateurs de sources SaaS et auteurs de configurations de lecture.",
+          "api": "GET /connectors/{connectorType}/versions ; GET /datasources/{id}/parents ; GET /datasources/{id}/entities ; GET /datasources/{id}/entities/{entityName}/columns.",
+          "state": "Version API de connexion et de lecture ; noms d'entités, parents et colonnes ; configurations typées propres à chaque fournisseur.",
+          "dependencies": "Templates versionnés, API de découverte, token endpoints et parseur EDMX.",
+          "target": "Connectors expose un registre versionné de capacités, avec état implémenté/activé/qualifié et contraintes fournisseur. Le domaine Rust conserve des contrats de lecture distincts de la découverte.",
+          "migration": "Reprendre chaque configuration avec sa version explicite. Maintenir les connecteurs interdits hors du catalogue utilisable tant qu'un ticket de qualification ne les rouvre. Ne pas transformer le support de DTO en promesse produit.",
+          "acceptance": "Une source Salesforce choisie dans une version reconnue conserve cette version après changement du défaut du registre. Une configuration SAP ne peut pas s'exécuter sur un connecteur d'un autre fournisseur.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/controller/DataSourceDataController.kt",
+              "line": 118,
+              "why": "Routes de découverte et de versions."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/manager/connector/api/version/ConnectorVersionTemplateRegistry.kt",
+              "line": 67,
+              "why": "Templates par fournisseur/version."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/datasource/command/CreateDataSourceCommandHandler.kt",
+              "line": 72,
+              "why": "Interdiction de création Dynamics/SAP."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/datasource/aggregate/connector/CleyropConnector.kt",
+              "line": 75,
+              "why": "Mode service account CLEYROP."
+            }
+          ]
+        },
+        {
+          "id": "DC-12",
+          "title": "Parcourir et lire des documents SharePoint",
+          "observed": "SharePoint utilise OAuth client_credentials et un template Graph v1.0. Le résolveur découvre les drives du site. La stratégie fichier distingue la navigation des dossiers, les métadonnées et le téléchargement binaire ; elle fournit des informations de modification et de validation telles que quickXorHash/cTag. Les nextLink Graph doivent rester sous la racine configurée. Les URL de téléchargement pré-signées passent dans un transport séparé sans en-têtes d'authentification de l'API. Les mêmes documents peuvent servir à une collecte tabulaire ou au contenu de corpus IA.",
+          "actors": "Gestionnaires de documents, collecte et ingestion de corpus.",
+          "api": "Routes de listing et de contenu ingestion ; SharepointV1FileStrategy ; SharepointV1DriveResolver.",
+          "state": "Drives et chemins SharePoint, métadonnées enrichies, génération de listing et fichier téléchargé temporaire.",
+          "dependencies": "Microsoft Graph, fournisseur OAuth et hôte de téléchargement pré-signé.",
+          "target": "Connectors fournit un adaptateur SharePoint Rust avec policy Egress distincte pour Graph et les URL de contenu. Files produit un FILESET immuable ou Writer une TABLE selon le parcours ; Embeddings épingle le FILESET publié.",
+          "migration": "Conserver les identifiants de drives, les chemins et les validateurs. Encapsuler les credentials et qualifier les renommages, suppressions, permissions retirées et téléchargements expirés.",
+          "acceptance": "Un document non modifié évite son transfert ; un document changé pendant le téléchargement porte l'empreinte des octets servis. Une redirection vers une destination non autorisée échoue sans transmettre de token Graph.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/datasource/aggregate/connector/SharepointConnector.kt",
+              "line": 36,
+              "why": "Authentification et version Graph."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/manager/connector/api/version/sharepoint/v1/SharepointV1DriveResolver.kt",
+              "line": 20,
+              "why": "Découverte des drives."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/manager/connector/api/version/sharepoint/v1/SharepointV1FileStrategy.kt",
+              "line": 271,
+              "why": "Contrôle de racine des nextLink."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/manager/connector/APIConnectorManager.kt",
+              "line": 606,
+              "why": "Téléchargement pré-signé sans headers."
+            }
+          ]
+        },
+        {
+          "id": "DC-13",
+          "title": "Collecter les fichiers SFTP, dépôt et S3",
+          "observed": "La factory instancie des managers fichier dédiés à SFTP/dépôt et S3. SFTP emploie une clé du service et sa configuration de source ; dépôt partage ce transport. S3 porte endpoint, région, bucket, préfixe et credentials. Les managers exposent découverte, lecture, enrichissement des métadonnées et import. Le listing de navigation traite un niveau de dossier et peut résoudre un chemin de fichier. Les descripteurs sont réconciliés pour conserver leurs identifiants et états. La configuration de source garde une règle de sélection des fichiers distincte du format de lecture.",
+          "actors": "Producteurs de fichiers, partenaires SFTP et analystes.",
+          "api": "POST /datasources/{id}/files ; SftpConnectorManager ; S3ConnectorManager ; FileConnectorManager.",
+          "state": "FileDescriptor, chemin relatif, taille, date, statut, checksum ; ressources persistées et cache temporaire distant.",
+          "dependencies": "Serveurs SFTP, S3 compatible, stockage import interne et clé SSH de service.",
+          "target": "Connectors implémente la découverte et la lecture bornée ; Files conserve des objets immuables. Une collecte ne supprime ni ne renomme un fichier externe avant que l'édition gouvernée et son checkpoint soient publiés.",
+          "migration": "Qualifier séparément les chemins, encodages, host keys SSH, S3 compatible et la reprise d'un transfert. Remplacer les connexions en cache propres au processus par des workers fongibles capables de reprendre depuis un journal.",
+          "acceptance": "Une interruption au milieu d'un fichier ne le marque pas traité. Un fichier externe renommé ou modifié ne réutilise pas un résultat audité appartenant à d'autres octets. Le worker de remplacement termine avec le même identifiant de run.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/ConnectorFactoryImpl.kt",
+              "line": 189,
+              "why": "Dispatch des managers fichiers."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/datasource/aggregate/connector/S3Connector.kt",
+              "line": 6,
+              "why": "Paramètres de source S3."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/datasource/aggregate/connector/Connector.kt",
+              "line": 195,
+              "why": "Réconciliation des descripteurs fichiers."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/manager/connector/SftpConnectorManager.kt",
+              "line": 274,
+              "why": "Navigation au niveau de dossier."
+            }
+          ]
+        },
+        {
+          "id": "DC-14",
+          "title": "Téléverser un fichier local par morceaux",
+          "observed": "Le endpoint multipart reçoit un morceau et les positions Content-Range-Start, End et Max. Le service place les octets dans un répertoire temporaire propre à la source avec nom normalisé. Il exige que la longueur actuelle corresponde au début du morceau et que la taille après ajout soit strictement inférieure à la limite. Le descripteur n'est produit qu'à la fin. Une suppression retire un fichier ou tous les fichiers de la source. Un contrôle asynchrone compare ensuite le fichier au schéma du premier dataset associé et émet un message de conflit, de changement de schéma ou de succès.",
+          "actors": "Utilisateurs du frontend important un fichier local.",
+          "api": "POST /datasources/{id}/uploadFiles ; DELETE /datasources/{id}/files ; CheckFileAsynchCommandHandler.",
+          "state": "Fichier partiel dans le stockage temporaire, puis FileDescriptor persistant ; positions des morceaux fournies par le client.",
+          "dependencies": "Volume temporaire du pod ; normalisation de nom ; notification Socket.IO via événements de contrôle fichier.",
+          "target": "Files possède une session d'upload durable avec identifiant, taille attendue, empreintes des morceaux, reprise et finalisation atomique. Connectors/Writer consomment seulement un objet finalisé immuable.",
+          "migration": "Conserver une façade compatible pour le frontend, mais enregistrer les sessions dans le plan de contrôle et les morceaux dans le stockage objet. Ne plus dépendre du pod initial pour terminer le transfert.",
+          "acceptance": "Un morceau manquant ou répété avec d'autres octets est refusé sans corruption. Après remplacement du worker, l'upload reprend. Le résultat final porte une empreinte et le contrôle asynchrone correspond à la bonne session.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/controller/DataSourceLocalFileController.kt",
+              "line": 32,
+              "why": "En-têtes et suppression des uploads."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/ChunkedFileUploadServiceImpl.kt",
+              "line": 94,
+              "why": "Append, ordre et limite stricte."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/datasource/command/CheckFileAsynchCommandHandler.kt",
+              "line": 149,
+              "why": "Contrôle du premier dataset associé."
+            }
+          ]
+        },
+        {
+          "id": "DC-15",
+          "title": "Paginer une arborescence et mettre en cache sa génération",
+          "observed": "La navigation se distingue de l'inventaire utilisé pour la lecture d'un tableur. La requête valide skip non négatif et limit positif. La navigation génère un scope par source, chemin normalisé et filtres. Le cache PostgreSQL stocke une génération ordonnée, un total et des métadonnées enrichies. Le rafraîchissement prend un verrou de scope et remplace la génération ; les pages non initiales réutilisent la génération courante. Une tâche supprime les générations expirées/supplantées avec délai de garde. Les sources LOCAL n'acceptent pas le parcours générique de navigation sans format.",
+          "actors": "Explorateurs de fichiers, frontend et ingestion de corpus.",
+          "api": "POST /datasources/{id}/files ; RequestFilesDTO ; FolderListingService.serveFromCache/listFromSource/sweep.",
+          "state": "FolderListingScope, génération, entrées ordinales, total, expiration et remplacement ; cache distinct des descripteurs métier.",
+          "dependencies": "PostgreSQL pour cache/verrou et manager du connecteur pour parcourir le dossier.",
+          "target": "Connectors sert des pages attachées à un identifiant explicite de génération et un budget d'entrées. Les clients peuvent terminer une génération même si une autre a été reconstruite.",
+          "migration": "Préserver tri, total et enrichissements, puis remplacer skip/limit par un curseur versionné sans ambiguïté. Documenter qu'un listing n'est pas un snapshot transactionnel de la source distante.",
+          "acceptance": "Le lecteur qui commence une pagination puis observe un rafraîchissement concurrent ne mélange pas deux générations. Un dossier dépassant le budget retourne une erreur définie et ne bloque pas les autres sources.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/datasource/query/DatasourceListResourcesQueryHandler.kt",
+              "line": 95,
+              "why": "Séparation navigation/tableur et validation de type."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/listing/FolderListingService.kt",
+              "line": 92,
+              "why": "Scope, pages et rafraîchissement."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/listing/FolderListingService.kt",
+              "line": 146,
+              "why": "Verrou et remplacement de génération."
+            }
+          ]
+        },
+        {
+          "id": "DC-16",
+          "title": "Lire les formats et appliquer les préparations d'import",
+          "observed": "La factory couvre CSV, tableur XLSX, JSON, XML et Parquet. Les DTO configurent encodage, suffixes/MIME, limite de preview et, selon le format, compression, séparateur CSV, feuille, présence d'en-tête, lignes et colonnes ignorées, trim ou chemin JSON/XML. Les préparations comprennent transposition et ajout de nom de fichier, URL, date ou horodatage d'import. Le domaine expose NONE et GZIP pour la compression. withStandardizeColumns apparaît dans le DTO mais n'est pas converti en préparation dans AdvancedOptionsDTO.toPreparations. Les valeurs par défaut MIME/suffixes de Parquet/XML pointent vers la configuration JSON dans les DTO lus.",
+          "actors": "Analystes configurant une collecte et lecteurs de fichiers.",
+          "api": "FormatConfigDTO et ses variantes ; GET /datasources/format/default ; AdvancedOptionsDTO ; FormatFactoryImpl.",
+          "state": "FileFormat, ConfigConnector, Preparations ordonnées et TargetSchema.",
+          "dependencies": "Parseurs CSV, XLSX, JSON, XML, Parquet ; cache de fichiers et détection de types.",
+          "target": "Writer et Connectors partagent des codecs Rust bornés en mémoire et en octets décompressés. La configuration de lecture et les préparations deviennent une révision immuable liée à l'audit du candidat.",
+          "migration": "Constituer des fixtures par format et option, y compris fichiers malformés et limites de décompression. Décider explicitement du comportement de standardisation et corriger les defaults suspects après mesure de compatibilité.",
+          "acceptance": "Chaque fixture produit les mêmes colonnes et valeurs utiles dans preview et import. Un séparateur invalide, une feuille absente, un chemin JSON invalide et une expansion démesurée échouent avec des erreurs stables.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/FormatFactoryImpl.kt",
+              "line": 19,
+              "why": "Formats réellement instanciés."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/dataset/controller/dto/AdvancedOptionsDTO.kt",
+              "line": 11,
+              "why": "Options et conversion des préparations."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/dataset/controller/dto/format/ParquetConfigDTO.kt",
+              "line": 17,
+              "why": "Defaults de format Parquet."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/datasource/aggregate/fileFormat/FileFormat.kt",
+              "line": 15,
+              "why": "Compression déclarée."
+            }
+          ]
+        },
+        {
+          "id": "DC-17",
+          "title": "Prévisualiser les données et contrôler les colonnes",
+          "observed": "Le preview distingue SQL, fichier et API. SQL redécouvre la table, valide une éventuelle customQuery et applique les préparations. Le fichier se résout par chemin de référence, peut imposer un schéma et fournir un arbre JSON. L'API actualise ses descripteurs puis renvoie frame, arbre JSON et chemin de base. Le endpoint headers accepte SQL ou API, avec métadonnées SQL ou arbre JSON. Le contrôle d'en-têtes rejette les doublons sans tenir compte de la casse, les noms trop longs, les types incompatibles et les erreurs de lecture ; il renvoie un RestError en 400.",
+          "actors": "Analystes pendant la configuration d'un dataset.",
+          "api": "POST /datasources/{id}/datasets/preview ; POST /datasources/{id}/datasets/headers ; POST /datasources/{id}/datasets/check-headers ; POST /datasources/{id}/datasets/sheetNames.",
+          "state": "DataFrame, TabularSchema, JsonDatasetHeaders, préparations et descripteurs actualisés lors de certains previews.",
+          "dependencies": "Managers et parseurs ; source externe ; paramètres de limite d'en-tête et de transposition.",
+          "target": "Connectors exécute des previews bornés et Writer utilise les mêmes conversions. Datasets conserve le schéma proposé et les écarts, sans confondre un échantillon valide avec la validation du candidat complet.",
+          "migration": "Préserver les discriminants de réponse SQL/JSON et les noms d'erreurs frontend. Séparer l'inférence d'échantillon de la validation de publication.",
+          "acceptance": "Un échantillon avec colonnes A et a échoue comme doublon. Un type compatible dans le preview mais invalide plus loin dans le fichier empêche la publication et laisse un rapport lié au candidat.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/dataset/query/PreviewDatasetConfigQueryHandler.kt",
+              "line": 75,
+              "why": "Trois parcours de preview."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/dataset/query/HeadersDatasetConfigQueryHandler.kt",
+              "line": 47,
+              "why": "Headers SQL ou API seulement."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/dataset/query/CheckTargetSchemaQueryHandler.kt",
+              "line": 35,
+              "why": "Ordre des contrôles et erreurs."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/dataset/controller/DatasetConfigController.kt",
+              "line": 113,
+              "why": "Traduction HTTP du contrôle d'en-tête."
+            }
+          ]
+        },
+        {
+          "id": "DC-18",
+          "title": "Créer une collecte et suivre son exécution distribuée",
+          "observed": "La création de collecte arrive par les contrats internes. Elle enregistre d'abord un DatasetCollect avec des opérations WAITING, puis construit la configuration fichier, API ou SQL. Elle infère le schéma si nécessaire et planifie un import asynchrone, sauf en mode PLANNED. Les empreintes initiales persistées sont vidées tant que l'import n'est pas acquis. L'import met l'ingestion en RUNNING, prépare les octets et publie CollectUpdatedEvent pour la suite du traitement. La fin d'exécution reçue depuis process-data déclenche la finalisation et, en échec, la notification de collecte.",
+          "actors": "Auteurs de datasets, commandes data-dev, data-model et process-data.",
+          "api": "CreateCollectFromDatasourceCommandHandler ; CollectInitCommandHandler ; CollectUpdatedEvent ; ProcessDataEventHandlerKafkaConsumer.",
+          "state": "DatasetCollect, ancienne configuration, schéma cible, CollectScheduled et états des opérations ingestion/process.",
+          "dependencies": "Kafka/Protobuf, data-dev, data-model, process-data, stockage import et notification-center.",
+          "target": "Flows ordonne un run borné ; Connectors lit, Writer prépare un candidat immuable, Audit le vérifie et Publisher publie. Les événements d'avancement ne remplacent pas le reçu de publication. Les sorties sont une édition Iceberg autoritaire.",
+          "migration": "Reconstituer la machine d'états et ses transitions avant de déplacer les producteurs. Maintenir un adaptateur événementiel temporaire, puis remplacer la chaîne JVM par des commandes et reçus Rust idempotents.",
+          "acceptance": "Une panne entre upload et lancement du traitement laisse un run reprenable, sans fausse réussite. Une panne après publication et avant ack reconnaît la même édition et n'en publie pas une seconde.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/dataset/command/CreateCollectFromDatasourceCommandHandler.kt",
+              "line": 365,
+              "why": "Enregistrement initial WAITING et préparation."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/dataset/command/CreateCollectFromDatasourceCommandHandler.kt",
+              "line": 408,
+              "why": "Empreintes en attente et planification."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/dataset/command/CollectInitCommandHandler.kt",
+              "line": 65,
+              "why": "Import/finalisation des opérations."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/common/event/consumer/ProcessDataEventHandlerKafkaConsumer.kt",
+              "line": 18,
+              "why": "Retour de fin d'exécution."
+            }
+          ]
+        },
+        {
+          "id": "DC-19",
+          "title": "Rafraîchir un dataset avec règles de schéma et de doublons",
+          "observed": "Le rafraîchissement peut changer fréquence et type APPEND/OVERRIDE. Les fichiers ont contrôles de format, schéma et checksum ; APPEND peut importer les fichiers valides en émettant WARNING si certains sont ignorés, alors que OVERRIDE échoue si un fichier a un schéma invalide. Les API JSON ne passent pas par le même contrôle de checksum. Le SQL relit les colonnes vivantes : STRICT_FIXED détecte colonnes absentes, nouvelles ou de type différent ; PERMISSIVE_FIXED tolère certaines différences et peut autoriser les casts implicites ; MERGE et REPLACE ne produisent pas ces conflits préalables. Une source vide ou déjà traitée possède une issue distincte.",
+          "actors": "Utilisateurs du rafraîchissement manuel et déclencheurs de collecte.",
+          "api": "POST /datasets/{id}/refresh ; UpdateCollectCommandHandler ; TriggerOperationCommandHandlerUpdate.",
+          "state": "RefreshType, SchemaMode, sourceConfig courante et ancienne, checksums et états WARNING/FAILURE/SKIPPED.",
+          "dependencies": "Data-model pour les changements de schéma et datasets vidés ; process-data pour matérialisation ; notifications de conflit.",
+          "target": "Datasets versionne le contrat de schéma ; Writer produit un candidat APPEND ou remplacement sous WAP. Publisher avance la référence publiée seulement après Audit. Les empreintes deviennent des preuves sur octets immuables et les checkpoints publiés décrivent les entrées acquises.",
+          "migration": "Reprendre les quatre modes de schéma avec une table de compatibilité explicite. Remplacer la notion de fichier traité stockée dans une ancienne config par des participants/checkpoints de publication, en conservant l'historique de provenance.",
+          "acceptance": "Une collecte APPEND contenant un fichier déjà traité et un fichier neuf n'ajoute que le second. Une incompatibilité STRICT_FIXED bloque la publication ; une évolution MERGE suit la politique de gouvernance et garde l'édition précédente lisible.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/dataset/command/TriggerOperationCommandHandler.kt",
+              "line": 289,
+              "why": "Contrôles fichiers et exception du parcours API."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/dataset/command/TriggerOperationCommandHandler.kt",
+              "line": 316,
+              "why": "Quatre modes de schéma SQL."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/dataset/command/TriggerOperationCommandHandler.kt",
+              "line": 418,
+              "why": "Comportements APPEND et OVERRIDE."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/dataset/aggregate/IngestionStatus.kt",
+              "line": 24,
+              "why": "Issues réglées, vide et déjà traité."
+            }
+          ]
+        },
+        {
+          "id": "DC-20",
+          "title": "Planifier les collectes et maîtriser leurs tentatives",
+          "observed": "Les fréquences sont MANUAL, PLANNED et RECURRENT ; SchedulerCollect porte cron, fuseau et politique de reprise. Quartz utilise un store JDBC clusterisé et un trigger de retry persistant propre au service. Les opérations ont un UUID différent de celui du dataset, demandent la récupération après panne et exécutent un job non concurrent pour la même clé. Le résultat décide d'arrêter le trigger, de réessayer ou de finaliser à épuisement. Une garde d'admission en mémoire évite pendant cinq secondes deux soumissions du même dataset, sans verrou partagé entre pods. Une nouvelle demande annule les opérations pendantes du dataset.",
+          "actors": "Utilisateurs de schedules, déclencheurs et opérateurs.",
+          "api": "Événements ScheduleEvent ; SchedulerServiceQuartzImpl ; DatasetScheduledJob ; DatasetServiceAsyncJob ; IngestionRetryTrigger.",
+          "state": "CollectScheduled et tables Quartz PostgreSQL ; cron/fuseau/politique ; compteur de tentatives persistant ; garde locale éphémère.",
+          "dependencies": "PostgreSQL, Quartz, data-model et planification Spring au démarrage.",
+          "target": "Flows conserve en PostgreSQL les schedules et commandes de run, avec lease, deadline, retry budget et fencing applicatif. Les workers restent fongibles. Une occurrence planifiée a une clé idempotente distincte de l'édition publiée.",
+          "migration": "Exporter les schedules et leurs fuseaux, comparer les prochaines occurrences, drainer les tentatives Quartz puis activer le scheduler Rust sur une frontière de temps. Ne pas compter la garde locale comme garantie de concurrence cible.",
+          "acceptance": "À deux schedulers concurrents, une seule commande existe pour une occurrence. Un worker mort peut être remplacé sans double publication. Les changements d'heure et les retries conservent le nombre et l'ordre d'occurrences attendus.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/dataset/aggregate/DatasetCollectRefreshConfig.kt",
+              "line": 10,
+              "why": "Fréquences, cron, fuseau et reprise."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/scheduler/service/SchedulerServiceQuartzImpl.kt",
+              "line": 119,
+              "why": "Opérations et annulation des tentatives pendantes."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/scheduler/service/quartzjob/DatasetServiceAsyncJob.kt",
+              "line": 20,
+              "why": "Décision de reprise/finalisation."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/dataset/service/InMemoryCollectAdmissionGuard.kt",
+              "line": 24,
+              "why": "Debounce local au processus."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/resources/application.properties",
+              "line": 251,
+              "why": "Store Quartz JDBC clusterisé."
+            }
+          ]
+        },
+        {
+          "id": "DC-21",
+          "title": "Préparer les objets d'import et les nettoyer après exécution",
+          "observed": "Les imports s'écrivent dans un bucket compatible S3 sous un nom d'objet de dataset. Le writer courant supprime le BOM UTF-8 quand il est présent. À la fin de la collecte, le nettoyage parcourt les objets du préfixe et supprime ceux antérieurs au seuil temporel ; il garde ceux déposés après ce seuil pour éviter d'effacer une nouvelle tentative. Les fichiers locaux d'une source peuvent aussi être retirés. Le nettoyage est asynchrone et journalise les échecs sans mécanisme de publication Iceberg dans ce writer.",
+          "actors": "Workers de collecte et maintenance des imports temporaires.",
+          "api": "S3ObjectWriter.import/deleteAllForDataset ; ConnectorFactoryImpl.deleteImport ; CollectFinishCommandHandler.",
+          "state": "Objets temporaires S3 et fichiers locaux ; cutoff stagedBefore et configurations de collecte.",
+          "dependencies": "Bucket d'import, API S3 et retour process-data.",
+          "target": "Writer de confiance crée uniquement des fichiers immuables et médie le staging. Publisher médie les commits et la publication. Le worker n'obtient pas table.modify REST, qui inclut aussi drop. Audit lie sa preuve au candidat sans réécrire origin.* par fast-forward. Maintenance supprime sur plan audité avec garde de rétention.",
+          "migration": "Remplacer les préfixes partagés et cutoffs temporels par des identifiants run/attempt, manifests et reçus. Conserver l'ancien nettoyage pour ses objets legacy seulement jusqu'au drainage.",
+          "acceptance": "Une ancienne tentative terminée ne peut effacer les fichiers d'une nouvelle. Une preuve d'audit reste liée aux mêmes octets. Un worker ne peut pas commit/drop une table via le catalogue ; seul Publisher peut rendre l'édition visible.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/repository/S3ObjectWriter.kt",
+              "line": 80,
+              "why": "Écriture et BOM."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/repository/S3ObjectWriter.kt",
+              "line": 121,
+              "why": "Suppression par préfixe et ancienneté."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/dataset/command/CollectFinishCommandHandler.kt",
+              "line": 104,
+              "why": "Persistance et déclenchement de nettoyage à la fin."
+            }
+          ]
+        },
+        {
+          "id": "DC-22",
+          "title": "Fournir les fichiers à une ingestion de corpus IA",
+          "observed": "Deux routes spécialisées listent les fichiers et téléchargent un fichier au nom d'un utilisateur et d'un projet. Elles appellent un contrôle IAM résiduel avant tout accès aux octets. Le téléchargement exige un connecteur FILE et un manager FileContentFetcher. Il consulte les métadonnées avant de décider un 304 sur If-None-Match. Sinon il télécharge dans un fichier temporaire, calcule quickXor sur les octets et relit les métadonnées si le validateur annoncé ne correspond pas. La réponse expose contenu, taille, MIME, date, ETag et digest selon disponibilité.",
+          "actors": "ai-gen-assistant en délégation d'un utilisateur, projets et ingestion de documents.",
+          "api": "POST /datasources/{id}/ingestion/files?userId=...&projectId=... ; GET /datasources/{id}/ingestion/files/content avec path et If-None-Match.",
+          "state": "Métadonnées de source, validateur conditionnel, fichier temporaire et empreinte réelle des octets servis.",
+          "dependencies": "IAM on-behalf-of, source S3/SFTP/SharePoint selon capacité du manager, corpus IA consommateur.",
+          "target": "Connectors et Files servent une délégation bornée à une ressource et un run. Le corpus référence une édition FILESET publiée, puis Embeddings une édition EMBEDDINGS avec provenance vers ses fichiers. Les credentials ne traversent pas vers l'assistant.",
+          "migration": "Conserver le protocole conditionnel pour réduire les transferts, mais rattacher chaque document et son digest au manifest immuable. Passer les paramètres de délégation dans une autorisation signée vérifiée par IAM.",
+          "acceptance": "Un utilisateur retiré du projet ne peut plus lister ni lire les octets par le service IA. Un fichier changé pendant le transfert ne reçoit pas un ETag trompeur ; la provenance des embeddings pointe sur les octets réellement ingérés.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/controller/DataSourceIngestionController.kt",
+              "line": 45,
+              "why": "Routes de délégation et contrôle préalable."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/datasource/query/DatasourceFileContentQueryHandler.kt",
+              "line": 78,
+              "why": "304, téléchargement et vérification des octets."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/common/authz/ResidualAuthzChecks.kt",
+              "line": 35,
+              "why": "Délégation vers le broker IAM."
+            }
+          ]
+        },
+        {
+          "id": "DC-23",
+          "title": "Administrer les accès de dépôt SFTP et leurs clés",
+          "observed": "Un accès de dépôt comporte nom de ressource, nom affiché, répertoire, login, propriétaire, statut, expiration et clés SSH. La création vérifie l'unicité login/répertoire, crée le compte par commande SSH distante, ajoute les clés puis persiste. Elle compense les effets partiels tant que la persistance complète n'a pas été atteinte. La modification diffère les clés à ajouter/retirer ; une liste vide n'entre pas dans ce parcours. La suppression retire d'abord le compte distant puis les enregistrements et publie l'événement. La création/suppression de dépôt entraîne ensuite celle de la datasource DEPOT.",
+          "actors": "Administrateurs et propriétaires des dépôts de partenaires.",
+          "api": "GET/POST /sftp-accesses ; GET/PATCH/DELETE /sftp-accesses/{id} ; GET /sftp-accesses/generate-directory-name ; GET /datasources/sftp/key.",
+          "state": "SftpAccess, SftpAccessAuthorization et compte distant ; faits IAM et datasource DEPOT dérivée.",
+          "dependencies": "Serveur SFTP administré par SSH et commandes système ; base de miroirs utilisateurs ; événements DepotEvent.",
+          "target": "Files administre les dépôts avec un adaptateur SFTP non JVM. Egress exécute les effets d'administration sous identifiant d'opération et IAM autorise les objets sftp_access. Un reçu permet de réconcilier l'état distant et PostgreSQL.",
+          "migration": "Reprendre comptes, clés publiques et propriétaires sans les recréer. Remplacer la composition de commandes shell par un protocole d'administration structuré ou des arguments strictement validés. Documenter vider/révoquer toutes les clés.",
+          "acceptance": "Une panne après création distante puis avant persistance se résout par reprise ou compensation traçable. Retirer toutes les clés a un comportement explicite. Supprimer un accès absent reste idempotent et ne supprime aucun autre compte.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/depot/command/CreateSftpAccessCommandHandler.kt",
+              "line": 41,
+              "why": "Unicité, effets distants et compensation."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/depot/command/UpdateSftpAccessCommandHandler.kt",
+              "line": 40,
+              "why": "Diff des clés seulement si liste non vide."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/depot/service/SftpServiceImpl.kt",
+              "line": 31,
+              "why": "Administration SSH distante."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/common/event/consumer/DataCollectEventHandlerKafkaConsumer.kt",
+              "line": 31,
+              "why": "Dépôt vers datasource."
+            }
+          ]
+        },
+        {
+          "id": "DC-24",
+          "title": "Lister les dépôts et appliquer la rétention des fichiers",
+          "observed": "Le service liste les accès de dépôt, leurs fichiers et un KPI de total. La liste de fichiers enlève un répertoire protégé et restitue des chemins relatifs. La configuration conserve une durée de rétention commune, modifiable par la route d'administration. Un job cherche récursivement les fichiers plus anciens que le cutoff et les supprime sur le serveur. Le démarrage n'active ce job que si la fonction et un hôte SFTP sont configurés, et annule un ancien job sinon. L'expiration portée par un accès n'établit pas, dans ces handlers, une révocation automatique du compte distant.",
+          "actors": "Administrateurs de dépôts et opérateurs de rétention.",
+          "api": "GET /sftp-accesses/files ; GET/PATCH /sftp-accesses/configuration ; GET /sftp-accesses/kpi ; CleanDepotJob.",
+          "state": "SftpExpireTime global, horodatages distants et jobs de nettoyage ; champ expiredAt d'accès séparé.",
+          "dependencies": "SFTP/SSH et Quartz ; dossiers protégés configurés.",
+          "target": "Files et Maintenance appliquent une politique de rétention par tenant et dépôt. Chaque suppression est un effet d'un plan audité qui vérifie leases, rétention et éditions consommatrices. IAM définit le contrat d'expiration d'accès.",
+          "migration": "Importer la durée actuelle et inventorier les dossiers protégés sans publier leurs valeurs. Remplacer le balayage destructif direct par des candidats de suppression et des reçus. Décider l'effet de expiredAt sur les comptes.",
+          "acceptance": "Un fichier encore nécessaire à une collecte ou retenu par politique n'est pas supprimé. Le plan exclut les dossiers protégés et les chemins hors racine. La reprise d'un plan n'efface pas un fichier nouveau au même nom.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/depot/controller/SftpAccessController.kt",
+              "line": 203,
+              "why": "Listing, rétention et KPI."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/depot/service/SftpServiceImpl.kt",
+              "line": 141,
+              "why": "Suppression des fichiers anciens hors répertoire protégé."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/configuration/RunAfterStartup.kt",
+              "line": 108,
+              "why": "Activation conditionnelle et annulation du job."
+            }
+          ]
+        },
+        {
+          "id": "DC-25",
+          "title": "Converger les identités, transférer les propriétés et reconstruire les droits",
+          "observed": "Les consumers IAM maintiennent des correspondances IAM/ancien UUID de projet et IAM/subject utilisateur. Ils dédupliquent les événements, différèrent les memberships dont l'utilisateur n'est pas encore mappé, puis les rejouent dans l'ordre lors de la convergence. La suppression désactive le miroir et retire les memberships ; l'offboarding réversible peut les conserver. La réaffectation des sources et datasets est derrière un flag distinct. Le endpoint reconcile-tuples réénonce les faits détenus par data-collect et retourne 202 si activé, 409 sinon. IAM reste le seul écrivain OpenFGA. Malgré la note générale de l'AGENTS, le code conserve des vérifications broker pour ingestion et SFTP pendant la transition.",
+          "actors": "IAM, procédures de départ utilisateur et opérateurs de bascule des droits.",
+          "api": "IamEventConsumer ; POST /admin/reconcile-tuples ; GET /users/{userId}/check-owner ; ResidualAuthzChecks.",
+          "state": "Miroirs User/Project, maps d'UUID, événements différés, processed events, propriétaires et authz facts/outbox.",
+          "dependencies": "IAM, ancien data-dev/Benutzer, APISIX et OpenFGA via IAM.",
+          "target": "IAM porte les identités canoniques et les droits. Connectors/Files réénoncent seulement leurs faits métier et appliquent les transferts idempotents. Audit conserve l'ancien et le nouveau propriétaire, le mode de départ et la commande.",
+          "migration": "Drainer les maps et les memberships différés avant suppression des anciens topics. Comparer l'inventaire des propriétés et la réconciliation des faits ; retirer les doubles contrôles seulement avec le chemin réseau imposé.",
+          "acceptance": "Un membership arrivé avant l'identité est appliqué une seule fois après mapping. Un départ réversible n'efface pas les liens à rétablir ; un départ définitif retire les droits et transfère toutes les propriétés autorisées.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/common/event/consumer/IamEventConsumer.kt",
+              "line": 278,
+              "why": "Membres différés et résolution de clés."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/common/event/consumer/IamEventConsumer.kt",
+              "line": 394,
+              "why": "Départ utilisateur et transfert sous flag."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/admin/controller/AdminReconcileTuplesController.kt",
+              "line": 60,
+              "why": "202/409 de réconciliation."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/common/authz/ResidualAuthzChecks.kt",
+              "line": 23,
+              "why": "Contrôles résiduels réellement présents."
+            }
+          ]
+        },
+        {
+          "id": "DC-26",
+          "title": "Encadrer le réseau sortant et remplacer les dépendances opérationnelles JVM",
+          "observed": "Le chart restreint l'entrée au gateway et aux pairs déclarés, mais laisse volontairement la sortie réseau non restreinte pour les connecteurs. La validation API contrôle schéma HTTP, ports et syntaxe de chemin/paramètres, sans validation d'IP privée, loopback ou re-résolution DNS dans ce validateur. Le client HTTP utilise des timeouts et masque certains headers ; une politique SSRF de bout en bout ne ressort pas des fichiers lus. Le déploiement utilise probes, PostgreSQL/Flyway, Kafka, volume temporaire optionnel et clés SSH ; le HPA n'est rendu que sans persistance. Ces éléments décrivent les manifests, pas l'état d'un cluster exécuté.",
+          "actors": "Opérateurs, sécurité des connecteurs et plateforme d'exécution.",
+          "api": "ApiRequestValidator.validateUrl ; RestTemplateConfig ; chart Deployment/NetworkPolicy/HPA ; consumer/producer Kafka.",
+          "state": "Configuration, fichiers temporaires, tables Flyway/Quartz et outbox ; connexions et caches en mémoire.",
+          "dependencies": "JVM/Spring, Kafka JVM actuel, drivers JDBC/Hadoop, PostgreSQL, S3, IAM et services externes.",
+          "target": "Egress applique destination, port, résolution DNS, redirection, secrets transmissibles, quotas et délai par run. Les cores Rust remplacent Spring/Quartz/JDBC et le bus final exclut Kafka JVM. Les workers n'ont aucune autorité générale de catalogue et doivent obtenir des accès bornés aux octets.",
+          "migration": "Déployer le contrôle Egress avant ouverture de connecteurs nouveaux. Tester les destinations internes explicitement autorisées et bloquer les autres. Découpler API de contrôle, scheduling et workers de lecture ; migrer l'outbox avec consommateurs compatibles.",
+          "acceptance": "Une URL de métadonnées cloud, un changement DNS vers loopback et une redirection vers un hôte non autorisé sont refusés avant transfert de secrets. Les redémarrages laissent les commandes récupérables et les probes distinguent dépendance indisponible et processus vivant.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/manager/connector/api/request/ApiRequestValidator.kt",
+              "line": 81,
+              "why": "Validation syntaxique, ports et limites sans contrôle d'adresse."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/configuration/RestTemplateConfig.kt",
+              "line": 61,
+              "why": "Configuration du transport HTTP."
+            },
+            {
+              "path": "services/data-collect/chart/templates/networkpolicy.yaml",
+              "line": 27,
+              "why": "Absence volontaire de politique egress."
+            },
+            {
+              "path": "services/data-collect/chart/templates/hpa.yaml",
+              "line": 1,
+              "why": "Autoscaling conditionné par la persistance."
+            }
+          ]
+        },
+        {
+          "id": "DC-27",
+          "title": "Conserver les événements sortants et isoler les échecs de consommation",
+          "observed": "Les producteurs métier et de faits IAM déposent leurs payloads dans une outbox PostgreSQL. Le relay prend un lot verrouillé, attend la confirmation Kafka puis renseigne sentAt ; une erreur augmente attempts et conserve la ligne. Les événements historiques sans clé restent sans clé de partition, alors que les faits IAM peuvent être ordonnés par agrégat. Les lignes envoyées sont purgées après une rétention configurable. Les consommateurs rejettent les messages en échec vers une DLT ; le consommateur terminal persiste payload, coordonnées originales et erreur en PostgreSQL, puis laisse l'offset non acquitté si cette persistance échoue. Les enregistrements DLT de data-collect reçoivent un UUID aléatoire à chaque persistance, ce qui ne constitue pas une déduplication du replay.",
+          "actors": "Opérateurs, consommateurs IAM/data-dev/process-data et automatisations de reprise.",
+          "api": "OutboxPublisher ; OutboxRelay.drain/cleanupSent ; DeadLetterEventConsumer.consume ; KafkaConfiguration.",
+          "state": "outbox_event, dead_letter_event et suivi des messages entrants utilisé par certains consumers ; sentAt, attempts et lastError.",
+          "dependencies": "PostgreSQL et Kafka ; consommateurs de contrats Protobuf et faits IAM.",
+          "target": "Un relais Rust conserve le même contrat de persistance avant envoi vers un bus sans JVM. Audit garde les coordonnées et causes de rejet. Chaque effet possède une clé d'idempotence stable ; les checkpoints de collecte publiés restent dans l'édition Iceberg et ne se confondent pas avec les offsets de transport.",
+          "migration": "Inventorier les producteurs et les clés de partition, reprendre l'outbox non envoyée et les quarantaines, puis basculer le transport par consommateur. Fournir une commande de replay auditée qui conserve l'identité du message.",
+          "acceptance": "Couper le transport avant et après son acquittement puis redémarrer. Tout événement reste disponible et les doublons éventuels sont absorbés par le consommateur. Un échec PostgreSQL pendant la mise en quarantaine ne fait pas avancer l'offset terminal.",
+          "evidence": [
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/common/outbox/OutboxRelay.kt",
+              "line": 23,
+              "why": "Confirmation d'envoi, reprises et purge des lignes envoyées."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/common/deadletter/DeadLetterEventConsumer.kt",
+              "line": 26,
+              "why": "Persistance terminale et réémission d'erreur."
+            },
+            {
+              "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/common/deadletter/DeadLetterEventConsumer.kt",
+              "line": 54,
+              "why": "Coordonnées originales et UUID de stockage aléatoire."
+            }
+          ]
+        }
+      ],
+      "entities": [
+        "DataSource identifie une connexion et son propriétaire. La configuration de lecture du dataset est séparée de la connexion et peut figer une version API.",
+        "ResourceDescriptor se spécialise en FileDescriptor ou TableDescriptor. Les identifiants sont réconciliés à la redécouverte ; les propriétés de navigation ne constituent pas un snapshot garanti de la source distante.",
+        "DataSourceProjectPermission conserve demande, décision, justification et acteurs ; la projection IAM matérialise le droit d'usage accepté.",
+        "DatasetCollect conserve nom, propriétaire, projet optionnel, configuration courante/ancienne et refreshConfig. CollectScheduled encode une étape asynchrone et son budget de reprise.",
+        "SftpAccess et SftpAccessAuthorization reflètent un compte distant et ses clés publiques ; SftpExpireTime décrit une rétention distincte de l'expiration d'accès.",
+        "FolderListingGeneration et ses entrées forment un cache jetable ; historique, UsageRecord, maps d'identité, files différées et outbox ne doivent pas être confondus avec les checkpoints de données publiées."
+      ],
+      "dependencies": [
+        "Data-dev produit les créations de collectes et les anciens miroirs projet/utilisateur. Data-model produit changements de dataset, de schéma, de schedule et vidages.",
+        "Process-data retourne les événements de fin d'exécution. data-collect publie l'état ingestion/process et la demande de suite de traitement par Kafka/Protobuf.",
+        "Notification-center reçoit les échecs de collecte, demandes/décisions de permission, abonnements automatiques et événements synchrones de contrôle de fichier.",
+        "IAM fournit visibilité, autorisations déléguées et événements de cycle de vie. APISIX contrôle les routes exposées ; IAM écrit OpenFGA à partir des faits data-collect.",
+        "Les octets transitent par connecteurs externes, cache local et bucket S3 d'import. Le SDK Python consomme la liste autorisée de sources. ai-gen-assistant consomme listing et contenu sous délégation."
+      ],
+      "target_domains": [
+        "Connectors",
+        "Datasets",
+        "Flows",
+        "Writer",
+        "Publisher",
+        "Files",
+        "IAM",
+        "Audit",
+        "Egress",
+        "Maintenance",
+        "Notifications",
+        "Embeddings"
+      ],
+      "control_plane": [
+        "Connectors possède catalogue des types réellement qualifiés, définitions de connexion, versions, références de secrets, droits d'usage et workflows de demande.",
+        "Flows gère schedules, occurrences, commandes idempotentes, tentatives bornées, leases et échéances ; PostgreSQL reste autoritaire pour ces commandes et les drafts.",
+        "Datasets porte schéma et contrat d'édition ; la référence Iceberg publiée et ses origin.* constituent la preuve autoritaire de données. Les checkpoints publiés ne résident pas uniquement dans PostgreSQL.",
+        "IAM et Audit enregistrent délégations, propriété et décisions. Une identité de worker ne possède jamais un droit générique table.modify au catalogue."
+      ],
+      "data_plane": [
+        "Lecteurs SQL, SFTP, S3 et HTTP produisent des batches ou fichiers immuables avec compteurs, limites et provenance. Chaque adaptateur déclare sa stratégie de snapshot et de checkpoint.",
+        "Writer médie le staging de confiance et remet un candidat immuable à Audit. Publisher médie publication et ack source après commit publié. Tous les kinds, y compris STREAM et la compaction, suivent WAP.",
+        "Un flux éphémère doit être journalisé durablement avant sa gouvernance. La reprise s'appuie sur source/epoch/range/participants. Une release multi-sorties est elle-même une édition Iceberg et ses lecteurs restent épinglés.",
+        "Files expose FILESET et contenu de corpus ; Maintenance réalise GC/expiration par plan audité et garde de rétention. EXPORT reste un effet et EXPOSURE un consommateur déclaré."
+      ],
+      "rust_core": [
+        "Proposition : modules connector_registry, credential_ref, connection_check, source_discovery, source_reader et pagination_state, chacun avec contrats de version et d'erreur.",
+        "Proposition : codecs tabulaires communs au preview et au Writer, adaptateurs par moteur SQL sans JDBC, adaptateurs HTTP/S3/SFTP et lecteur SharePoint avec métadonnées conditionnelles.",
+        "Proposition : scheduler et run coordinator Rust sur PostgreSQL pour commandes, avec fencing applicatif indépendant des seuls CAS UUID/refs/schema/spec et de l'ascendance Iceberg.",
+        "Proposition : interfaces trusted_writer.stage, auditor.attest, publisher.publish et maintenance.plan. Elles lient le reçu de publication, les checkpoints et les octets audités."
+      ],
+      "security": [
+        "L'AGENTS dit que l'autorisation est déléguée au gateway ; le code montre encore des brokers résiduels pour ingestion et SFTP. Reprendre les règles effectivement exécutées et leur flag de bascule.",
+        "Le périmètre réseau entrant est une condition de confiance de X-Userinfo. L'egress actuel reste ouvert ; valider URL syntaxiquement ne constitue pas une défense SSRF complète.",
+        "Masquer les secrets dans DTO, audit et logs ; porter les secrets par référence et réduire leur durée d'accès. Le mécanisme de conservation sur champ vide mérite un contrat explicite.",
+        "Séparer tenant, source, fichier, run et édition. Valider les chemins relatifs, les host keys SSH, les autorisations on-behalf-of et les URL pré-signées à chaque frontière.",
+        "Les fichiers audités ne doivent jamais être réécrits ; un transfert ou une suppression a une commande et un reçu. Les contrôles de schéma ne remplacent pas les contrôles d'accès aux octets."
+      ],
+      "operations": [
+        "Le chart décrit un Deployment non root avec ports applicatif et management, probes liveness/readiness, configuration et secrets injectés, certificats et volume temporaire optionnel. Aucun état déployé n'a été inspecté.",
+        "Quartz persiste jobs/triggers dans PostgreSQL et reconstruit les schedules au démarrage. Les caches de connexion et le debounce d'admission restent dans le processus.",
+        "Le HPA est conditionné à l'absence de persistance. Le stockage temporaire et les sessions d'upload imposent de vérifier la topologie réelle avant toute promesse de scale horizontal.",
+        "Flyway accepte des migrations out-of-order et le framework de migrations de code peut arrêter le processus avec code 0. La cible doit rendre les migrations verrouillées, reprenables et leur échec visible.",
+        "Prévoir sauvegarde cohérente des définitions, maps IAM, schedules et outbox, ainsi que des clés requises pour déchiffrer l'historique. Les caches restent reconstructibles ; les objets de données suivent leur politique de rétention.",
+        "Aucune qualification runtime n'est revendiquée. Les tests identifiés couvrent notamment uploads ordonnés, taille, isolation par source et téléchargements conditionnels d'ingestion."
+      ],
+      "migration_steps": [
+        "1. Figer l'inventaire par type de connecteur, configuration réellement utilisée, source/projet/propriétaire et version API ; qualifier les types déclarés mais inactifs.",
+        "2. Importer UUID, historique masqué, permissions, schedules et références de secrets dans le contrôle Rust ; convertir les identifiants legacy avec preuves de correspondance.",
+        "3. Qualifier codecs et lecteurs sur fixtures puis sources de test ; comparer previews, schémas, métadonnées et octets, sans doubler les effets de collecte sur les sources.",
+        "4. Introduire Writer/Audit/Publisher et le journal durable d'entrées ; déplacer les checkpoints vers les éditions publiées et conserver un historique séparé des publications approuvées.",
+        "5. Basculer les schedules à une frontière d'occurrence, drainer Quartz et les événements existants, puis migrer les comptes SFTP et uploads encore actifs.",
+        "6. Retirer Spring, Quartz, drivers JDBC/Hadoop et Kafka JVM seulement après drainage et preuve que le plan de contrôle, les workers et les outils d'exploitation n'en dépendent plus."
+      ],
+      "open_questions": [
+        "Le code expose 19 types mais n'en qualifie pas 19 : GoogleSheet n'a pas de manager Airbyte ; BigQuery a un driver vide ; Dynamics et SAP sont interdits en création. Quelle compatibilité produit est requise pour chacun ?",
+        "UpdateDataSourceCommandHandler.checkDepotDisplayName retourne true quand un dépôt de ce nom existe, alors que son appel et son log suggèrent un contrôle d'unicité. Le comportement réel doit être caractérisé avant correction.",
+        "withStandardizeColumns n'apparaît pas dans la conversion des préparations. ParquetConfigDTO et XMLConfigDTO prennent des defaults JSON. Décider ce qui est un défaut historique à corriger et ce qui doit rester compatible.",
+        "Le debounce d'admission local n'assure pas un verrou par dataset entre plusieurs pods. Définir la politique cible pour rafraîchissements concurrents, annulation et remplacement.",
+        "Les protections de destination doivent couvrir JDBC, SFTP, S3, token endpoints, pagination et téléchargements pré-signés. La lecture statique n'établit pas une protection globale contre SSRF ou DNS rebinding.",
+        "Le statut et expiredAt d'un accès SFTP ne prouvent pas sa révocation distante automatique. Quel comportement est attendu pour désactivation, expiration et suppression de toutes les clés ?",
+        "Identifier les garanties de snapshot des sources SQL et API et l'écart entre comptage séparé et flux lu. Une simple comparaison de nombre de lignes ne suffit pas à prouver l'édition source.",
+        "Le schéma Flyway de data-collect n'entre pas dans le linter Alembic du monorepo. Planifier Expand/Migrate/Contract et rollback sans retirer la compatibilité de lecture au même tag."
+      ],
+      "evidence": [
+        {
+          "path": "services/data-collect/AGENTS.md",
+          "line": 1,
+          "why": "Rôle, organisation et obligations opérationnelles du composant."
+        },
+        {
+          "path": "services/data-collect/app/gradle/libs.versions.toml",
+          "line": 22,
+          "why": "Version Kotlin ; Spring Boot déclaré plus bas."
+        },
+        {
+          "path": "services/data-collect/chart/templates/deployment.yaml",
+          "line": 50,
+          "why": "Conteneur, probes, secrets et volumes."
+        },
+        {
+          "path": "services/data-collect/chart/templates/networkpolicy.yaml",
+          "line": 23,
+          "why": "Réseau entrant et absence d'egress restrictif."
+        }
+      ],
+      "connector_inventory": [
+        {
+          "type": "LOCAL",
+          "family": "Fichiers",
+          "observed": "Manager local et upload par chunks, descripteurs persistés, formats et préparations.",
+          "target_and_gap": "Files/Connectors Rust : préserver reprise Content-Range, noms normalisés, previews et évolution de schéma.",
+          "acceptance": "Upload interrompu/repris puis lecture des mêmes octets ; refus des offsets incohérents et des formats invalides.",
+          "qualification": "Lecture statique ; aucun connecteur exécuté ou qualifié pendant cet audit."
+        },
+        {
+          "type": "SFTP",
+          "family": "Fichiers distants",
+          "observed": "Manager SFTP, navigation/cache et lecture des fichiers avec credential ; distinct des comptes de dépôt administrés.",
+          "target_and_gap": "Adaptateur SFTP sans JVM qualifié pour auth, clés, listing et flux ; Egress et Writer bornent connexions et octets.",
+          "acceptance": "Même arborescence filtrée et fichiers sélectionnés ; coupure en lecture puis reprise sans publier un fichier partiel.",
+          "qualification": "Lecture statique ; aucun connecteur exécuté ou qualifié pendant cet audit."
+        },
+        {
+          "type": "DEPOT",
+          "family": "Dépôt administré",
+          "observed": "Manager de fichier partagé avec SFTP ; création/suppression d'accès distant, clés publiques, règles de rétention.",
+          "target_and_gap": "Distinguer gestion des comptes et lecteur de fichiers ; préserver compensation, protections de chemins et revue de la révocation.",
+          "acceptance": "Créer, modifier et retirer un accès ; vérifier la révocation réelle, les répertoires protégés et la rétention.",
+          "qualification": "Lecture statique ; aucun connecteur exécuté ou qualifié pendant cet audit."
+        },
+        {
+          "type": "MYSQL",
+          "family": "SQL/JDBC",
+          "observed": "SQLConnector et driver JDBC ; métadonnées, requête restreinte, Parquet d'import.",
+          "target_and_gap": "Lecteur sans JVM à qualifier : types, décimaux, timezone, caractères, vues, cohérence snapshot et streaming.",
+          "acceptance": "Extraction d'un corpus MySQL de référence avec égalité des valeurs/types et reprise bornée.",
+          "qualification": "Lecture statique ; aucun connecteur exécuté ou qualifié pendant cet audit."
+        },
+        {
+          "type": "POSTGRESQL",
+          "family": "SQL/JDBC",
+          "observed": "SQLConnector et driver JDBC ; découverte spécifique des objets et import Parquet.",
+          "target_and_gap": "Lecteur Rust ou tiers encapsulé ; conserver types, vues et identifiants, puis définir snapshot/CDC explicitement.",
+          "acceptance": "Corpus PostgreSQL incluant types particuliers et vue ; démontrer cohérence de l'édition et reprise sans perte.",
+          "qualification": "Lecture statique ; aucun connecteur exécuté ou qualifié pendant cet audit."
+        },
+        {
+          "type": "ORACLE",
+          "family": "SQL/JDBC",
+          "observed": "SQLConnector et driver JDBC Oracle, métadonnées et lecture SQL.",
+          "target_and_gap": "Choisir un adaptateur autorisé sans JVM ; qualifier connectivité, précision NUMBER, dates, schémas et limites du compte.",
+          "acceptance": "Comparer un corpus Oracle et son schéma à l'extraction historique ; timeout et refus de droits restent identifiables.",
+          "qualification": "Lecture statique ; aucun connecteur exécuté ou qualifié pendant cet audit."
+        },
+        {
+          "type": "MSSQL",
+          "family": "SQL/JDBC",
+          "observed": "SQLConnector et driver SQL Server ; schémas/tables et flux vers Parquet.",
+          "target_and_gap": "Lecteur SQL Server sans JVM, avec équivalences de types et stratégie de lecture cohérente.",
+          "acceptance": "Valider décimaux, dates, Unicode, noms qualifiés et comportement sous modification concurrente.",
+          "qualification": "Lecture statique ; aucun connecteur exécuté ou qualifié pendant cet audit."
+        },
+        {
+          "type": "BIGQUERY",
+          "family": "SQL/JDBC déclaré",
+          "observed": "Modèle SQL présent mais entrée de driver vide dans JdbcConnectorManager ; exécution non qualifiée.",
+          "target_and_gap": "Construire ou sélectionner un lecteur BigQuery sans JVM, qualifier l'API de jobs/lecture et les coûts ; ne pas annoncer une parité héritée.",
+          "acceptance": "Une authentification, découverte, preview et extraction bornée doivent fonctionner dans un environnement de test avant support déclaré.",
+          "qualification": "Lecture statique ; aucun connecteur exécuté ou qualifié pendant cet audit."
+        },
+        {
+          "type": "SNOWFLAKE",
+          "family": "SQL/JDBC",
+          "observed": "Modèle SQL et driver JDBC ; requêtes et métadonnées via le chemin commun.",
+          "target_and_gap": "Adaptateur sans JVM à qualifier pour authentification, contexte de schéma et types Snowflake ; contrat de snapshot explicite.",
+          "acceptance": "Comparer lignes et types d'un corpus, puis vérifier limites, annulation et reprise d'un export interrompu.",
+          "qualification": "Lecture statique ; aucun connecteur exécuté ou qualifié pendant cet audit."
+        },
+        {
+          "type": "API",
+          "family": "HTTP générique",
+          "observed": "Manager HTTP ; modes d'auth, cache token, pagination, retries, découverte et téléchargement.",
+          "target_and_gap": "Lecteur Rust conservant les stratégies connues, sous politique Egress et budgets pages/octets/temps.",
+          "acceptance": "Fixtures de chaque pagination, 401/429, Retry-After, lien absolu et téléchargement coupé.",
+          "qualification": "Lecture statique ; aucun connecteur exécuté ou qualifié pendant cet audit."
+        },
+        {
+          "type": "JIRA",
+          "family": "SaaS HTTP",
+          "observed": "Sous-type API ; endpoint de recherche JQL et Basic utilisateur/token.",
+          "target_and_gap": "Adaptateur Jira sans JVM avec contrat de version, champs et pagination réellement utilisés.",
+          "acceptance": "Même recherche et projection sur plusieurs pages ; erreurs d'auth et limites distantes traitées explicitement.",
+          "qualification": "Lecture statique ; aucun connecteur exécuté ou qualifié pendant cet audit."
+        },
+        {
+          "type": "SALESFORCE",
+          "family": "SaaS HTTP versionné",
+          "observed": "Template Salesforce V6 et versions déclarées ; découverte d'entités/colonnes.",
+          "target_and_gap": "Maintenir le pin de version et qualifier OAuth, métadonnées, pagination et types ; évolution versionnée.",
+          "acceptance": "Configuration versionnée reproduit entités, schéma et résultat après changement de version par défaut.",
+          "qualification": "Lecture statique ; aucun connecteur exécuté ou qualifié pendant cet audit."
+        },
+        {
+          "type": "MS_DYNAMICS",
+          "family": "SaaS déclaré mais bloqué en création",
+          "observed": "Modèle/template API v9.2 présents ; CreateDataSourceCommandHandler interdit ce type.",
+          "target_and_gap": "Décider maintien de configurations historiques ou activation future ; qualifier entièrement avant ouverture.",
+          "acceptance": "Une matrice de tests de connexion, découverte, preview et collecte valide le choix produit avant support annoncé.",
+          "qualification": "Lecture statique ; aucun connecteur exécuté ou qualifié pendant cet audit."
+        },
+        {
+          "type": "SAP_S4HANA",
+          "family": "SaaS déclaré mais bloqué en création",
+          "observed": "Modèle et templates OData v2/v4 ; création interdite par le handler.",
+          "target_and_gap": "Qualifier les deux variantes OData et le schéma SAP retenu ; ne pas assimiler présence de template et disponibilité produit.",
+          "acceptance": "Corpus OData v2 et v4 avec pagination et erreurs ; création reste interdite jusqu'à validation explicite.",
+          "qualification": "Lecture statique ; aucun connecteur exécuté ou qualifié pendant cet audit."
+        },
+        {
+          "type": "BUSINESS_CENTRAL",
+          "family": "SaaS HTTP versionné",
+          "observed": "Template API v2.0, contexte tenant/environnement et authentification token.",
+          "target_and_gap": "Adaptateur sans JVM conservant contexte, sélection d'entités, version et pagination.",
+          "acceptance": "Deux environnements ne mélangent ni tokens ni entités ; résultat multi-page identique à la référence.",
+          "qualification": "Lecture statique ; aucun connecteur exécuté ou qualifié pendant cet audit."
+        },
+        {
+          "type": "GOOGLESHEET",
+          "family": "AirByte déclaré incomplet",
+          "observed": "GoogleSheetConnector dérive d'AirByteConnector, sans manager dans la factory ; TriggerOperation contient NotImplementedError pour AIRBYTE.",
+          "target_and_gap": "Construire un adaptateur Sheets sans JVM ou retirer explicitement le type ; aucune couverture implicite par OLake.",
+          "acceptance": "Avant activation, démontrer auth, sélection de feuille, entêtes, types, preview et collecte ; sinon réponse unsupported explicite.",
+          "qualification": "Lecture statique ; aucun connecteur exécuté ou qualifié pendant cet audit."
+        },
+        {
+          "type": "S3",
+          "family": "Objet cloud",
+          "observed": "Manager S3 avec cache distant, navigation et import ; credentials et configuration de bucket côté connexion.",
+          "target_and_gap": "Adaptateur S3 Rust séparant bucket externe, staging Writer et stockage des éditions ; préserver sélection et formats.",
+          "acceptance": "Lister/importer des clés avec pagination et noms particuliers ; tester changement d'objet en cours de lecture et accès refusé.",
+          "qualification": "Lecture statique ; aucun connecteur exécuté ou qualifié pendant cet audit."
+        },
+        {
+          "type": "CLEYROP",
+          "family": "API de plateforme",
+          "observed": "Sous-type API ; token historique ou OAuth client_credentials selon configuration.",
+          "target_and_gap": "Conserver un client de plateforme versionné, références d'édition et mandat inter-tenant explicite ; retirer les credentials permanents des workers.",
+          "acceptance": "Importer sous l'identité autorisée sans élargissement de droits et vérifier le pin de l'édition lue.",
+          "qualification": "Lecture statique ; aucun connecteur exécuté ou qualifié pendant cet audit."
+        },
+        {
+          "type": "SHAREPOINT",
+          "family": "Documents cloud HTTP",
+          "observed": "Template Graph v1.0, découverte de drives, dossiers/fichiers, métadonnées, ETag et téléchargement pré-signé.",
+          "target_and_gap": "Adaptateur Graph sans JVM : qualifier drives, versionnement, liens de téléchargement, rotation des tokens et Egress à chaque destination.",
+          "acceptance": "Pagination de dossiers, 304, fichier modifié entre métadonnées et téléchargement et URL de téléchargement refusée hors politique.",
+          "qualification": "Lecture statique ; aucun connecteur exécuté ou qualifié pendant cet audit."
+        }
+      ],
+      "connector_inventory_contract": "Les 19 noms de ConnectorType ne constituent pas 19 connecteurs qualifiés. Le remplacement JDBC/JVM se fait par moteur et protocole avec des tests de contrat. Un extracteur OLake Go éventuellement retenu ne couvre pas implicitement ces familles ni leurs authentifications, previews, transformations, versions et règles de refresh. Aucun composant OLake Java ne peut rester dans la cible.",
+      "connector_inventory_evidence": [
+        {
+          "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/datasource/aggregate/connector/Connector.kt",
+          "line": 35,
+          "why": "Liste des 19 types."
+        },
+        {
+          "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/ConnectorFactoryImpl.kt",
+          "line": 189,
+          "why": "Branches effectivement câblées et cas unsupported."
+        },
+        {
+          "path": "services/data-collect/app/data-collect-domain/src/main/kotlin/com/cleyrop/data/collect/domain/datasource/command/CreateDataSourceCommandHandler.kt",
+          "line": 72,
+          "why": "Types interdits en création."
+        },
+        {
+          "path": "services/data-collect/app/data-collect-app/src/main/kotlin/com/cleyrop/data/collect/app/datasource/service/manager/connector/JdbcConnectorManager.kt",
+          "line": 736,
+          "why": "Drivers JDBC dont BIGQUERY vide."
+        }
+      ]
+    },
+    {
+      "id": "notification-center",
+      "title": "Notifications, abonnements et diffusion temps réel",
+      "purpose": "Maintenir les destinataires et leurs abonnements, transformer les événements métier en notices regroupées, servir une boîte personnelle, remettre les emails prévus et diffuser les changements de collecte, flow et cluster aux interfaces connectées.",
+      "stack": "Kotlin/Spring Boot, modules domaine et infrastructure ; PostgreSQL/JPA/Flyway ; Kafka/Protobuf pour les événements externes et JSON pour la livraison interne ; JavaMail/SMTP, FreeMarker ; netty-socketio et JWT. Toutes les briques JVM doivent disparaître dans la cible.",
+      "source_dir": "services/notification-center",
+      "read_scope": [
+        "AGENTS.md du monorepo et du composant, règles Helm et contrat d'authentification des sockets.",
+        "Les deux controllers NotificationController et SubscriptionController, tous leurs DTO, les agrégats et handlers de notification/souscription, les repositories et mappings persistants.",
+        "NotificationConsumer, IamUserEventConsumer, DataDevEventConsumer, SendNotificationEventConsumer et SynchronousCommunicationConsumer ; convertisseurs Protobuf et messages JSON internes.",
+        "Regroupement des accumulations, IamDeliveryAuthorization, rendus mail et leurs trois templates, émetteur INAPP, TokenAuthService, WsAuthorizationService, SocketIoService et gate du protocole.",
+        "Outbox, idempotence, dead-letter, gestion d'erreur Kafka, santé des listeners, sécurité HTTP, migrations SQL et de code, propriétés applicatives et dépendances Gradle.",
+        "Chart : deployment, service, réseau, secrets référencés, probes, volumes et autoscaling ; inventaire des tests de contrats et tests wire, sans exécution."
+      ],
+      "capabilities": [
+        {
+          "id": "NC-01",
+          "title": "Synchroniser les abonnés et leurs coordonnées depuis l'identité",
+          "observed": "Un abonné est identifié par le sujet utilisateur et conserve nom, prénom, langue, médias et abonnements. Les événements historiques Subscriber créent, modifient ou désactivent ce miroir. Le nouveau consumer IAM exige un messageUuid pour la déduplication ; il utilise le keycloakId comme identifiant compatible avec les sujets JWT. Il peut créer, mettre à jour, réactiver ou désactiver un abonné selon active. La suppression utilise un indicateur séparé et les messages d'offboarding sont ignorés car ce service ne possède pas les ressources à réassigner. Le consumer IAM démarre seulement si sa feature est activée. Les langues sont FR, EN et DE, avec normalisation des sous-tags et repli EN. La mise à jour conserve les identifiants de médias.",
+          "actors": "IAM, utilisateurs destinataires, opérateurs de migration d'identité.",
+          "api": "NotificationConsumer : branche SUBSCRIBER ; IamUserEventConsumer ; SubscriberCreateOrUpdateCommandHandler ; SubscriberDeleteCommandHandler.",
+          "state": "subscriber avec suppression logique ; medias EMAIL/INAPP ; noms et locale ; processed_message pour le nouveau consumer IAM.",
+          "dependencies": "Événements utilisateurs historiques et IAM, Protobuf, PostgreSQL ; sujets JWT partagés avec le frontend.",
+          "target": "Notifications maintient un miroir Rust minimal de IAM avec sujet canonique, tenant, locale et préférences. IAM reste autoritaire pour l'activation. Les anciens sujets deviennent des alias explicites et les suppressions ont une politique de rétention distincte des reçus de livraison.",
+          "migration": "Rejouer les utilisateurs IAM depuis l'origine dans un consumer isolé, comparer les UUID et les adresses, puis choisir une source unique. Réconcilier les abonnés soft-deleted avant d'activer les suppressions. Remplacer la référence Keycloak en même temps que l'IdP JVM.",
+          "acceptance": "Le replay de la même création conserve l'abonné et les médias. Une mise à jour fr-CA devient FR, une langue inconnue EN ; une désactivation retire les futures livraisons et une réactivation restaure le sujet sans dupliquer ses abonnements.",
+          "evidence": [
+            {
+              "path": "services/notification-center/app/notification-center-domain/src/main/kotlin/com/cleyrop/domain/subscription/command/SubscriberCreateOrUpdateCommandHandler.kt",
+              "line": 27,
+              "why": "Mise à jour et réactivation du miroir."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/common/consumer/IamUserEventConsumer.kt",
+              "line": 60,
+              "why": "Transaction, UUID et types d'événements."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/common/consumer/IamUserEventConsumer.kt",
+              "line": 124,
+              "why": "Suppression sous indicateur et choix du keycloakId."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-domain/src/main/kotlin/com/cleyrop/domain/subscription/aggregate/Subscriber.kt",
+              "line": 25,
+              "why": "Langues, champs et conservation des médias."
+            }
+          ]
+        },
+        {
+          "id": "NC-02",
+          "title": "Créer les abonnements personnels aux échecs de dataset et de flow",
+          "observed": "La création REST s'applique à l'utilisateur authentifié, sans identifiant de destinataire fourni par le client. Le DTO exige une entité UUID, un type DATASET ou DATAFLOW et une liste non vide d'actions cohérentes avec ce type. Les trois actions exposées sont DATAFLOW_EXECUTION_FAILED, DATASET_COLLECT_FAILED et DATASET_QUALITY_FAILED. Les médias acceptés sont INAPP et EMAIL, sélectionnés tous deux par défaut. Le domaine ajoute les filtres absents et émet un événement de création d'abonnement. Un abonné absent entraîne un résultat nul puis une erreur 500 du controller. Le mapping persistant des médias est porté par EntityActionTypeDAO identifié globalement par le nom d'action ; la capacité d'avoir des préférences différentes selon deux abonnés doit donc être caractérisée par un test ciblé.",
+          "actors": "Utilisateurs de l'interface et clients authentifiés qui surveillent datasets et flows.",
+          "api": "POST /subscriptions ; SubscriptionCreateDTO ; EntityActionTypeDTO ; EntityTypeDTO.",
+          "state": "Subscriber, Subscription(entityId), EntityActionType et mediaTypes ; association entre souscription et type d'action.",
+          "dependencies": "Principal issu du JWT ou du proxy de confiance ; contrôle de route IAM à l'entrée ; outbox d'événements de souscription.",
+          "target": "Notifications expose un catalogue versionné des actions réellement livrables et des canaux par action. Les préférences sont stockées par tenant, sujet, ressource, action et canal. IAM contrôle le droit de s'abonner à la ressource et le droit de recevoir son contenu.",
+          "migration": "Importer les abonnements avec un relevé des médias réellement persistés. Définir la valeur cible des préférences ambiguës avant conversion. Garder les trois actions historiques, annoncer séparément les nouvelles possibilités.",
+          "acceptance": "Deux utilisateurs choisissent des canaux différents pour la même action sans se modifier mutuellement. Une action de flow sur une entité DATASET est refusée. Un utilisateur sans miroir obtient une erreur métier définie plutôt qu'un abonnement fantôme.",
+          "evidence": [
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/subscription/controller/SubscriptionController.kt",
+              "line": 49,
+              "why": "Création limitée au principal courant."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/subscription/controller/dto/SubscriptionCreateDTO.kt",
+              "line": 11,
+              "why": "Validation du type et médias par défaut."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/subscription/controller/dto/EntityActionTypeDTO.kt",
+              "line": 7,
+              "why": "Exactement trois actions REST."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/subscription/repository/dao/EntityActionTypeDAO.kt",
+              "line": 17,
+              "why": "Clé d'action globale et colonne média."
+            }
+          ]
+        },
+        {
+          "id": "NC-03",
+          "title": "Recevoir les actions métier et les abonnements créés par les producteurs",
+          "observed": "Le consumer externe décode InitNotificationEvent et distingue ACTION_RESOURCE, SUBSCRIPTION et SUBSCRIBER. Les commandes d'abonnement produites par d'autres services peuvent nommer un ou plusieurs utilisateurs, ressources, actions et médias ; la conversion combine les ressources et les actions. La suppression événementielle retire les abonnements à l'entité pour l'utilisateur indiqué, ou pour tous les utilisateurs selon le message. Le contrat Protobuf définit 27 actions actives couvrant datasets, projets, datasources, flows, applications et demandes Git ; cette énumération ne prouve ni un producteur vivant ni un template email pour chaque action. Les créations et suppressions d'abonnements sont réémises via outbox en Protobuf. Certaines migrations retirent des anciennes souscriptions, notamment GIT_MR_REQUESTED, bien que ce nom reste au contrat.",
+          "actors": "Services producteurs de demandes d'accès, collectes, flows, projets et applications ; utilisateurs destinataires choisis par ces services.",
+          "api": "InitNotificationEvent : ACTION_RESOURCE/SUBSCRIPTION/SUBSCRIBER ; SubscriptionEventHandlerKafkaImpl ; EnumEntityActionType.",
+          "state": "Abonnements automatiques et événements SubscriberCreateSubscriptionEvent/SubscriberDeleteSubscriptionEvent ; noms d'action conservés en texte dans le domaine.",
+          "dependencies": "packages/proto ; bus Kafka ; services producteurs dont data-collect et data-dev ; migrations Flyway et migrations de code.",
+          "target": "Notifications maintient un registre d'actions, leur schéma de payload, les acteurs producteurs autorisés et les canaux disponibles. Une commande automatique indique sa raison, son origine et son idempotence ; elle ne permet pas à un producteur non autorisé d'abonner arbitrairement un autre tenant.",
+          "migration": "Recenser les producteurs effectifs pour les 27 actions avant de retirer les noms obsolètes. Convertir les contrats Protobuf sans réutiliser leurs numéros réservés. Conserver les événements de souscription nécessaires aux services qui en maintiennent une projection.",
+          "acceptance": "Rejouer une création automatique puis sa suppression ciblée sans toucher aux autres utilisateurs. Un ancien événement connu reste décodable ; une action retirée suit une règle explicite de rejet ou d'archivage et ne disparaît pas silencieusement.",
+          "evidence": [
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/common/consumer/NotificationConsumer.kt",
+              "line": 48,
+              "why": "Dispatch des trois familles d'événements."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/common/consumer/converter/InitNotificationEventProtoConverter.kt",
+              "line": 58,
+              "why": "Conversion des abonnements et médias."
+            },
+            {
+              "path": "packages/proto/src/main/proto/notificationcenter/entity_action_type.proto",
+              "line": 8,
+              "why": "Catalogue complet des actions et numéros réservés."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/subscription/service/producer/SubscriptionEventHandlerKafkaImpl.kt",
+              "line": 18,
+              "why": "Publication des changements de souscription via outbox."
+            }
+          ]
+        },
+        {
+          "id": "NC-04",
+          "title": "Lister, vérifier et supprimer les abonnements personnels",
+          "observed": "Les routes de lecture renvoient les UUID d'entités pour une action ou regroupent les abonnements par liste d'actions. La vérification en lot transforme les requêtes en Set puis renvoie une liste de booléens ; deux requêtes identiques peuvent donc ne produire qu'un seul résultat. La suppression REST sépare la liste de couples reçus en une liste d'entités et une liste d'actions ; le filtre du domaine retire tout abonnement dont l'entité appartient à la première et l'action à la seconde. Cette lecture établit une sémantique de produit cartésien à caractériser pour un lot hétérogène, sans conclure à un incident observé. Les lectures sont toujours attachées au principal courant.",
+          "actors": "Interfaces de suivi, tableaux d'abonnement et utilisateurs authentifiés.",
+          "api": "GET /subscriptions/entities?entityActionType=... ; GET /subscriptions?entityActionType=... ; POST /subscriptions/check_bulk ; DELETE /subscriptions.",
+          "state": "Subscriptions du sujet courant ; requêtes bulk dédupliquées ; modifications persistées puis événements de suppression.",
+          "dependencies": "Repository des abonnés et outbox ; frontend qui associe potentiellement les réponses bulk par position.",
+          "target": "Notifications spécifie une correspondance explicite requête/résultat par clé de corrélation et une suppression par couples exacts. Les opérations par ensemble ou par produit cartésien, si nécessaires, deviennent des commandes nommées distinctes.",
+          "migration": "Capturer le comportement attendu des clients pour les doublons et les lots croisés. Ajouter des routes versionnées si la correction change le contrat visible. Dédupliquer les données historiques avec un rapport avant réimport.",
+          "acceptance": "Un lot contenant deux fois le même couple retourne deux résultats corrélés si le contrat conserve les positions. Supprimer A/collect et B/quality ne retire pas A/quality. Les réponses ne révèlent pas les abonnements d'un autre sujet.",
+          "evidence": [
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/subscription/controller/SubscriptionController.kt",
+              "line": 93,
+              "why": "Séparation des entités/actions pour suppression."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/subscription/controller/SubscriptionController.kt",
+              "line": 156,
+              "why": "Conversion en Set du bulk."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-domain/src/main/kotlin/com/cleyrop/domain/subscription/aggregate/Subscriber.kt",
+              "line": 99,
+              "why": "Prédicat de suppression par appartenance aux deux listes."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-domain/src/main/kotlin/com/cleyrop/domain/subscription/query/FindSubscriptionBulkQueryHandler.kt",
+              "line": 19,
+              "why": "Résultats de vérification par requête distincte."
+            }
+          ]
+        },
+        {
+          "id": "NC-05",
+          "title": "Choisir les destinataires et contrôler leur accès au contenu",
+          "observed": "Une action métier porte une ressource d'origine et une ressource à notifier. Le handler recherche les abonnés correspondant à l'une ou à l'autre pour cette action et les déduplique par sujet. Sans abonné, il ne crée rien et le consumer compte le rejet. Pour les trois actions librement souscriptibles, IamDeliveryAuthorization vérifie can_view sur les ressources auxquelles l'utilisateur est effectivement abonné ; au moins une réponse ALLOW suffit. Les modes OFF, SHADOW et ENFORCE respectivement désactivent, observent ou imposent ce contrôle ; en ENFORCE, une panne IAM retient la notification. Les autres familles sont laissées à la sélection du producteur. Le messageUuid entrant, quand il est valide, exclut les abonnés qui ont déjà une accumulation portant cet UUID ; les messages historiques sans UUID restent acceptés.",
+          "actors": "Services producteurs, abonnés, IAM et opérateurs du déploiement progressif des droits.",
+          "api": "AccumulationCreateCommandHandler ; IamDeliveryAuthorization.mayReceive ; NotificationConsumer.consume.",
+          "state": "Une Accumulation par destinataire éligible, action et message ; messageUuid optionnel ; compteurs sans abonné et décisions IAM.",
+          "dependencies": "Broker IAM can_view pour DATASET/DATAFLOW ; configuration ws.authz.mode ; abonnements à la ressource origine ou notification.",
+          "target": "Notifications contrôle toutes les familles selon une politique explicite. Le contrôle avant effet prend la décision IAM courante et masque les champs que le destinataire ne peut plus lire. La clé source/message/destinataire reste durable au-delà de la durée d'une accumulation.",
+          "migration": "Passer les décisions en shadow sur toutes les familles, analyser les destinataires divergents, puis imposer les politiques. Attribuer un message ID aux producteurs historiques. Définir la gestion des notifications de suppression dont la ressource n'est plus consultable.",
+          "acceptance": "Un abonné privé d'accès avant émission ne reçoit pas de contenu protégé. Une indisponibilité IAM en ENFORCE garde le travail rejouable. Le replay d'un message après vidage des accumulations reste sans seconde notification dans la cible.",
+          "evidence": [
+            {
+              "path": "services/notification-center/app/notification-center-domain/src/main/kotlin/com/cleyrop/domain/notification/command/AccumulationCreateCommandHandler.kt",
+              "line": 56,
+              "why": "Sélection origine/notification et absence de destinataire."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-domain/src/main/kotlin/com/cleyrop/domain/notification/command/AccumulationCreateCommandHandler.kt",
+              "line": 72,
+              "why": "Autorisation puis déduplication par accumulations existantes."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/notification/service/IamDeliveryAuthorization.kt",
+              "line": 38,
+              "why": "Modes et comportement en erreur."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/notification/service/IamDeliveryAuthorization.kt",
+              "line": 103,
+              "why": "Périmètre limité aux trois familles REST."
+            }
+          ]
+        },
+        {
+          "id": "NC-06",
+          "title": "Regrouper les événements proches en une notification",
+          "observed": "L'orchestrateur traite périodiquement les groupes d'accumulation dont le dernier événement est assez ancien. Le délai du scheduler est borné à cinq secondes au minimum ; la requête d'éligibilité considère la fenêtre de silence configurée. Le groupe associe action, ressource d'origine, abonné et valeur trigger_lastname utilisée comme identité de déclencheur. Le service fusionne les ActionObjects JSON distincts, garde le premier sujet mail et ajoute les noms du destinataire aux objets réservés au mail. Pour mailContent, il prend le premier contenu non vide. Il recharge les abonnés et leurs abonnements pour calculer les canaux actuels. Après publication de la notification, il supprime les accumulations du groupe ; un groupe en erreur est conservé et un destinataire disparu est écarté. Le parcours lu n'expose pas de revendication verrouillée ni de transaction englobant sélection, publication et suppression, ce qui appelle un scénario de concurrence et de crash.",
+          "actors": "Destinataires recevant des événements répétés et opérateurs qui règlent le regroupement.",
+          "api": "AccumulationOrchestrator ; DecreaseAccumulationCommandHandler ; AccumulatorServiceImpl ; AccumulationJPA.findAvailable.",
+          "state": "accumulation, vue accumulation_grouped, Notification nouvellement identifiée ; groupes supprimés après succès.",
+          "dependencies": "Horloge, PostgreSQL, snapshots actuels des abonnés et outbox interne de livraison.",
+          "target": "Notifications possède un moteur Rust de regroupement avec fenêtre et clé documentées, claim à bail, identifiant de groupe stable et sortie atomique vers l'outbox. Les payloads sont versionnés et bornés en taille ; l'identité du déclencheur est un champ typé.",
+          "migration": "Reproduire les regroupements existants sur un corpus anonymisé. Décider si le premier contenu mail est le comportement voulu. Reprendre les accumulations en attente en préservant la frontière temporelle de chaque groupe.",
+          "acceptance": "Deux workers traitent le même groupe sans produire deux identifiants de notification. Une panne entre création et suppression reprend le même résultat. Des actions ou déclencheurs distincts ne se mélangent pas et un événement continu suit une borne de latence définie.",
+          "evidence": [
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/notification/service/orchestrator/AccumulationOrchestrator.kt",
+              "line": 13,
+              "why": "Cadence de traitement."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/notification/service/AccumulatorServiceImpl.kt",
+              "line": 21,
+              "why": "Clé de regroupement et fusion des contenus."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-domain/src/main/kotlin/com/cleyrop/domain/notification/command/DecreaseAccumulationCommandHandler.kt",
+              "line": 31,
+              "why": "Traitement, succès/suppression et conservation des erreurs."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/notification/repository/jpa/AccumulationJPA.kt",
+              "line": 24,
+              "why": "Sélection des groupes éligibles."
+            }
+          ]
+        },
+        {
+          "id": "NC-07",
+          "title": "Acheminer séparément les livraisons INAPP et EMAIL",
+          "observed": "Une notification préparée est sérialisée en message JSON interne, avec son ID, les médias calculés et un snapshot de l'abonné. Deux groupes de consommation distincts assurent EMAIL et INAPP. Chaque branche vérifie le canal, puis un marqueur processed_message propre au groupe et à l'ID de notification. Le handler SMTP peut être désactivé globalement ; dans ce cas il retourne avant le marquage. La branche INAPP persiste la notification et émet un événement de communication synchrone via outbox. Les méthodes de consommation sont transactionnelles pour les écritures PostgreSQL. L'appel SMTP reste un effet externe à cette transaction : le code ne démontre pas un envoi exactement une fois après crash. L'événement de lecture d'une notification est seulement journalisé par le handler d'événements.",
+          "actors": "Destinataires, interfaces connectées et opérateurs SMTP.",
+          "api": "SendNotificationEventConsumer.consumeEmail/consumeInApp ; NotificationKafkaMessage ; InAppNotificationEmitterImpl ; NotificationEventHandlerKafkaImpl.",
+          "state": "processed_message indexé par groupe et messageUuid ; notification persistée pour INAPP ; outbox de communication synchrone ; snapshot d'abonné embarqué.",
+          "dependencies": "Bus Kafka interne JSON, PostgreSQL, serveur SMTP, Socket.IO indirect via événements Protobuf.",
+          "target": "Notifications orchestre des effets Rust par canal avec reçu durable, état prepared/sending/accepted/failed/unknown et tentative corrélée. PostgreSQL est autoritaire pour ces reçus. La notification référence le run et l'édition approuvée quand elle annonce une publication ; elle ne devient pas la preuve de publication.",
+          "migration": "Importer les notifications, marqueurs et travaux non livrés. Remplacer les snapshots trop anciens par des références réévaluées avant effet. Définir un traitement manuel ou idempotent des envois SMTP dont l'acceptation est incertaine.",
+          "acceptance": "Rejouer le même message produit une seule entrée de boîte INAPP. Une panne après acceptation SMTP et avant commit donne un état incertain explicite dans la cible. Couper SMTP ne bloque pas INAPP et ne fait pas croire qu'un email a été remis.",
+          "evidence": [
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/common/consumer/SendNotificationEventConsumer.kt",
+              "line": 35,
+              "why": "Transactions, sélection des canaux et marqueurs."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/notification/service/notification/inapp/notificationemiter/InAppNotificationEmitterImpl.kt",
+              "line": 35,
+              "why": "Persistance puis émission de l'événement temps réel."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/notification/service/producer/NotificationEventHandlerKafkaImpl.kt",
+              "line": 19,
+              "why": "Outbox des nouvelles notifications et lecture uniquement journalisée."
+            }
+          ]
+        },
+        {
+          "id": "NC-08",
+          "title": "Consulter sa boîte de notifications et marquer la lecture",
+          "observed": "GET /notifications retourne les notifications du principal courant, paginées et triées ; le tri par défaut est createdAt décroissant. Un abonné inexistant obtient une page vide. PUT /notifications/read exige une liste d'UUID non vide et reçoit un readAt fourni par le client, par défaut l'instant courant. Le repository filtre les UUID par leur propriétaire avant de modifier les dates de lecture, donc des UUID étrangers ne suffisent pas à toucher la boîte d'autrui. Le DTO expose l'action, les dates, le propriétaire/déclencheur et un payload structuré par type d'objet. Il retire les objets réservés au mail et certains noms techniques du destinataire. La suppression HTTP de notification n'est pas exposée.",
+          "actors": "Utilisateurs connectés, cloche de notification et centre de notifications frontend.",
+          "api": "GET /notifications?page=...&size=...&sort=... ; PUT /notifications/read.",
+          "state": "Notification : UUID, subscriberId, entityIds, action, createdAt, readAt, contenus JSON/mail, médias ; suppression logique présente dans le mapping DAO.",
+          "dependencies": "Principal utilisateur ; PostgreSQL ; objets de présentation partagés avec les événements Socket.IO.",
+          "target": "Notifications sert une boîte Rust par tenant/sujet avec pagination stable, curseur et total non lu. La date serveur fait foi pour la lecture ; une date client éventuelle reste séparée. Une politique de rétention contrôle archivage et suppression sans effacer les reçus d'effets requis.",
+          "migration": "Conserver les UUID, horodatages et payloads lisibles, documenter les tris acceptés et la conversion des propriétaires. Caractériser les cas readAt fourni et notifications supprimées avant de figer le contrat cible.",
+          "acceptance": "Une lecture paginée ne mélange pas les utilisateurs. Un lot comprenant un UUID étranger ne le modifie pas. Marquer deux fois le même ensemble produit l'état défini sans doublon d'événement et les champs réservés au mail restent absents du DTO.",
+          "evidence": [
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/notification/controller/NotificationController.kt",
+              "line": 29,
+              "why": "Routes personnelles, pagination et lecture."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/notification/controller/dto/MarkNotificationAsReadDTO.kt",
+              "line": 7,
+              "why": "Liste non vide et date de lecture."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/notification/repository/NotificationRepositoryJPAImpl.kt",
+              "line": 35,
+              "why": "Filtrage par abonné pour page et mutation."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/notification/controller/dto/PayloadDTO.kt",
+              "line": 20,
+              "why": "Projection et exclusions de payload."
+            }
+          ]
+        },
+        {
+          "id": "NC-09",
+          "title": "Rendre les trois emails métiers localisés et les remettre au SMTP",
+          "observed": "L'implémentation nommée EmailSendinBlueImpl utilise JavaMailSender et SMTP ; le code lu n'appelle pas une API Sendinblue. MessageBuilder construit un message HTML avec enveloppe générique et template FreeMarker, puis localise sujet et corps en FR, EN ou DE. Il ne résout que PROJECT_USER_MEMBERSHIP_ADDED, DATAFLOW_EXECUTION_FAILED et DATASET_QUALITY_FAILED. Pour toute autre action, il retourne null et l'émetteur saute l'envoi. DATASET_COLLECT_FAILED est donc souscriptible en EMAIL dans l'API mais n'a pas de template résolu ici. Le modèle est construit depuis les ActionObjects JSON, avec alias de noms et contexte de client ; le champ mailContent accumulé n'est pas utilisé comme corps par ce builder.",
+          "actors": "Utilisateurs destinataires d'invitations projet, échecs de flow et erreurs de qualité ; opérateurs mail.",
+          "api": "EmailSendinBlueImpl ; MessageBuilder.build/resolveTemplate ; EmailArgumentMapper ; templates/mail/*.ftlh.",
+          "state": "Locale du snapshot abonné ; destinataires EMAIL ; modèles et messages localisés en ressources applicatives ; configuration d'expéditeur.",
+          "dependencies": "Serveur SMTP, JavaMail, FreeMarker et bundle de traductions ; URLs fournies dans le payload métier.",
+          "target": "Notifications possède un renderer Rust à templates versionnés et des adaptateurs d'effet mail. Le catalogue affiche les canaux réellement disponibles. Les liens, champs obligatoires et échappements HTML sont validés ; Egress contrôle la destination SMTP et les références externes.",
+          "migration": "Reprendre les trois modèles et leurs traductions sous tests de rendu. Décider explicitement de créer un email d'échec de collecte ou de retirer ce canal de cette action. Distinguer absence de template, canal désactivé et remise au fournisseur dans les reçus.",
+          "acceptance": "Chaque combinaison des trois actions et trois langues produit un sujet et un corps attendus sans champs manquants. Une action sans template donne un statut unsupported observable. Un nom contenant du HTML est échappé et un refus SMTP laisse une tentative rejouable.",
+          "evidence": [
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/notification/service/notification/email/MessageBuilder.kt",
+              "line": 30,
+              "why": "Absence de template retourne null."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/notification/service/notification/email/MessageBuilder.kt",
+              "line": 78,
+              "why": "Modèle depuis ActionObjects."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/notification/service/notification/email/MessageBuilder.kt",
+              "line": 115,
+              "why": "Trois actions et langues résolues."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/notification/service/notification/email/sendinblue/EmailSendinBlueImpl.kt",
+              "line": 11,
+              "why": "Adaptateur JavaMailSender et saut des messages sans template."
+            }
+          ]
+        },
+        {
+          "id": "NC-10",
+          "title": "Authentifier les connexions Socket.IO et borner leur durée",
+          "observed": "Le transport temps réel est Socket.IO/Engine.IO, pas un WebSocket JSON interchangeable. Le service authentifie lui-même ses connexions : payload auth, header Authorization Bearer, puis cookie legacy si l'option le permet. Les paramètres de query ne servent pas de jeton. Avec le fallback cookie désactivé, une connexion peut attendre le paquet CONNECT pour son payload auth, mais aucune action de room n'est admise avant authentification. Le token doit être actif, décodable et porteur d'un sub. Une gate de protocole refuse les CONNECT invalides avant leur acquittement ; un délai d'authentification ferme les connexions incomplètes et l'expiration du JWT provoque aussi la fermeture même au repos. Les frames mal formées sont fermées et les données client non authentifiées ne sont pas écrites dans les logs ordinaires.",
+          "actors": "Frontends et clients Socket.IO authentifiés.",
+          "api": "Handshake Engine.IO ; paquet Socket.IO CONNECT avec auth ; TokenAuthService ; SocketIoConnectGate ; événements join-room/leave-room.",
+          "state": "Sessions en mémoire, sujet et JWT validé, échéances d'authentification et d'expiration ; aucune session temps réel durable.",
+          "dependencies": "JWT decoder/IdP, configuration cookie fallback, APISIX sur une route sans authentification de gateway, netty-socketio.",
+          "target": "Un serveur Rust compatible avec le protocole réellement utilisé, ou une transition de clients vers un protocole explicite, reprend les mêmes refus et échéances. IAM émet les tokens sans Keycloak JVM ; la durée de socket ne dépasse pas celle du credential.",
+          "migration": "Exécuter le corpus de tests wire contre le serveur candidat avec les versions de clients déployées. Retirer le cookie legacy après migration des clients et fournir un renouvellement/reconnect documenté. Préserver la séparation entre authentification du transport et autorisation des rooms.",
+          "acceptance": "Un jeton forgé ou expiré n'obtient aucun CONNECT réussi ; un jeton en query est ignoré. Un client sans auth ferme à échéance. Un socket valide devient inutilisable à l'expiration même sans nouveau message, et le frontend peut se reconnecter avec un token renouvelé.",
+          "evidence": [
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/synchronousCommunication/service/TokenAuthService.kt",
+              "line": 28,
+              "why": "Sources de credentials et ordre de résolution."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/synchronousCommunication/service/SocketIoService.kt",
+              "line": 292,
+              "why": "Délai d'authentification et échéance du JWT."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/synchronousCommunication/service/SocketIoService.kt",
+              "line": 574,
+              "why": "Refus du CONNECT portant un payload invalide."
+            },
+            {
+              "path": "services/notification-center/AGENTS.md",
+              "line": 1,
+              "why": "Contrat de gateway et tests wire à préserver."
+            }
+          ]
+        },
+        {
+          "id": "NC-11",
+          "title": "Autoriser les namespaces et les rooms avant chaque diffusion",
+          "observed": "Le service prévoit OFF, SHADOW et ENFORCE pour l'autorisation Socket.IO, avec OFF comme valeur par défaut dans les propriétés. En ENFORCE, une réponse IAM manquante refuse l'action. Le namespace racine donne la room personnelle correspondant au sujet ; /admin exige le droit administrateur système. Un namespace projet doit contenir un UUID canonique et ses rooms dataflow-exec-* sont soumises au can_view du projet. /collect accepte des rooms collect-* contrôlées sur la datasource. Les familles inconnues sont refusées en mode imposé. Le serveur revalide le credential et l'autorisation pour chaque client avant diffusion et retire les clients refusés de la room. Les namespaces projets dynamiques ont un plafond et une éviction après inactivité.",
+          "actors": "Utilisateurs de projets, administrateurs de clusters, créateurs de sources et opérateurs IAM.",
+          "api": "WsAuthorizationService.authorizeConnect/authorizeJoin ; SocketIoService.onJoinRoom/publish ; namespaces /, /admin, /collect et /projects:{projectId}.",
+          "state": "Appartenance aux rooms en mémoire ; réservations de namespaces dynamiques, échéances d'inactivité et cache éventuel du client IAM.",
+          "dependencies": "IAM can_view pour projet/datasource et privilège système administrateur ; WsAuthzProperties.",
+          "target": "Notifications impose une ACL par famille de message et ressource canonique. Un événement de flow prouve son appartenance au projet demandé. Les décisions sont revérifiées à la livraison avec une politique de cache bornée ; Audit trace les refus sans exposer les payloads.",
+          "migration": "Comparer les décisions shadow aux routes réellement utilisées, résoudre les UUID legacy, puis activer ENFORCE. Reprendre les limites de namespaces et définir la fréquence maximale de revalidation IAM pour la charge cible.",
+          "acceptance": "Après révocation, un client connecté ne reçoit plus les messages protégés. Une room d'exécution d'un autre projet est refusée même si l'utilisateur connaît son ID. Une rafale de namespaces invalides ne dépasse ni le plafond mémoire ni le délai de nettoyage.",
+          "evidence": [
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/synchronousCommunication/service/WsAuthorizationService.kt",
+              "line": 101,
+              "why": "Plans de droits par namespace et room."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/synchronousCommunication/service/SocketIoService.kt",
+              "line": 218,
+              "why": "Contrôle de chaque destinataire avant émission."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/synchronousCommunication/service/SocketIoService.kt",
+              "line": 629,
+              "why": "Création bornée des namespaces projets et éviction."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/configuration/WsAuthzProperties.kt",
+              "line": 16,
+              "why": "Modes d'autorisation et valeurs par défaut."
+            }
+          ]
+        },
+        {
+          "id": "NC-12",
+          "title": "Diffuser les six familles de messages de supervision et d'interaction",
+          "observed": "Le consumer de communication synchrone convertit six familles Protobuf. NOTIFICATION vise la room utilisateur à la racine, sous le nom notification. CLUSTER_SESSION_EXEC, CLUSTERS_SESSION_EXEC_LIST et CLUSTER_MONITORING visent /admin avec respectivement cluster-{id}, cluster-all et cluster-monitoring. DATAFLOW_REFRESH vise le namespace /projects:{projectId} et dataflow-exec-{executionId}. CHECK_FILE vise /collect et collect-{datasourceId}, avec résultat d'analyse de schéma. La publication utilise les clients actuellement présents dans les namespaces locaux. Ce chemin ne montre ni curseur client, ni journal de rattrapage, ni acquittement métier. Le consumer utilise un groupe partagé ; la portée de diffusion entre pods doit être testée puisque les sockets sont maintenues en mémoire locale et le chart autorise le scale.",
+          "actors": "Centre de notifications frontend, pages d'exécution des flows, administration de clusters et assistants d'import de fichiers.",
+          "api": "SynchronousCommunicationConsumer ; PublishMessageCommandHandler ; EnumSynchronousCommunicationType ; noms de rooms et événements ci-dessus.",
+          "state": "Messages éphémères issus du bus ; sessions/rooms en mémoire ; l'historique de notifications INAPP existe séparément en PostgreSQL.",
+          "dependencies": "Événements produits par data-collect/data-dev et autres services de runtime ; contrats Protobuf ; clients Socket.IO.",
+          "target": "Notifications transporte des projections de runs, de contrôles de fichiers et de supervision. Un identifiant, un numéro de séquence et une URL de resynchronisation permettent au frontend de rattraper une interruption. Les messages liés aux données référencent l'édition approuvée ; ils ne font pas foi comme checkpoint publié.",
+          "migration": "Préserver les six payloads pendant la migration des clients. Définir une diffusion entre instances ou un routage garantissant l'accès aux sockets du destinataire. Séparer les flux de supervision volumineux des notices durables et leur rétention.",
+          "acceptance": "Avec deux instances et des clients répartis, chaque destinataire autorisé reçoit le message attendu. Après déconnexion, un frontend restaure l'état courant et détecte les séquences manquantes. Un CHECK_FILE ne révèle pas le schéma à un utilisateur sans droit sur sa source.",
+          "evidence": [
+            {
+              "path": "services/notification-center/app/notification-center-domain/src/main/kotlin/com/cleyrop/domain/synchronousCommunication/command/PublishMessageCommandHandler.kt",
+              "line": 29,
+              "why": "Routage des six familles vers namespaces/rooms/events."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/common/consumer/SynchronousCommunicationConsumer.kt",
+              "line": 15,
+              "why": "Consumer et groupe Kafka."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/common/consumer/converter/SynchronousCommunicationEventProtoConverter.kt",
+              "line": 16,
+              "why": "Conversion des payloads."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/synchronousCommunication/service/SocketIoService.kt",
+              "line": 192,
+              "why": "Diffusion sur les clients locaux présents."
+            }
+          ]
+        },
+        {
+          "id": "NC-13",
+          "title": "Exploiter la messagerie avec outbox, quarantaine et migrations",
+          "observed": "Le relais d'outbox sélectionne les messages non envoyés avec FOR UPDATE SKIP LOCKED, attend la confirmation Kafka puis renseigne sentAt ; erreurs et tentatives restent persistées. Le nettoyage ne retire que les messages envoyés au-delà de la rétention. Les consommateurs utilisent un gestionnaire d'erreur avec reprises puis DLT ; une DLT n'est jamais republiée récursivement en DLT. Le consumer terminal persiste les coordonnées et l'erreur, avec un UUID stable dérivé du topic/partition/offset de la DLT, et réémet l'erreur si PostgreSQL échoue. Un indicateur de santé expose les listeners arrêtés de manière anormale. Les migrations Flyway coexistent avec des migrations de code rejouant des abonnements ; les instructions du composant signalent l'absence de verrou global des migrations de code et leur sortie de processus en cas d'échec.",
+          "actors": "SRE, opérateurs d'upgrade, support des événements rejetés et responsables de continuité de service.",
+          "api": "OutboxRelay ; OutboxEventJPA.claimUnsentBatch ; DeadLetterEventConsumer ; KafkaListenersHealthIndicator ; CleyropMigrationRunner.",
+          "state": "outbox_event, dead_letter_event, processed_message, historique Flyway et code_migration ; marqueurs de livraison et tentatives.",
+          "dependencies": "PostgreSQL, Kafka, chart Kubernetes, probes et metrics ; migrations de contrat de souscription.",
+          "target": "Un socle Rust commun fournit outbox, replay, dead-letter, health et métriques par backlog/âge. Le bus final est sans JVM et conserve les garanties nécessaires de rétention et d'ordre. Les migrations ont un verrou explicite, un statut durable et une procédure de rollback Expand/Migrate/Contract.",
+          "migration": "Reprendre les messages non envoyés, les marqueurs et la quarantaine avant bascule de consumer. Établir le plan de replay et les clés d'idempotence. Transférer les migrations d'abonnements dans des jobs bornés reprenables, puis retirer Spring, Kafka JVM et leurs images.",
+          "acceptance": "Une interruption entre acquittement du bus et commit provoque au plus un replay absorbé. Une DLT illisible ou une panne DB n'avance pas l'offset terminal. Un upgrade concurrent n'exécute pas deux fois une migration et une restauration remet en cohérence inbox/outbox/reçus.",
+          "evidence": [
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/common/outbox/OutboxEventJPA.kt",
+              "line": 14,
+              "why": "Claim verrouillé de l'outbox."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/common/outbox/OutboxRelay.kt",
+              "line": 23,
+              "why": "Acquittement puis état envoyé."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/common/deadletter/DeadLetterEventConsumer.kt",
+              "line": 26,
+              "why": "Persistance terminale et comportement en erreur."
+            },
+            {
+              "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/codemigration/migrations/SubscriptionMigration.kt",
+              "line": 20,
+              "why": "Replay des souscriptions par migration de code."
+            }
+          ]
+        }
+      ],
+      "entities": [
+        "Subscriber : UUID compatible avec le sujet JWT historique, nom/prénom, locale, médias et abonnements ; désactivation logique et réactivation possibles. IAM est la source d'identité, le service en maintient un miroir.",
+        "Media : INAPP ou EMAIL et destination ; les identifiants de médias sont conservés lors des modifications d'abonné.",
+        "Subscription : association abonné/entité avec filtres d'actions et médias. EntityActionTypeDAO est global par nom d'action ; la portée réelle de préférences médias différentes doit être caractérisée.",
+        "Accumulation : action, ressource origine, ressource notifiée, destinataire, contenus JSON/mail, date et UUID de message optionnel ; supprimée après réduction du groupe.",
+        "Notification : résultat regroupé avec UUID, destinataire, ensemble d'entités, action, dates de création/lecture, contenus et canaux. La boîte INAPP conserve ce résultat en PostgreSQL.",
+        "OutboxEvent : payload et topic à transmettre, date d'envoi et tentatives ; ProcessedMessage : clé de groupe/UUID ; DeadLetterEvent : payload, origine transport et cause d'échec.",
+        "Session Socket.IO : sujet authentifié, token expirant, namespaces et rooms en mémoire ; la connexion et ses messages ne sont pas un historique durable.",
+        "Migration de code : tâche enregistrée en base et exécutée au démarrage ; distincte de l'historique Flyway."
+      ],
+      "dependencies": [
+        "IAM et IdP : JWT, sujets historiques, événements utilisateurs et broker can_view ; les headers HTTP de proxy ne sont fiables que dans le mode explicitement configuré.",
+        "Producteurs métier : contrats InitNotificationEvent et SynchronousCommunicationEvent de packages/proto ; data-collect publie notamment demandes d'accès, échecs de collecte et résultats CHECK_FILE.",
+        "Consommateurs des événements de souscription : changements réémis via outbox en Protobuf ; les migrations de code rejouent certaines souscriptions.",
+        "Kafka : transport entrant, livraison interne en deux groupes par canal et communication synchrone ; le bus JVM actuel ne satisfait pas la cible finale.",
+        "PostgreSQL : abonnés, préférences, accumulations, boîte, outbox, marqueurs et quarantaine ; sauvegarde et restauration doivent couvrir cet ensemble.",
+        "SMTP : remise d'emails HTML ; le nom SendinBlue de la classe ne prouve pas une intégration API fournisseur.",
+        "APISIX et frontends : routes HTTP et Socket.IO ; la route socket laisse l'authentification au service ; rooms et noms d'événements constituent des contrats clients.",
+        "DataDevEventConsumer décode aussi des changements de projet et de membres dont les handlers lus journalisent les données sans modifier les abonnements ; ne pas leur attribuer une synchronisation absente."
+      ],
+      "target_domains": [
+        "Notifications",
+        "IAM",
+        "Audit",
+        "Egress",
+        "Flows",
+        "Datasets",
+        "Runtimes",
+        "Frontends",
+        "Migration"
+      ],
+      "control_plane": [
+        "Notifications Rust possède le registre des actions, les schémas de payload, les canaux réellement supportés, les préférences par sujet et la boîte personnelle. PostgreSQL reste autoritaire pour ces commandes et états d'effets.",
+        "IAM décide l'accès à la ressource lors de la souscription et avant effet. Les notices de suppression et de demandes d'accès ont une politique dédiée, sans supposer que la ressource reste consultable.",
+        "Les événements annonçant une donnée publiée référencent l'édition Iceberg approuvée, le run et la publication. Une réussite de transport, de collecte ou de notification n'est pas un acquittement de publication.",
+        "Audit corrèle événement source, regroupement, décision IAM, rendu versionné, canal, tentatives et reçu. Une livraison incertaine reste représentée comme telle.",
+        "Les templates, canaux et locales sont versionnés ; le frontend n'offre que les combinaisons supportées. Les actions automatiques mentionnent leur producteur et leur mandat de destinataire."
+      ],
+      "data_plane": [
+        "Workers Rust bornés pour fanout, regroupement, rendu et effets ; taille des payloads, nombre de destinataires, débit et délai bornés par politique tenant.",
+        "Adaptateur SMTP ou fournisseur encapsulé avec identifiant d'effet stable et traitement de l'incertitude ; aucun engagement implicite d'exactly-once SMTP.",
+        "Service temps réel sans JVM avec compatibilité Socket.IO validée ou migration coordonnée des clients ; authentification à échéance, droits de room et diffusion entre instances.",
+        "Bus durable sans JVM, outbox et consommateurs idempotents. Les messages de supervision peuvent être compacts, mais un état durable consultable permet la resynchronisation après une coupure.",
+        "Le transport des notifications ne publie aucune table Iceberg. Les références de données pointent sur les publications approuvées et les lecteurs restent épinglés à leur édition."
+      ],
+      "rust_core": [
+        "notifications-contracts : registre action/version, schémas, ressources canoniques, canaux, templates et validation des payloads.",
+        "notifications-preferences : miroir IAM, abonnements personnels/automatiques, préférences par canal et commandes idempotentes.",
+        "notifications-aggregation : groupes déterministes, fenêtres bornées, claim concurrent et publication atomique du résultat vers l'outbox.",
+        "notifications-delivery : vérification IAM avant effet, rendu HTML localisé, adaptateurs d'envoi et machine d'état des reçus.",
+        "notifications-inbox : boîte personnelle, pagination, lecture et rétention ; effets séparés de la projection temps réel.",
+        "notifications-realtime : protocole client, authentification, ACL de rooms, gestion de l'expiration, limites de namespaces, diffusion entre instances et resynchronisation.",
+        "Socle partagé d'outbox, processed-message durable, dead-letter, métriques, replay et migrations ; remplacement du runtime JVM et du broker JVM coordonné avec les producteurs."
+      ],
+      "security": [
+        "HTTP : principal courant pour boîte et souscriptions ; confiance de X-Userinfo conditionnée au mode gateway et au proxy déclaré. Les routes nouvelles doivent passer le garde de couverture du composant.",
+        "Socket : auth payload/header Bearer, cookie legacy sous option, jamais de token en query. La gate CONNECT, le timeout d'auth et l'échéance du token sont des garanties distinctes à conserver.",
+        "Autorisation de livraison et de rooms sous OFF/SHADOW/ENFORCE ; défaut OFF dans les propriétés lues. Ne pas déduire le mode réellement déployé du seul chart ou du code.",
+        "Le contrôle de livraison vise actuellement les trois actions souscriptibles par REST et s'effectue avant l'accumulation. La cible doit trancher la révocation entre cette étape et l'effet SMTP ou INAPP.",
+        "Le contrôle projet des rooms d'exécution ne constitue pas à lui seul une preuve que l'exécution appartient au projet. Un scénario de croisement des identifiants doit caractériser la protection de bout en bout.",
+        "Les emails et payloads de notification peuvent porter des noms et liens métier ; minimiser les snapshots, borner la rétention des dead-letter et restreindre les accès aux journaux.",
+        "Les namespaces dynamiques sont validés, plafonnés et évincés ; les journaux ordinaires excluent les valeurs client non authentifiées. Le rendu HTML doit conserver l'échappement et les contrôles de liens."
+      ],
+      "operations": [
+        "Deux modules Gradle, démarrage Spring, Flyway et migrations de code ; le runner de migrations de code ne prend pas de verrou global et les instructions signalent un arrêt avec code 0 en cas d'échec.",
+        "Outbox réessayée et purgée seulement après envoi ; un crash après confirmation Kafka peut entraîner une rediffusion. Les consommateurs doivent conserver une idempotence compatible avec la rétention de replay.",
+        "DLT terminale persistée avant l'acquittement ; déduplication stable par coordonnées de DLT dans notification-center. Rejouer une DLT doit garder l'identité source et enregistrer l'opérateur.",
+        "Indicateur de santé des listeners Kafka ; compléter par âge du plus ancien travail, taille de backlog, échecs IAM, rendus sans template, remises SMTP incertaines et clients temps réel rejetés.",
+        "Le chart applique utilisateur non root, probes, références de secrets et options de volume. Le NetworkPolicy lu restreint l'entrée mais ne définit pas une restriction d'egress pour SMTP/IAM/bus.",
+        "L'autoscaling est conditionné par la configuration de persistance ; la diffusion aux sockets et la réduction des accumulations doivent être qualifiées à plusieurs instances avant d'en déduire une scalabilité fonctionnelle.",
+        "Les tests d'infrastructure demandent Docker et des conteneurs PostgreSQL/Kafka. Les tests existants couvrent notamment les canaux, duplications, templates, contrôle IAM et auth wire ; ils n'ont pas été exécutés dans cet audit.",
+        "Detekt est configuré pour réécrire les fichiers : il n'a pas été lancé lors de cette lecture seule. Le garde des routes est présent dans la CI locale du service mais les instructions indiquent qu'il n'est pas inclus par la pipeline racine."
+      ],
+      "migration_steps": [
+        "1. Exporter un inventaire anonymisé des abonnés, abonnements, médias, langues, actions utilisées et canaux effectivement livrés ; comparer aux 27 actions déclarées et aux trois templates.",
+        "2. Figer les contrats HTTP, Protobuf, JSON interne et Socket.IO, avec fixtures et noms d'événements. Caractériser les lots bulk, suppression croisée et préférences médias sans supposer une correction compatible.",
+        "3. Rejouer le miroir IAM en parallèle sous indicateurs, réconcilier les identifiants, puis choisir une seule autorité de mise à jour et préparer la sortie de Keycloak.",
+        "4. Déployer le noyau Rust des préférences et de la boîte sur schéma étendu, migrer les UUID et dates, comparer les lectures puis basculer les commandes.",
+        "5. Migrer accumulations, outbox, marqueurs et quarantaines avec clés stables. Valider concurrence, crashs et replays avant bascule du regroupement et des effets.",
+        "6. Reprendre les rendus FR/EN/DE et qualifier les trois actions SMTP. Décider explicitement du cas EMAIL pour DATASET_COLLECT_FAILED et des autres actions sans template.",
+        "7. Qualifier le serveur temps réel et la diffusion entre instances avec les clients réels ; migrer les clients si le protocole change et imposer les ACL après observation shadow.",
+        "8. Retirer le bus et les composants JVM quand tous les producteurs/consommateurs sont basculés. Appliquer Expand/Migrate/Contract séparément, restaurer un backup complet en exercice et retirer les anciens secrets seulement après vérification."
+      ],
+      "open_questions": [
+        "Le mapping EntityActionTypeDAO partage mediaTypes par nom d'action. Reproduire deux abonnés avec canaux différents avant de conclure au comportement persistant et de choisir la conversion cible.",
+        "La suppression par listes séparées et la déduplication du bulk changent la correspondance des couples fournis. Aucun incident runtime n'est établi ici ; caractériser les attentes des clients et les lots croisés.",
+        "La déduplication d'ActionResource s'appuie sur les accumulations encore présentes. Quel horizon de replay est garanti après leur suppression ? Prévoir un registre durable dans la cible.",
+        "Le réducteur ne montre pas un claim ou une transaction englobant sélection/publication/suppression. Confirmer par un scénario à deux instances et crash après outbox avant d'affirmer une duplication réelle.",
+        "Le consumer de communication synchrone partage un groupe alors que les sockets sont locales. Vérifier les mécanismes de routage/broadcast effectivement déployés et la livraison sur deux pods.",
+        "MessageBuilder ne rend pas DATASET_COLLECT_FAILED malgré la sélection EMAIL possible. Faut-il créer un template, corriger l'offre de canal ou conserver temporairement ce comportement ?",
+        "NotificationDAO déclare une suppression SQL visant subscriber alors que son entité correspond à notification. Aucune route de suppression n'est exposée dans les controllers lus ; vérifier les chemins réellement appelés avant de traiter cette observation comme un défaut runtime.",
+        "Quels producteurs émettent encore les actions Git et les actions de merge request de flow ? Le Protobuf les conserve mais une migration retire GIT_MR_REQUESTED des abonnements.",
+        "Le consumer historique Subscriber et le nouveau consumer IAM peuvent coexister. Définir l'ordre, la source autoritaire et la résolution d'une adresse ou activation contradictoire.",
+        "Quel délai maximal est accepté entre retrait d'un droit et un email déjà préparé ? Le contrôle actuel est placé avant accumulation et non juste avant l'appel SMTP.",
+        "La sortie finale de JVM inclut le serveur Socket.IO, le bus Kafka, FreeMarker, JavaMail et Keycloak, pas uniquement les handlers Kotlin. Aucun substitut n'est déclaré qualifié par cet audit."
+      ],
+      "evidence": [
+        {
+          "path": "services/notification-center/AGENTS.md",
+          "line": 28,
+          "why": "Contrats d'auth, indicateurs, outbox et contraintes d'exploitation."
+        },
+        {
+          "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/notification/controller/NotificationController.kt",
+          "line": 29,
+          "why": "Surface de boîte personnelle."
+        },
+        {
+          "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/subscription/controller/SubscriptionController.kt",
+          "line": 49,
+          "why": "Surface de souscription."
+        },
+        {
+          "path": "services/notification-center/chart/templates/deployment.yaml",
+          "line": 50,
+          "why": "Conteneur, probes, secrets et volumes."
+        },
+        {
+          "path": "services/notification-center/chart/templates/networkpolicy.yaml",
+          "line": 23,
+          "why": "Contrôle réseau entrant."
+        },
+        {
+          "path": "services/notification-center/app/notification-center-infrastructure/src/main/kotlin/com/cleyrop/domain/notificationcenter/notification/repository/dao/NotificationDAO.kt",
+          "line": 35,
+          "why": "Mapping et annotation de suppression à caractériser."
+        }
+      ],
+      "action_catalog": [
+        {
+          "action": "DATASET_COLLECT_FAILED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": true,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "DATASET_DATAFLOW_FAILED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "DATASET_DELETED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "DATASET_CATALOG_PUBLISHED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "DATASET_MANUALLY_REFRESHED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "DATASET_QUALITY_FAILED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": true,
+          "email_template_resolved": true,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "DATASET_OWNER_PROMOTED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "PROJECT_USER_MEMBERSHIP_ADDED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": true,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "PROJECT_DATASET_REQUESTED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "PROJECT_DATASET_ACCEPTED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "PROJECT_DATASET_REFUSED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "PROJECT_DATASET_DELETED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "PROJECT_DATASOURCE_REQUESTED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "PROJECT_DATASOURCE_APPROVED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "PROJECT_DATASOURCE_REFUSED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "PROJECT_OWNER_PROMOTED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "DATAFLOW_MR_REQUESTED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "DATAFLOW_MR_ACCEPTED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "DATAFLOW_MR_REFUSED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "DATAFLOW_EXECUTION_FAILED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": true,
+          "email_template_resolved": true,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "DATAFLOW_OWNER_PROMOTED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "APPLICATION_GROUP_MEMBERSHIP_ADDED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "GIT_MR_REQUESTED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "GIT_MR_ACCEPTED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "GIT_MR_REFUSED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "DATASOURCE_DELETED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        },
+        {
+          "action": "DATASOURCE_OWNER_PROMOTED",
+          "declared_in_protobuf": true,
+          "available_in_subscription_create_dto": false,
+          "email_template_resolved": false,
+          "scope_note": "Contrat déclaré ; l'activité d'un producteur en déploiement n'a pas été vérifiée."
+        }
+      ],
+      "action_catalog_note": "Les actions réservées APPLICATION_USER_MEMBERSHIP_ADDED et APPLICATION_DATASET_LINK_FAILED ne sont pas des valeurs actives. INAPP dépend de la présence d'un événement, d'un abonné, d'un canal sélectionné et des décisions d'autorisation ; le tableau ne promet pas une émission pour chaque nom."
+    }
+  ]
+}

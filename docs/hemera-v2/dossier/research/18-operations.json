@@ -1,0 +1,165 @@
+{
+  "mission": "18-operations",
+  "title": "Exploitation, restauration et retrait progressif des JVM",
+  "summary": "La migration avance par cohortes de workloads acceptés. Une durée globale ou un niveau de performance ne sont pas chiffrés sans volumétrie, corpus client et mesure.",
+  "sections": [
+    {
+      "id": "migration-gates",
+      "title": "Ordre de migration et critères de sortie",
+      "paragraphs": [],
+      "evidence": [
+        {
+          "repo": "study",
+          "path": "docs/hemera-v2/08-plateforme-rust-sans-jvm.html",
+          "line": 71,
+          "why": "Périmètre du retrait JVM et gates associés."
+        }
+      ],
+      "requirements": [],
+      "tables": [
+        {
+          "headers": [
+            "Lot",
+            "Périmètre",
+            "Preuve exigée"
+          ],
+          "rows": [
+            [
+              "M0 · Contrats",
+              "Inventaire, compatibilité API, jeux de données et autorité des états",
+              "Toutes les capacités de la matrice ont un propriétaire et une recette priorisée."
+            ],
+            [
+              "M1 · Confiance",
+              "IAM/PEP, contexte, staging privé, writer/publisher et journal",
+              "Veto, fuite staging, zombie/failover et crash publish/ack testés."
+            ],
+            [
+              "M2 · Lecture",
+              "Catalogue, Icegres read-only, front/SDK et Eidos projections",
+              "Pins stables, découverte filtrée, golden SQL et révocation."
+            ],
+            [
+              "M3 · Ingestion",
+              "Une cohorte de connecteurs et FILESET",
+              "Bootstrap, incrémental, delete, replay et restauration validés."
+            ],
+            [
+              "M4 · Transformation",
+              "Flows, data-dev/process et mutations Eidos",
+              "Runs bornés, audit, release multi-sorties et équivalence workload."
+            ],
+            [
+              "M5 · Usages",
+              "BI, apps, devspaces, assistant, MCP, ML et exports",
+              "Parcours utilisateurs complets et effets externes idempotents."
+            ],
+            [
+              "M6 · Extinction",
+              "IdP natif, journal natif, retrait Spark/Trino et chaînes JVM",
+              "Inventaire images/processus/jobs/CI sans JVM, restore et exploitation acceptés."
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "backup-authority",
+      "title": "Durabilité et reprise",
+      "paragraphs": [
+        "Le manifeste de sauvegarde coordonne catalogue, objets, UUID/éditions, politique OpenFGA, IAM, clés, drafts, commandes, annulations et reçus d’effets. Une date identique sur plusieurs backups n’établit pas leur compatibilité. Avant réouverture, le plan de données vérifie effectivement manifests, data files, delete files et artefacts.",
+        "Le chart PostgreSQL inspecté prévoit des snapshots quotidiens et l’archivage WAL désactivé par défaut ; le profil micro désactive les sauvegardes. Une configuration n’est pas une preuve de RPO. La rétention doit calculer l’âge réel du point restaurable le plus ancien, en tenant compte des sauvegardes manquées.",
+        "Un rollback de lecture ne déplace pas le checkpoint actif. Restaurer avant des acks irréversibles exige le journal couvrant l’écart. On ne peut ni supposer les messages encore présents ni copier un curseur avancé sur des données anciennes. Les seuils RPO/RTO doivent être contractés par profil puis mesurés.",
+        "Les métriques suivent délai capture/publication/ack, lag des projections, échecs d’audit, conflits, zombies refusés, backlog, quotas, coût par workload et couverture de rétention. Les logs corrèlent opération/tentative/édition sans contenir secrets ou données sensibles. Le diagnostic distingue timeout, veto, conflit, ack incertain et incident de politique."
+      ],
+      "evidence": [
+        {
+          "repo": "monorepo",
+          "path": "charts/postgres/values.yaml",
+          "line": 245,
+          "why": "Paramètres de sauvegarde du chart inspecté."
+        },
+        {
+          "repo": "monorepo",
+          "path": "charts/postgres/templates/retention-cronjob.yaml",
+          "line": 103,
+          "why": "Logique de rétention à qualifier."
+        },
+        {
+          "repo": "icegres",
+          "path": "icegres/src/overwrite.rs",
+          "line": 1196,
+          "why": "Racines d’expiration actuelles à étendre."
+        }
+      ],
+      "requirements": []
+    },
+    {
+      "id": "dr-campaigns",
+      "title": "Huit campagnes de restauration à rendre exécutables",
+      "paragraphs": [
+        "Ces scénarios sont des critères proposés, pas des résultats annoncés. Ils complètent I1–I12 et les tests propres à chaque fonctionnalité."
+      ],
+      "evidence": [
+        {
+          "repo": "study",
+          "path": "docs/hemera-v2/08-plateforme-rust-sans-jvm.html",
+          "line": 223,
+          "why": "Résilience et migration de la cible."
+        }
+      ],
+      "requirements": [],
+      "tables": [
+        {
+          "headers": [
+            "Campagne",
+            "Injection",
+            "Résultat attendu"
+          ],
+          "rows": [
+            [
+              "DR-1",
+              "Perdre uniquement les projections",
+              "Reconstruire éditions et statuts sans nouvelle publication ni effet."
+            ],
+            [
+              "DR-2",
+              "Perdre la réponse de publication avant ack",
+              "Retrouver le reçu exact, puis réconcilier l’ack sans doublon."
+            ],
+            [
+              "DR-3",
+              "Restaurer le catalogue derrière les acks",
+              "Prouver la couverture du journal, sinon bloquer et rebootstrap sous nouvelle époque."
+            ],
+            [
+              "DR-4",
+              "Manquer plusieurs sauvegardes puis lancer la rétention",
+              "Conserver toute chaîne WAL nécessaire à un point encore annoncé restaurable."
+            ],
+            [
+              "DR-5",
+              "Restaurer IAM et données à des points différents",
+              "Rester fermé tant que cohérence, révocations et suppressions ne sont pas réconciliées."
+            ],
+            [
+              "DR-6",
+              "Basculer avec une ancienne tentative vivante",
+              "Refuser la publication zombie au point de commit, même si la tête n’a pas changé."
+            ],
+            [
+              "DR-7",
+              "Interrompre une release de plusieurs sorties",
+              "Lecteurs sur ancienne ou nouvelle release complète ; checkpoint commun."
+            ],
+            [
+              "DR-8",
+              "Purger avec lecteurs, staging et backups actifs",
+              "Aucun objet requis supprimé ; journal de purge repris sans perdre ses racines."
+            ]
+          ]
+        }
+      ]
+    }
+  ]
+}

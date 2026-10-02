@@ -1,0 +1,199 @@
+{
+  "mission": "12-icegres",
+  "title": "Icegres : bibliothèque de calcul, protocoles et writer de confiance",
+  "summary": "L’intégration reprend les composants de l’arbre local inspecté. Le service actuel n’est pas annoncé conforme aux invariants Hemera. Lecture gouvernée, écriture et maintenance ont des gates distincts.",
+  "sections": [
+    {
+      "id": "icegres-read",
+      "title": "Lectures, métadonnées et droits",
+      "paragraphs": [
+        "La cible expose Flight SQL et pgwire au travers du même résolveur de contexte. Celui-ci fixe tenant, projet, environnement, UUID de table, snapshot publié, version de politique et identité du lecteur avant toute ouverture de fichier. Une édition doit rester identique pendant pagination, statistiques, export et requête longue. Le résultat rend ses pins visibles au client.",
+        "Flight reçoit des en-têtes de snapshot, timestamp et branche mais les refuse sur le chemin observé. Construire le moteur sur main ne suffit donc pas à servir les lectures épinglées envoyées par Eidos. Les listings Flight SQL doivent aussi filtrer tables et schémas avant de renvoyer noms ou cardinalités. Le filtre de tail.Tables ne prouve pas que toutes les interfaces appliquent la même politique.",
+        "Le cache se partitionne par identité de ressource, édition, schéma et politique. Une révocation invalide les capacités d’accès et ne repose pas seulement sur la fermeture de la session frontend. Les identifiants Basic et jetons locaux observés sont à remplacer sur le chemin plateforme par un contexte authentifié issu de la gateway."
+      ],
+      "evidence": [
+        {
+          "repo": "icegres",
+          "path": "icegres/src/flight.rs",
+          "line": 528,
+          "why": "Pins Eidos refusés sur le chemin Flight inspecté."
+        },
+        {
+          "repo": "icegres",
+          "path": "icegres/src/flight.rs",
+          "line": 1719,
+          "why": "Construction des métadonnées Flight SQL."
+        },
+        {
+          "repo": "icegres",
+          "path": "icegres/src/flight.rs",
+          "line": 2156,
+          "why": "Construction du moteur et référence main."
+        },
+        {
+          "repo": "icegres",
+          "path": "icegres/src/authz.rs",
+          "line": 195,
+          "why": "Adaptateur d’autorisation local, intégration OpenFGA à construire."
+        }
+      ],
+      "requirements": [],
+      "tables": [
+        {
+          "headers": [
+            "Capacité",
+            "Contrat proposé",
+            "Recette"
+          ],
+          "rows": [
+            [
+              "Résolution SQL",
+              "Pins explicites et stables ; erreur si édition inaccessible",
+              "Changer main pendant une pagination ne change ni lignes ni schéma."
+            ],
+            [
+              "Découverte",
+              "Filtrage avant GetTables/GetSchemas et erreurs",
+              "Deux utilisateurs voient uniquement leurs ressources, y compris les noms."
+            ],
+            [
+              "Accès S3",
+              "Credentials limités aux objets autorisés",
+              "Le lecteur ne peut télécharger le staging par une autre API."
+            ],
+            [
+              "Caches et sessions",
+              "Clés comprenant politique et édition",
+              "Révocation et changement d’environnement ne réutilisent pas un résultat privé."
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "icegres-write",
+      "title": "Écriture par opération et non par promesse globale",
+      "paragraphs": [
+        "Le core DML connaît un snapshot_id, mais le protocole Flight renvoie un nombre de lignes sur le chemin observé. Hemera exige un PreparedWrite et un reçu de publication. Une réponse SQL réussie ne devient pas à elle seule une preuve d’édition approuvée.",
+        "Les préconditions d’UUID, tête et ascendance présentes dans Icegres sont à conserver. Elles doivent être étendues au contexte du publisher, à la génération de tentative et à la preuve d’audit du candidat exact. Des extra_properties de table ne remplacent pas le summary origin.* du snapshot.",
+        "Les restrictions sur format v3, partitions et delete manifests dans certains chemins COW, bulk et compaction doivent rester explicites. La qualification est une matrice par opération, version de format, type de delete, partitionnement, évolution de schéma et concurrence. Aucun résultat de SELECT ne valide MERGE ou compaction."
+      ],
+      "evidence": [
+        {
+          "repo": "icegres",
+          "path": "icegres/src/flight.rs",
+          "line": 1016,
+          "why": "Réponse DML du protocole."
+        },
+        {
+          "repo": "icegres",
+          "path": "icegres/src/overwrite.rs",
+          "line": 216,
+          "why": "DmlOutcome porte le snapshot."
+        },
+        {
+          "repo": "icegres",
+          "path": "icegres/src/overwrite.rs",
+          "line": 1630,
+          "why": "Préconditions de commit."
+        },
+        {
+          "repo": "icegres",
+          "path": "icegres/src/overwrite.rs",
+          "line": 2324,
+          "why": "Construction du summary et propriétés."
+        },
+        {
+          "repo": "icegres",
+          "path": "icegres/src/overwrite.rs",
+          "line": 1915,
+          "why": "Restrictions des chemins d’écriture."
+        }
+      ],
+      "requirements": [],
+      "tables": [
+        {
+          "headers": [
+            "Opération",
+            "Trajectoire",
+            "Gate de sortie"
+          ],
+          "rows": [
+            [
+              "SELECT / scans",
+              "Réutiliser après intégration des pins et du PEP",
+              "v2, deletes, types et isolation par édition."
+            ],
+            [
+              "INSERT simple",
+              "Unifier le provider et le writer de confiance",
+              "Même contrat que bulk ; aucune publication directe."
+            ],
+            [
+              "UPDATE / DELETE / COW",
+              "Adapter DmlOutcome en candidat auditable",
+              "Conflit concurrent, suppression, nulls et évolution de schéma."
+            ],
+            [
+              "Bulk append",
+              "Conserver le streaming Arrow borné",
+              "Summary origin.*, limite mémoire, abort et objets orphelins."
+            ],
+            [
+              "Compaction",
+              "Nouvelle édition équivalente sous WAP",
+              "Équivalence logique, provenance et lecteurs actifs."
+            ],
+            [
+              "Expiration / GC",
+              "Plan approuvé et journal de suppression",
+              "Protéger releases, sauvegardes, staging et lecteurs ; reprise partielle."
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "icegres-tail",
+      "title": "Séparer capture rapide et vérité publiée",
+      "paragraphs": [
+        "Le buffer tail peut acquitter avant commit et superposer des données non publiées. Ce comportement n’est pas utilisable comme vérité gouvernée. Sa reprise par maximum de propriété de table et sidecar ne satisfait pas origin.cursor sur la dernière édition publiée.",
+        "Si cette capture est conservée, elle devient un journal privé avec contrat de durabilité explicite. Flows en découpe des plages bornées, fait préparer un candidat, attend ses audits et sa publication, puis acquitte la plage source couverte. Les requêtes produit ne mélangent pas overlays tail et éditions approuvées.",
+        "Le découpage proposé isole les crates de résolution/catalogue, politique, planification SQL, exécution, writer Iceberg et maintenance. Le service query ne possède pas le droit de publier. Un worker générique envoie des données ou un plan autorisé au writer de confiance, sans token Lakekeeper modify ni clés générales du bucket."
+      ],
+      "evidence": [
+        {
+          "repo": "icegres",
+          "path": "icegres/src/buffer.rs",
+          "line": 3,
+          "why": "Sémantique de buffer et acquittement."
+        },
+        {
+          "repo": "icegres",
+          "path": "icegres/src/buffer.rs",
+          "line": 1810,
+          "why": "Reprise des checkpoints du buffer."
+        },
+        {
+          "repo": "icegres",
+          "path": "icegres/src/compact.rs",
+          "line": 613,
+          "why": "Commit du chemin de compaction."
+        },
+        {
+          "repo": "icegres",
+          "path": "icegres/src/maintain.rs",
+          "line": 143,
+          "why": "Protections existantes du GC à préserver."
+        }
+      ],
+      "requirements": [],
+      "diagram": [
+        "Contexte + édition approuvée → query Icegres → résultat épinglé",
+        "Plan de Flows → writer privé → snapshot candidat + origin.*",
+        "Audits du candidat → publisher conditionnel → reçu durable",
+        "Reçu exact → acquittement de la plage source"
+      ]
+    }
+  ]
+}

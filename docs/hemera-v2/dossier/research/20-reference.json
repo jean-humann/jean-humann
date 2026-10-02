@@ -1,0 +1,130 @@
+{
+  "mission": "20-reference",
+  "title": "Comparaison avec iceberg-data-platform et intégration dans Cleyrop",
+  "summary": "La référence clonée au commit 4506d8a82833bef3cd8edd2d613a2285352521b3 est un laboratoire local éducatif. Elle fournit des parcours utiles à reprendre, mais ne démontre ni multi-tenant Cleyrop, ni WAP confidentiel, ni exploitation souveraine.",
+  "sections": [
+    {
+      "id": "reference-comparison",
+      "title": "Ce que Cleyrop reprend et ce qui change",
+      "paragraphs": [],
+      "evidence": [
+        {
+          "repo": "reference",
+          "path": "README.md",
+          "line": 1,
+          "why": "Présentation et assemblage de la référence."
+        },
+        {
+          "repo": "reference",
+          "path": "docs/architecture.md",
+          "line": 1,
+          "why": "Architecture du laboratoire."
+        },
+        {
+          "repo": "reference",
+          "path": "SECURITY.md",
+          "line": 1,
+          "why": "Périmètre et limites de sécurité."
+        },
+        {
+          "repo": "reference",
+          "path": "user_portal/README.md",
+          "line": 1,
+          "why": "Parcours du portail."
+        },
+        {
+          "repo": "reference",
+          "path": "user_portal/public/catalog.js",
+          "line": 113,
+          "why": "Navigation catalogue inspectée."
+        }
+      ],
+      "requirements": [],
+      "tables": [
+        {
+          "headers": [
+            "Domaine",
+            "Référence observée",
+            "Différence cible Cleyrop",
+            "Réutilisation proposée"
+          ],
+          "rows": [
+            [
+              "Catalogue",
+              "Polaris, schémas, snapshots et branches visibles",
+              "Conserver Lakekeeper ; exposer uniquement les éditions autorisées et leur provenance.",
+              "Détail dataset clair, navigation schéma/partitions/historique."
+            ],
+            [
+              "Identité",
+              "Keycloak, utilisateurs, équipes et rôles",
+              "IAM/OpenFGA et IdP sans JVM ; fédérations, délégation et révocation à qualifier.",
+              "Écran de connexion et droits effectifs compréhensibles."
+            ],
+            [
+              "SQL",
+              "DuckDB et connexions depuis outils",
+              "Icegres/Serving gouverné avec pins, quotas et moteurs qualifiés.",
+              "Instructions de connexion par environnement et client."
+            ],
+            [
+              "Sémantique",
+              "Parcours métier et navigation du portail",
+              "Eidos comme compiler/bundle/projections ; actions via Flows.",
+              "Navigation objet/relation reliée aux données publiées."
+            ],
+            [
+              "Partage",
+              "Parcours de partage du laboratoire",
+              "Shares réversibles, versionnés et soumis aux droits Cleyrop.",
+              "Prévisualiser ce que le destinataire verra réellement."
+            ],
+            [
+              "Développement",
+              "Notebooks marimo et environnement local",
+              "Runtime optionnel derrière Apps/Devspaces, sans credential général.",
+              "Onboarding rapide et exemples exécutables sur données autorisées."
+            ],
+            [
+              "MCP",
+              "Accès agent aux ressources du laboratoire",
+              "Outils bornés, identité déléguée, audit et contrôle des effets.",
+              "Découverte d’outils et sources avec permissions explicites."
+            ],
+            [
+              "Stockage",
+              "RustFS/S3 en Compose",
+              "Fournisseur S3 qualifié selon déploiement client ; aucun remplacement obligatoire.",
+              "Configuration lisible et validation de connexion."
+            ],
+            [
+              "Exploitation",
+              "Démarrage local et provisioning de démo",
+              "Kubernetes, backups coordonnés, journal, quotas et reprise ; zéro JVM final.",
+              "Documentation reproductible, sans Docker socket ni secrets admin dans l’usage produit."
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "integration-lots",
+      "title": "Lots d’intégration à faible couplage",
+      "paragraphs": [
+        "Lot R1 : reprendre la présentation des connexions et le détail dataset dans le frontend existant, avec l’API de compatibilité et les éditions publiées. Acceptation : aucun accès staging, connexion vérifiée pour chaque rôle et environnement.",
+        "Lot R2 : intégrer la navigation sémantique Eidos et les usages SQL sur Icegres après fermeture des gates de pins et d’autorisation. Acceptation : une même édition explique schéma, résultats, counts et citations.",
+        "Lot R3 : proposer un runtime notebook optionnel et des outils MCP gouvernés. Acceptation : credentials limités, runs bornés, provenance conservée et action soumise à l’approbation requise.",
+        "Le clonage ne justifie pas de remplacer Lakekeeper par Polaris, de reprendre Keycloak dans la cible finale, ni de transporter la topologie Compose en production. Les contrats Cleyrop et la matrice des services constituent les critères d’intégration."
+      ],
+      "evidence": [
+        {
+          "repo": "study",
+          "path": "docs/hemera-v2/08-plateforme-rust-sans-jvm.html",
+          "line": 16,
+          "why": "Comparaison consolidée avec la référence clonée."
+        }
+      ],
+      "requirements": []
+    }
+  ]
+}

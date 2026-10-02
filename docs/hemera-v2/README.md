@@ -1,6 +1,6 @@
 # Hemera v2 — série de documents de design
 
-Onze documents principaux et huit planches dédiées, en HTML autoportant,
+Douze documents principaux et huit planches dédiées, en HTML autoportant,
 sans CDN, avec thème clair/sombre. L’[atlas visuel](11-atlas-visuel.html)
 est l’entrée pour une lecture mixte direction et équipes techniques.
 Les documents 01 à 07 conservent leur version historique publiée. Les addenda
@@ -36,6 +36,7 @@ python3 -m http.server 8000
 | ⑨ | [`09-decision-el4-wap.html`](09-decision-el4-wap.html) | Décision EL-4 : extracteur Go, writer/publisher Rust, WAP et publish-then-ack ; confidentialité et CDC |
 | ⑩ | [`10-preuves-et-campagnes.html`](10-preuves-et-campagnes.html) | Préflight vert, campagnes réelles, échecs et limites, quatre contre-épreuves du prototype, registre des 20 missions |
 | ⑪ | [`11-atlas-visuel.html`](11-atlas-visuel.html) | Huit planches interactives, lectures Synthèse/Technique, SVG éditables, PDF et registre de relecture |
+| ⑫ | [`12-dossier-services-fonctionnalites.html`](12-dossier-services-fonctionnalites.html) | Dossier intégral des 22 services : capacités sourcées, API, états, dépendances, cible Rust, migration et critères de recette ; 34 composants de support, Icegres/Eidos et référence |
 
 Pour reprendre le travail après les lectures obligatoires du HANDOVER, lire 08,
 puis 09 et 10 avant d’implémenter le backlog. Les sept documents initiaux donnent
@@ -59,10 +60,25 @@ Les dossiers [direction, trois pages](visuels/exports/hemera-v2-synthese.pdf) et
 [complet, seize pages](visuels/exports/hemera-v2-atlas-complet.pdf) sont prêts à
 partager. Voir le [guide de reconstruction et validation](visuels/README.md).
 
+## Dossier détaillé des services
+
+Le [portail du dossier](dossier/index.html) donne accès aux 22 fiches de services,
+à la [matrice consultable](dossier/fonctionnalites.html), à ses
+[exports CSV](dossier/fonctionnalites.csv) et aux cinq chapitres transverses.
+Le [PDF intégral](dossier/exports/hemera-v2-dossier-complet.pdf) réunit les
+fiches et contrats ; chaque service et chapitre possède aussi son PDF.
+Les 744 déclarations statiques d’interfaces ont une annexe séparée et ne sont
+pas assimilées à 744 routes actives.
+
+Le [guide de reconstruction](dossier/README.md), le
+[registre de couverture](dossier/coverage.json) et le
+[rapport de validation](dossier/validation.json) précisent le périmètre.
+Les critères de recette décrits restent à exécuter sur la cible.
+
 ## Versions en ligne
 
 Les originaux 01 à 07 sont référencés ci-dessous. Ils n’ont pas été modifiés par
-ces reprises ; leurs copies locales ont été conservées. Les addenda 08 à 11
+ces reprises ; leurs copies locales ont été conservées. Les addenda 08 à 12
 sont de nouveaux documents locaux, sans version claude.ai annoncée :
 
 - ① https://claude.ai/code/artifact/0554ae1e-f790-43ba-be76-4a5d48b5d66d

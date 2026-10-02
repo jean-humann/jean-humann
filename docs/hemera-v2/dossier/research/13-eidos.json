@@ -1,0 +1,176 @@
+{
+  "mission": "13-eidos",
+  "title": "Eidos : sémantique gouvernée et actions préparées",
+  "summary": "Eidos apporte des définitions métier, un compilateur, des propositions d’action et des projections. L’intégration exige de relier chacune de ces fonctions aux identités, éditions et publications Hemera.",
+  "sections": [
+    {
+      "id": "eidos-read",
+      "title": "Modèles, compilation et lecture métier",
+      "paragraphs": [
+        "La version publiée du modèle sémantique devient un bundle immuable référencé par une édition Iceberg de manifeste. Les drafts, demandes de changement et commandes demeurent dans un stockage de contrôle durable. L’état PostgreSQL actif n’est pas implicitement une publication approuvée.",
+        "Les bindings doivent identifier les UUID de tables et les IDs de champs, puis fixer les éditions compatibles. Des noms de tables et de colonnes seuls ne résistent pas aux renommages, recréations et dérives de schéma. Un plan conserve la version du compilateur, le bundle sémantique et les pins de données.",
+        "Le chemin authorized_view contrôle OpenFGA, mais d’autres routes de registry, export ou mutation de branche demandent une revue homogène. L’existence de ce helper ne prouve pas une protection globale du serveur. Les identités de développement fondées sur x-eidos-user et les claims vides ne doivent pas devenir l’identité de production."
+      ],
+      "evidence": [
+        {
+          "repo": "eidos",
+          "path": "crates/eidos-server/src/state.rs",
+          "line": 197,
+          "why": "Vue autorisée et contrôle OpenFGA."
+        },
+        {
+          "repo": "eidos",
+          "path": "crates/eidos-server/src/api/registry.rs",
+          "line": 19,
+          "why": "Entrées du registre à protéger."
+        },
+        {
+          "repo": "eidos",
+          "path": "crates/eidos-server/src/api/exports.rs",
+          "line": 17,
+          "why": "Chemin export à aligner sur la vue autorisée."
+        },
+        {
+          "repo": "eidos",
+          "path": "crates/eidos-compiler/src/model.rs",
+          "line": 380,
+          "why": "Représentation des bindings compilés."
+        },
+        {
+          "repo": "eidos",
+          "path": "crates/eidos-core/src/pg.rs",
+          "line": 325,
+          "why": "Persistance et activation du registre."
+        }
+      ],
+      "requirements": [],
+      "tables": [
+        {
+          "headers": [
+            "Fonction",
+            "Contrat cible",
+            "Acceptation"
+          ],
+          "rows": [
+            [
+              "Registry et branches",
+              "Draft versionné, approbation puis édition sémantique",
+              "Un update du draft ne modifie pas la version utilisée par un lecteur épinglé."
+            ],
+            [
+              "Compiler / bindings",
+              "UUID, field IDs, contrat de types et version du bundle",
+              "Renommage, suppression et recréation détectés avant exécution."
+            ],
+            [
+              "Query / counts / exports",
+              "Même pin et même politique sur toutes les routes",
+              "Counts, liste et export correspondent à la même édition."
+            ],
+            [
+              "Recherche métier",
+              "Filtrage avant résultat, statistiques et citations",
+              "Aucune fuite entre instances ou tenants, même via une erreur."
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "eidos-actions",
+      "title": "De la proposition à une édition publiée",
+      "paragraphs": [
+        "La validation d’une proposition et le contrôle d’approbateur constituent des points de départ utiles. Cependant, plusieurs statements appliqués séparément, un snapshot de départ éventuellement absent et un undo qui lit puis écrit sans CAS ne forment pas une transaction Hemera.",
+        "Une action autorisée produit un plan immuable. Flows vérifie les pins, les droits actualisés, les limites et la séparation demandeur/approbateur, puis prépare les écritures sur staging. Le publisher valide toutes les préconditions de publication. Une action touchant plusieurs sorties publie une release autoritaire dont les lecteurs résolvent les membres ensemble.",
+        "Undo devient une compensation : une nouvelle action contre l’état courant, avec nouvelles préconditions et nouvel audit. Il ne rétracte pas un export, une notification ou un ack source déjà réalisé. Les reçus de ces effets ont un journal propre."
+      ],
+      "evidence": [
+        {
+          "repo": "eidos",
+          "path": "crates/eidos-core/src/functions/proposal.rs",
+          "line": 16,
+          "why": "Validation des propositions."
+        },
+        {
+          "repo": "eidos",
+          "path": "crates/eidos-server/src/engine/apply.rs",
+          "line": 47,
+          "why": "Contrôles lors de l’application."
+        },
+        {
+          "repo": "eidos",
+          "path": "crates/eidos-server/src/engine/apply.rs",
+          "line": 129,
+          "why": "Application des statements."
+        },
+        {
+          "repo": "eidos",
+          "path": "crates/eidos-server/src/engine/apply.rs",
+          "line": 267,
+          "why": "Gestion d’un snapshot absent."
+        },
+        {
+          "repo": "eidos",
+          "path": "crates/eidos-server/src/engine/undo.rs",
+          "line": 69,
+          "why": "Compensation et vérifications de snapshot."
+        }
+      ],
+      "requirements": [],
+      "diagram": [
+        "Proposition Eidos + bundle sémantique + pins d’entrée",
+        "Validation métier + droits + approbation distincte",
+        "Commande Flows durable → tentative bornée → stage privé",
+        "Audits → publication conditionnelle → reçu → projections"
+      ]
+    },
+    {
+      "id": "eidos-projections",
+      "title": "Automatisations, embeddings et read models",
+      "paragraphs": [
+        "Les projections conservent l’édition source, la version du modèle, le watermark et la version de politique. Le choix du snapshot au plus grand committed_at est à remplacer par la résolution d’une édition autorisée. Lire les counts puis résoudre un snapshot peut produire un affichage incohérent si main a changé entre les deux.",
+        "Les embeddings sont reconstruits depuis une entrée épinglée et un modèle versionné. Une collection nommée par type et un backfill qui relit l’ancre courante à chaque page ne suffisent pas. Le proxy sert seulement la collection compatible avec l’édition demandée et applique l’autorisation par instance.",
+        "Le couple événement/outbox/progression transactionnel de l’automator est réutilisable. Les boucles de polling doivent recevoir leases, déduplication par moniteur/édition et fencing au point d’effet. Rejouer une projection ne relance pas une action métier déjà confirmée."
+      ],
+      "evidence": [
+        {
+          "repo": "eidos",
+          "path": "crates/eidos-core/src/flight/exec.rs",
+          "line": 305,
+          "why": "Sélection par committed_at."
+        },
+        {
+          "repo": "eidos",
+          "path": "crates/eidos-core/src/flight/headers.rs",
+          "line": 86,
+          "why": "Pins envoyés au protocole Flight."
+        },
+        {
+          "repo": "eidos",
+          "path": "crates/eidos-core/src/readmodel/refresh.rs",
+          "line": 30,
+          "why": "Lecture des counts et résolution de snapshot."
+        },
+        {
+          "repo": "eidos",
+          "path": "crates/eidos-server/src/semantic.rs",
+          "line": 419,
+          "why": "Parcours de backfill."
+        },
+        {
+          "repo": "eidos",
+          "path": "crates/eidos-core/src/automate/automator.rs",
+          "line": 183,
+          "why": "Outbox et progression."
+        },
+        {
+          "repo": "eidos",
+          "path": "crates/eidos-server/src/loops.rs",
+          "line": 19,
+          "why": "Boucles à rendre fongibles et reprises idempotentes."
+        }
+      ],
+      "requirements": []
+    }
+  ]
+}
